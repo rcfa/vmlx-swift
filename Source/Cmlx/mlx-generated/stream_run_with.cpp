@@ -1,8 +1,8 @@
 // Stream.runWith: run callback with a dedicated default stream.
-// Uses only public mlx C API — no internal mlx_stream_get_ needed.
+// Uses only public mlx C API.
 
-#include <Cmlx/mlx-c-stream.h>
-#include <Cmlx/mlx-c-device.h>
+#include "mlx/c/stream.h"
+#include "mlx/c/device.h"
 
 extern "C" int mlx_stream_run_with(
     mlx_stream stream,
