@@ -79,6 +79,12 @@ public struct StreamOrDevice: Sendable, CustomStringConvertible, Equatable {
 /// ### See Also
 /// - <doc:using-streams>
 /// - ``StreamOrDevice``
+/// Box for passing Swift closures through C void* context.
+private class ClosureBox {
+    let closure: () -> Void
+    init(_ closure: @escaping () -> Void) { self.closure = closure }
+}
+
 public final class Stream: @unchecked Sendable, Equatable {
 
     let ctx: mlx_stream
@@ -135,16 +141,14 @@ public final class Stream: @unchecked Sendable, Equatable {
     /// stream switching overhead. Matches Python's `with mx.stream(s): ...`
     ///
     /// - Parameter body: Closure to run with this stream as default.
-    public func runWith(_ body: @convention(block) () -> Void) {
-        // Bridge Swift closure to C function pointer via context
-        var closure = body
-        withUnsafeMutablePointer(to: &closure) { ptr in
-            mlx_stream_run_with(ctx, { context in
-                let closurePtr = context!.assumingMemoryBound(
-                    to: (@convention(block) () -> Void).self)
-                closurePtr.pointee()
-            }, ptr)
-        }
+    public func runWith(_ body: () -> Void) {
+        // Use Unmanaged to pass the closure as a void* context to C
+        let box = ClosureBox(body)
+        let unmanaged = Unmanaged.passRetained(box)
+        mlx_stream_run_with(ctx, { context in
+            let box = Unmanaged<ClosureBox>.fromOpaque(context!).takeRetainedValue()
+            box.closure()
+        }, unmanaged.toOpaque())
     }
 
     init(_ ctx: mlx_stream) {
