@@ -6,6 +6,7 @@
 
 import Foundation
 import XCTest
+import Darwin
 
 @testable import Cmlx
 
@@ -29,6 +30,29 @@ class CmlxTests: XCTestCase {
         let description = String(cString: mlx_string_data(str))
 
         print(description)
+    }
+
+    func testSafetensorsMmapAdviceSymbolsAreExported() throws {
+        let handle = try XCTUnwrap(dlopen(nil, RTLD_NOW))
+
+        typealias AdviseRouted = @convention(c) (Int32, Int32) -> Int64
+        typealias AdviseExperts = @convention(c) (
+            Int32,
+            UnsafePointer<Int32>?,
+            UnsafePointer<Int32>?,
+            Int64
+        ) -> Int64
+
+        let routedSymbol = try XCTUnwrap(
+            dlsym(handle, "mlx_safetensors_mmap_advise_routed"))
+        let expertsSymbol = try XCTUnwrap(
+            dlsym(handle, "mlx_safetensors_mmap_advise_experts"))
+
+        let adviseRouted = unsafeBitCast(routedSymbol, to: AdviseRouted.self)
+        let adviseExperts = unsafeBitCast(expertsSymbol, to: AdviseExperts.self)
+
+        XCTAssertEqual(adviseRouted(0, 70), 0)
+        XCTAssertEqual(adviseExperts(0, nil, nil, 0), 0)
     }
 
 }
