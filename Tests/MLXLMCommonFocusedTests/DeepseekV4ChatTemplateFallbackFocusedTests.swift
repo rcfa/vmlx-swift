@@ -90,11 +90,25 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
             "<\u{FF5C}User\u{FF5C}>Use the available tool if helpful.<\u{FF5C}Assistant\u{FF5C}><think>"))
     }
 
+    @Test("compiled DSV4 fallback renders tools without a system message")
+    func compiledDSV4FallbackRendersToolsWithoutSystemMessage() throws {
+        let template = try Template(ChatTemplateFallbacks.dsv4Minimal)
+        let rendered = try template.renderDSV4(noSystemToolProbeContext())
+
+        assertNoSystemToolsRenderBetweenUserAndAssistant(rendered)
+    }
+
     @Test("standalone DSV4 template renders tools without a system message")
     func standaloneDSV4TemplateRendersToolsWithoutSystemMessage() throws {
         let source = try repositoryFile("Libraries/MLXLMCommon/ChatTemplates/DSV4Minimal.jinja")
         let template = try Template(source)
-        let rendered = try template.renderDSV4([
+        let rendered = try template.renderDSV4(noSystemToolProbeContext())
+
+        assertNoSystemToolsRenderBetweenUserAndAssistant(rendered)
+    }
+
+    private func noSystemToolProbeContext() -> [String: any Sendable] {
+        [
             "messages": [
                 ["role": "user", "content": "Use a tool if needed."],
             ],
@@ -115,17 +129,22 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
             ],
             "add_generation_prompt": true,
             "enable_thinking": false,
-        ])
+        ]
+    }
 
+    private func assertNoSystemToolsRenderBetweenUserAndAssistant(_ rendered: String) {
         #expect(rendered.contains("## Tools"))
         #expect(rendered.contains("osaurus_no_system_probe"))
         #expect(rendered.contains("<\u{FF5C}DSML\u{FF5C}tool_calls>"))
         #expect(rendered.contains("<\u{FF5C}User\u{FF5C}>Use a tool if needed.\n\n## Tools"))
-        let toolsIndex = try #require(rendered.range(of: "## Tools")?.lowerBound)
-        let userIndex = try #require(rendered.range(of: "<\u{FF5C}User\u{FF5C}>")?.lowerBound)
-        let assistantIndex = try #require(rendered.range(of: "<\u{FF5C}Assistant\u{FF5C}>")?.lowerBound)
-        #expect(userIndex < toolsIndex)
-        #expect(toolsIndex < assistantIndex)
+        if let toolsIndex = rendered.range(of: "## Tools")?.lowerBound,
+           let userIndex = rendered.range(of: "<\u{FF5C}User\u{FF5C}>")?.lowerBound,
+           let assistantIndex = rendered.range(of: "<\u{FF5C}Assistant\u{FF5C}>")?.lowerBound {
+            #expect(userIndex < toolsIndex)
+            #expect(toolsIndex < assistantIndex)
+        } else {
+            Issue.record("DSV4 no-system tool probe is missing expected turn markers")
+        }
     }
 
     @Test("Swift Jinja tojson accepts Python separators kwarg used by Kimi tools")

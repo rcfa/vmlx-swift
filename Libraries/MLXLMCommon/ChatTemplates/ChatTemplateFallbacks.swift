@@ -268,7 +268,7 @@ public enum ChatTemplateFallbacks {
 {%- endfor -%}
 {%- macro render_tools(tools) -%}
 {{- '\n\n## Tools\n\n' -}}
-{{- 'You have access to a set of tools to help answer the user question. You can invoke tools by writing a "<' + dsml + 'tool_calls>" block like the following:\n\n' -}}
+{{- 'You have access to a set of tools to help answer the user\'s question. You can invoke tools by writing a "<' + dsml + 'tool_calls>" block like the following:\n\n' -}}
 {{- '<' + dsml + 'tool_calls>\n' -}}
 {{- '<' + dsml + 'invoke name="$TOOL_NAME">\n' -}}
 {{- '<' + dsml + 'parameter name="$PARAMETER_NAME" string="true|false">$PARAMETER_VALUE</' + dsml + 'parameter>\n' -}}
@@ -295,9 +295,6 @@ public enum ChatTemplateFallbacks {
 {%- if enable_thinking and reasoning_effort == 'max' -%}
 {{- 'Reasoning Effort: Absolute maximum with no shortcuts permitted.\nYou MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.\nExplicitly write out your entire deliberation process, documenting every intermediate step, considered alternative, and rejected hypothesis to ensure absolutely no assumption is left unchecked.\n\n' -}}
 {%- endif -%}
-{%- if tools and not (messages|length > 0 and messages[0]['role'] == 'system') -%}
-{{- render_tools(tools) -}}
-{%- endif -%}
 {%- for message in messages -%}
 {%- if message['role'] == 'system' -%}
 {{- message['content'] -}}
@@ -306,6 +303,9 @@ public enum ChatTemplateFallbacks {
 {%- endif -%}
 {%- elif message['role'] == 'user' or message['role'] == 'developer' -%}
 {{- user_token -}}{{- message['content'] -}}
+{%- if tools and not (messages|length > 0 and messages[0]['role'] == 'system') and loop.index0 == ns.last_user_index -%}
+{{- render_tools(tools) -}}
+{%- endif -%}
 {%- set next_role = messages[loop.index0 + 1]['role'] if loop.index0 + 1 < messages|length else none -%}
 {%- if next_role == 'assistant' or loop.last and add_generation_prompt -%}
 {{- asst_token -}}

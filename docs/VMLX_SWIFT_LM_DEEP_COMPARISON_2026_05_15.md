@@ -102,14 +102,14 @@ Ported into `vmlx-swift`:
 
 - `Libraries/MLXLMCommon/ChatTemplates/DSV4Minimal.jinja`
   - Uses the same tool-rendering macro shape as the Swift fallback.
-  - Renders top-level tools before the first user turn when no system message is
-    present.
+  - Renders top-level tools after the last no-system user/developer turn and
+    before the assistant prefill when no system message is present.
   - Keeps no-hidden-downgrade reasoning behavior: `enable_thinking=true` opens
     `<think>`, direct chat mode emits `</think>`, and `reasoning_effort=max`
     remains visible to the template.
 - `Tests/MLXLMCommonFocusedTests/DeepseekV4ChatTemplateFallbackFocusedTests.swift`
   - Reads the standalone `.jinja` file and proves no-system OpenAI tools render
-    into a DSML schema block before the user turn.
+    into a DSML schema block between the user content and assistant prefill.
 
 Verification:
 

@@ -91,9 +91,9 @@ These rows are now covered in this checkout with artifacts under
 - DSV4 fallback tools: pre-fix failure plus post-fix JANGTQ-K and JANGTQ2
   template-smoke passes for top-level OpenAI tools and Osaurus-sized schemas.
 - DSV4 standalone template parity: `DSV4Minimal.jinja` now renders OpenAI
-  tool schemas before the first user turn when no system message exists, and a
-  focused test reads the standalone file directly so it cannot silently lag
-  behind `ChatTemplateFallbacks.dsv4Minimal`.
+  tool schemas between the final no-system user/developer turn and assistant
+  prefill, and a focused test reads the standalone file directly so it cannot
+  silently lag behind `ChatTemplateFallbacks.dsv4Minimal`.
 - DSV4 reasoning policy: `reasoning_effort=max` and low/medium/high pass
   through without hidden aliasing; the legacy raw-max env no longer gates max.
 - DSV4 fallback max preface: focused template test proves max reaches rendered
