@@ -45,6 +45,15 @@ class StreamTests: XCTestCase {
         XCTAssertTrue(StreamOrDevice.default.description.contains("gpu"))
     }
 
+    func testExplicitStreamOrDevicePreservesStream() {
+        withMLXMetallibForTests {
+            let stream = Stream.cpu
+            let streamOrDevice = StreamOrDevice.stream(stream)
+
+            XCTAssertEqual(streamOrDevice.stream, stream)
+        }
+    }
+
     func testSetUnsetDefaultDevice() {
         // Issue #237 -- setting an unsetting the default device in a loop
         // exhausts many resources

@@ -49,6 +49,16 @@ int64_t mlx_safetensors_mmap_advise_experts(
     const int32_t* layers,
     const int32_t* experts,
     int64_t count);
+int64_t mlx_safetensors_mmap_advise_layer(int32_t advice, int32_t layer);
+int64_t mlx_safetensors_mmap_tracked_buffer_bytes(void);
+int mlx_array_new_mmap_file_region(
+    mlx_array* res,
+    const char* file,
+    uint64_t offset,
+    size_t length,
+    const int* shape,
+    int dim,
+    mlx_dtype dtype);
 int mlx_save_writer(mlx_io_writer out_stream, const mlx_array a);
 int mlx_save(const char* file, const mlx_array a);
 int mlx_save_safetensors_writer(

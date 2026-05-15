@@ -10,8 +10,8 @@ work. **Not pushed to any remote.** Edits here flow directly into
 
 | Path | Purpose |
 |------|---------|
-| `/Users/eric/vmlx-swift` | this fork |
-| `/Users/eric/vmlx-swift-lm` | model library consuming it |
+| `~/vmlx-swift` | this fork |
+| `~/vmlx-swift-lm` | model library consuming it |
 
 ## Branches
 
@@ -54,7 +54,7 @@ files in `Source/Cmlx/mlx-generated/metal/` into a `default.metallib`
 
 ```sh
 cp ~/Library/Developer/Xcode/DerivedData/vmlx-swift-lm-*/Build/Products/Release/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib \
-   /Users/eric/vmlx-swift-lm/default.metallib
+   ~/vmlx-swift-lm/default.metallib
 ```
 
 The C++ loader falls through four paths before finally trying

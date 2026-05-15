@@ -48,6 +48,12 @@ Package.resolved
 
 .build/
 
+# Local release-gate evidence and generated MLX/Xcode artifacts.
+docs/local/
+docs/superpowers/
+*.metallib
+*.profraw
+
 # CocoaPods
 #
 # We recommend against adding the Pods directory to your .gitignore. However

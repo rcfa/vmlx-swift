@@ -1,5 +1,6 @@
 // Copyright © 2024 Apple Inc.
 
+import Foundation
 import MLX
 import XCTest
 
@@ -34,6 +35,95 @@ func assertNotEqual(
         "contents same:\n\(array1)\n\(array2)")
 }
 
+private let mlxTestRepoRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .standardizedFileURL
+
+private let mlxMetallibSourceDirectoryForTests: URL? = {
+    let sourceDirectories = [
+        mlxTestRepoRoot.appendingPathComponent(".build/arm64-apple-macosx/debug"),
+        mlxTestRepoRoot.appendingPathComponent(".build/debug"),
+    ]
+    return sourceDirectories.first {
+        FileManager.default.fileExists(atPath: $0.appendingPathComponent("default.metallib").path)
+    }
+}()
+
+private final class MLXTestBundleProbe {}
+
 func setDefaultDevice() {
     MLX.Device.setDefault(device: .gpu)
+}
+
+private let mlxMetallibPreparedForTests: Void = {
+    let fileManager = FileManager.default
+    guard let sourceDirectory = mlxMetallibSourceDirectoryForTests else {
+        return
+    }
+    let source = sourceDirectory.appendingPathComponent("default.metallib")
+    let repoRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .standardizedFileURL
+
+    var targetDirectories: [URL] = []
+    if let executableURL = Bundle.main.executableURL {
+        targetDirectories.append(executableURL.deletingLastPathComponent())
+    }
+    if let resourceURL = Bundle.main.resourceURL {
+        targetDirectories.append(resourceURL)
+    }
+    let testBundle = Bundle(for: MLXTestBundleProbe.self)
+    if let executableURL = testBundle.executableURL {
+        targetDirectories.append(executableURL.deletingLastPathComponent())
+    }
+    if let resourceURL = testBundle.resourceURL {
+        targetDirectories.append(resourceURL)
+    }
+    if let firstArgument = CommandLine.arguments.first, !firstArgument.isEmpty {
+        targetDirectories.append(URL(fileURLWithPath: firstArgument).deletingLastPathComponent())
+    }
+
+    var scanned = Set<String>()
+    for candidate in targetDirectories {
+        var directory = candidate.standardizedFileURL
+        for _ in 0 ..< 4 {
+            let path = directory.path
+            if scanned.insert(path).inserted {
+                try? fileManager.copyMetallibIfMissing(from: source, into: directory)
+            }
+            directory.deleteLastPathComponent()
+        }
+    }
+}()
+
+func prepareMLXMetallibForTests() {
+    _ = mlxMetallibPreparedForTests
+}
+
+func withMLXMetallibForTests<T>(_ body: () throws -> T) rethrows -> T {
+    prepareMLXMetallibForTests()
+    let originalDirectory = FileManager.default.currentDirectoryPath
+    if let sourceDirectory = mlxMetallibSourceDirectoryForTests {
+        FileManager.default.changeCurrentDirectoryPath(sourceDirectory.path)
+    }
+    defer {
+        FileManager.default.changeCurrentDirectoryPath(originalDirectory)
+    }
+    return try body()
+}
+
+private extension FileManager {
+    func copyMetallibIfMissing(from source: URL, into directory: URL) throws {
+        try createDirectory(at: directory, withIntermediateDirectories: true)
+        for name in ["default.metallib", "mlx.metallib"] {
+            let destination = directory.appendingPathComponent(name)
+            if !fileExists(atPath: destination.path) {
+                try copyItem(at: source, to: destination)
+            }
+        }
+    }
 }

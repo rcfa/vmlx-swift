@@ -1,7 +1,8 @@
-// swift-tools-version: 5.12
+// swift-tools-version: 6.1
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 // Copyright © 2024 Apple Inc.
 
+import CompilerPluginSupport
 import PackageDescription
 
 #if os(Linux)
@@ -103,6 +104,10 @@ import PackageDescription
 
     let mlxSwiftExcludes: [String] = []
 #endif
+
+let transformersSwiftSettings: [SwiftSetting] = [
+    .enableExperimentalFeature("StrictConcurrency")
+]
 
 let cmlx = Target.target(
     name: "Cmlx",
@@ -233,10 +238,37 @@ let package = Package(
         .library(name: "MLXFFT", targets: ["MLXFFT"]),
         .library(name: "MLXLinalg", targets: ["MLXLinalg"]),
         .library(name: "MLXFast", targets: ["MLXFast"]),
+        .library(name: "Jinja", targets: ["Jinja"]),
+        .library(name: "Hub", targets: ["Hub"]),
+        .library(name: "Tokenizers", targets: ["Tokenizers"]),
+        .library(name: "Transformers", targets: ["Tokenizers", "Generation", "Models"]),
+        .library(name: "MLXLMCommon", targets: ["MLXLMCommon"]),
+        .library(name: "MLXLLM", targets: ["MLXLLM"]),
+        .library(name: "MLXVLM", targets: ["MLXVLM"]),
+        .library(name: "MLXEmbedders", targets: ["MLXEmbedders"]),
+        .library(name: "MLXHuggingFace", targets: ["MLXHuggingFace"]),
+        .library(name: "BenchmarkHelpers", targets: ["BenchmarkHelpers"]),
+        .library(name: "IntegrationTestHelpers", targets: ["IntegrationTestHelpers"]),
+        .library(name: "MLXDistributedCore", targets: ["MLXDistributedCore"]),
+        .library(name: "MLXDistributedTransport", targets: ["MLXDistributedTransport"]),
+        .library(name: "MLXDistributedJACCL", targets: ["MLXDistributedJACCL"]),
+        .library(name: "MLXDistributedTP", targets: ["MLXDistributedTP"]),
+        .library(name: "MLXPress", targets: ["MLXPress"]),
+        .executable(name: "RunBench", targets: ["RunBench"]),
+        .executable(name: "ANEProbe", targets: ["ANEProbe"]),
+        .executable(name: "mlxpress", targets: ["MLXPressCLI"]),
+        .executable(name: "mlxpress-selfcheck", targets: ["MLXPressSelfCheck"]),
     ],
     dependencies: [
         // for Complex type
-        .package(url: "https://github.com/apple/swift-numerics", from: "1.0.0")
+        .package(url: "https://github.com/apple/swift-numerics", from: "1.0.0"),
+        .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "600.0.0-latest"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
+        .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.27.0"),
+        .package(url: "https://github.com/apple/swift-nio-http2.git", from: "1.34.0"),
+        .package(url: "https://github.com/apple/swift-certificates.git", from: "1.5.0"),
+        .package(url: "https://github.com/apple/swift-collections.git", from: "1.5.0"),
+        .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
     ],
     targets: [
         cmlx,
@@ -251,6 +283,7 @@ let package = Package(
                 "Cmlx",
                 .product(name: "Numerics", package: "swift-numerics"),
             ],
+            path: "Source/MLX",
             exclude: mlxSwiftExcludes,
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency")
@@ -259,6 +292,7 @@ let package = Package(
         .target(
             name: "MLXRandom",
             dependencies: ["MLX"],
+            path: "Source/MLXRandom",
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency")
             ]
@@ -266,6 +300,7 @@ let package = Package(
         .target(
             name: "MLXFast",
             dependencies: ["MLX", "Cmlx"],
+            path: "Source/MLXFast",
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency")
             ]
@@ -273,6 +308,7 @@ let package = Package(
         .target(
             name: "MLXNN",
             dependencies: ["MLX"],
+            path: "Source/MLXNN",
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency")
             ]
@@ -280,6 +316,7 @@ let package = Package(
         .target(
             name: "MLXOptimizers",
             dependencies: ["MLX", "MLXNN"],
+            path: "Source/MLXOptimizers",
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency")
             ]
@@ -287,6 +324,7 @@ let package = Package(
         .target(
             name: "MLXFFT",
             dependencies: ["MLX"],
+            path: "Source/MLXFFT",
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency")
             ]
@@ -294,15 +332,273 @@ let package = Package(
         .target(
             name: "MLXLinalg",
             dependencies: ["MLX"],
+            path: "Source/MLXLinalg",
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency")
             ]
+        ),
+
+        .target(
+            name: "Jinja",
+            dependencies: [
+                .product(name: "OrderedCollections", package: "swift-collections"),
+            ],
+            path: "Vendors/Jinja/Sources/Jinja"
+        ),
+        .target(
+            name: "EventSource",
+            path: "Vendors/EventSource/Sources/EventSource"
+        ),
+        .target(
+            name: "HuggingFace",
+            dependencies: [
+                "EventSource",
+                .product(name: "Crypto", package: "swift-crypto"),
+            ],
+            path: "Vendors/swift-huggingface/Sources/HuggingFace"
+        ),
+        .target(
+            name: "yyjson",
+            path: "Vendors/yyjson",
+            sources: ["src"],
+            publicHeadersPath: "src"
+        ),
+        .target(
+            name: "Generation",
+            dependencies: ["Tokenizers"],
+            path: "Vendors/swift-transformers/Sources/Generation"
+        ),
+        .target(
+            name: "Hub",
+            dependencies: [
+                "Jinja",
+                "HuggingFace",
+                .product(name: "OrderedCollections", package: "swift-collections"),
+                .product(name: "Crypto", package: "swift-crypto"),
+                "yyjson",
+            ],
+            path: "Vendors/swift-transformers/Sources/Hub",
+            resources: [.process("Resources")],
+            swiftSettings: transformersSwiftSettings
+        ),
+        .target(
+            name: "Models",
+            dependencies: ["Tokenizers", "Generation"],
+            path: "Vendors/swift-transformers/Sources/Models"
+        ),
+        .target(
+            name: "Tokenizers",
+            dependencies: ["Hub", "Jinja"],
+            path: "Vendors/swift-transformers/Sources/Tokenizers"
+        ),
+
+        .target(
+            name: "MLXLMCommon",
+            dependencies: ["MLX", "MLXNN", "MLXOptimizers", "MLXRandom"],
+            path: "Libraries/MLXLMCommon",
+            exclude: ["README.md"]
+        ),
+        .target(
+            name: "MLXLLM",
+            dependencies: ["MLXLMCommon", "MLX", "MLXNN", "MLXOptimizers"],
+            path: "Libraries/MLXLLM",
+            exclude: ["README.md"]
+        ),
+        .target(
+            name: "MLXVLM",
+            dependencies: ["MLXLMCommon", "MLXLLM", "MLX", "MLXNN", "MLXOptimizers"],
+            path: "Libraries/MLXVLM",
+            exclude: ["README.md"]
+        ),
+        .target(
+            name: "MLXEmbedders",
+            dependencies: ["MLX", "MLXNN", "MLXLMCommon"],
+            path: "Libraries/MLXEmbedders",
+            exclude: ["README.md"]
+        ),
+        .target(
+            name: "MLXDistributedCore",
+            dependencies: [],
+            path: "Libraries/MLXDistributedCore",
+            exclude: ["README.md"]
+        ),
+        .target(
+            name: "MLXDistributedTransport",
+            dependencies: [
+                "MLXDistributedCore",
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
+                .product(name: "NIOHTTP2", package: "swift-nio-http2"),
+                .product(name: "X509", package: "swift-certificates"),
+                .product(name: "Crypto", package: "swift-crypto"),
+            ],
+            path: "Libraries/MLXDistributedTransport",
+            exclude: ["README.md"]
+        ),
+        .target(
+            name: "MLXDistributedJACCL",
+            dependencies: ["MLXDistributedCore", "MLX"],
+            path: "Libraries/MLXDistributedJACCL",
+            exclude: ["README.md"]
+        ),
+        .target(
+            name: "CmlxDistributedShim",
+            dependencies: [],
+            path: "Libraries/CmlxDistributedShim",
+            publicHeadersPath: "include",
+            cSettings: [
+                .headerSearchPath("../../Source/Cmlx/mlx-c"),
+            ],
+            cxxSettings: [
+                .headerSearchPath("../../Source/Cmlx/mlx-c"),
+                .headerSearchPath("../../Source/Cmlx/mlx"),
+                .headerSearchPath("../../Source/Cmlx/json/single_include/nlohmann"),
+                .headerSearchPath("../../Source/Cmlx/fmt/include"),
+            ]
+        ),
+        .target(
+            name: "CmlxGraphShim",
+            dependencies: [],
+            path: "Libraries/CmlxGraphShim",
+            publicHeadersPath: "include",
+            cSettings: [
+                .headerSearchPath("../../Source/Cmlx/mlx-c"),
+            ],
+            cxxSettings: [
+                .headerSearchPath("../../Source/Cmlx/mlx-c"),
+                .headerSearchPath("../../Source/Cmlx/mlx"),
+                .headerSearchPath("../../Source/Cmlx/fmt/include"),
+            ]
+        ),
+        .target(
+            name: "MLXDistributedTP",
+            dependencies: [
+                "MLXDistributedCore",
+                "MLXDistributedJACCL",
+                "CmlxDistributedShim",
+                "MLX",
+                "MLXNN",
+            ],
+            path: "Libraries/MLXDistributedTP",
+            exclude: ["README.md"]
+        ),
+        .target(
+            name: "BenchmarkHelpers",
+            dependencies: ["MLXLMCommon", "MLXLLM", "MLXVLM", "MLXEmbedders", "MLX"],
+            path: "Libraries/BenchmarkHelpers"
+        ),
+        .target(
+            name: "IntegrationTestHelpers",
+            dependencies: ["MLXLMCommon", "MLXLLM", "MLXVLM", "MLXEmbedders", "MLX"],
+            path: "Libraries/IntegrationTestHelpers",
+            exclude: ["README.md"]
+        ),
+        .macro(
+            name: "MLXHuggingFaceMacros",
+            dependencies: [
+                .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
+                .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
+            ],
+            path: "Libraries/MLXHuggingFaceMacros"
+        ),
+        .target(
+            name: "MLXHuggingFace",
+            dependencies: ["MLXHuggingFaceMacros", "MLXLMCommon"],
+            path: "Libraries/MLXHuggingFace"
+        ),
+        .target(
+            name: "MLXPress",
+            dependencies: [
+                "MLXLLM",
+                "MLXLMCommon",
+                "MLXHuggingFace",
+                "Tokenizers",
+            ],
+            path: "Sources/MLXPress"
+        ),
+        .executableTarget(
+            name: "MLXPressCLI",
+            dependencies: ["MLXPress", "MLXLMCommon"],
+            path: "Sources/MLXPressCLI"
+        ),
+        .executableTarget(
+            name: "MLXPressSelfCheck",
+            dependencies: ["MLXPress"],
+            path: "Sources/MLXPressSelfCheck"
+        ),
+        .executableTarget(
+            name: "CompileBench",
+            dependencies: ["MLX", "MLXNN", "MLXRandom"],
+            path: "CompileBench"
+        ),
+        .executableTarget(
+            name: "TPRankWorker",
+            dependencies: [
+                "MLXLMCommon",
+                "MLXLLM",
+                "MLXHuggingFace",
+                "MLXDistributedTP",
+                "MLXDistributedJACCL",
+                "MLX",
+                "MLXNN",
+                "Tokenizers",
+            ],
+            path: "tools/TPRankWorker"
+        ),
+        .executableTarget(
+            name: "ANEProbe",
+            dependencies: ["MLXLMCommon"],
+            path: "tools/ANEProbe"
+        ),
+        .executableTarget(
+            name: "RunBench",
+            dependencies: [
+                "MLXLMCommon",
+                "MLXLLM",
+                "MLXVLM",
+                "MLXHuggingFace",
+                "CmlxGraphShim",
+                "MLX",
+                "Jinja",
+                "Tokenizers",
+                "Generation",
+                "Models",
+            ],
+            path: "RunBench",
+            exclude: ["coherency-matrix.sh", "test_slice.swift.bak"]
         ),
 
         .testTarget(
             name: "MLXTests",
             dependencies: [
                 "MLX", "MLXNN", "MLXOptimizers",
+            ],
+            path: "Tests/MLXTests"
+        ),
+        .testTarget(
+            name: "MLXPressPolicyTests",
+            path: "Tests/MLXPressPolicyTests",
+            sources: ["MLXPressLowRamPolicySourceTests.swift"]
+        ),
+        .testTarget(
+            name: "MLXLMCommonFocusedTests",
+            dependencies: ["MLX", "MLXLMCommon", "MLXLLM", "MLXVLM", "Jinja"],
+            path: "Tests/MLXLMCommonFocusedTests",
+            sources: [
+                "DeepseekV4ChatTemplateFallbackFocusedTests.swift",
+                "FocusedMLXTestSupport.swift",
+                "CacheCoordinatorTopologyFocusedTests.swift",
+                "VLShapeGuardFocusedTests.swift",
+                "JANGTQStreamingExpertDescriptorTests.swift",
+                "JANGTQHadamardShuffleTests.swift",
+                "MiniMaxJANGTQResidentExpertTests.swift",
+                "JangPressMachCacheTests.swift",
+                "JangPressPrestackerCleanupTests.swift",
+                "DeepseekV4IndexerCausalTopKTests.swift",
+                "DeepseekV4ReasoningPolicyTests.swift",
+                "MediaCachePlaceholderTests.swift",
+                "NemotronHOmniPreEncodedAudioTests.swift",
             ]
         ),
 

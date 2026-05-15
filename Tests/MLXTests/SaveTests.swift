@@ -7,6 +7,8 @@
 
 import MLX
 import XCTest
+import Cmlx
+import Darwin
 
 final class SaveTests: XCTestCase {
 
@@ -16,6 +18,7 @@ final class SaveTests: XCTestCase {
     )
 
     override func setUpWithError() throws {
+        prepareMLXMetallibForTests()
         setDefaultDevice()
         try FileManager.default.createDirectory(
             at: temporaryPath,
@@ -45,6 +48,154 @@ final class SaveTests: XCTestCase {
 
         assertEqual(try XCTUnwrap(loadedArrays["foo"]), try XCTUnwrap(arrays["foo"]))
         assertEqual(try XCTUnwrap(loadedArrays["bar"]), try XCTUnwrap(arrays["bar"]))
+    }
+
+    public func testMmapSafetensorsLoadCanFeedGPUComputation() throws {
+        try withMLXMetallibForTests {
+            let safetensorsPath = temporaryPath.appending(
+                path: "mmap-gpu-arrays.safetensors",
+                directoryHint: .notDirectory
+            )
+            let key = "layers.0.mlp.switch_mlp.gate_proj.tq_packed"
+            let values: [Float] = (1 ... 8).map { Float($0) }
+            try writeAlignedFloat32Safetensors(
+                at: safetensorsPath,
+                key: key,
+                values: values,
+                shape: [2, 4])
+
+            try withEnvironment("MLX_SAFETENSORS_MMAP", value: "1") {
+                try withEnvironment("MLX_SAFETENSORS_MMAP_START_COLD", value: "1") {
+                    try withEnvironment("MLX_SAFETENSORS_MMAP_COLD_PCT", value: "100") {
+                        let loadedArrays = try MLX.loadArrays(url: safetensorsPath, stream: .cpu)
+                        let loaded = try XCTUnwrap(loadedArrays[key])
+                        let advisedBytes = mlx_safetensors_mmap_advise_layer(1, 0)
+                        guard advisedBytes > 0 else {
+                            XCTFail("mmap loader did not register layer regions")
+                            return
+                        }
+
+                        let result = MLX.sum((loaded * MLXArray(3.0)) + MLXArray(1.0), stream: .gpu)
+                        XCTAssertEqual(result.item(Float.self), 116.0, accuracy: 0.001)
+                    }
+                }
+            }
+        }
+    }
+
+    public func testMmapSafetensorsTensorBufferModeDoesNotTrackWholeShard() throws {
+        try withMLXMetallibForTests {
+            let safetensorsPath = temporaryPath.appending(
+                path: "mmap-tensor-buffer-arrays.safetensors",
+                directoryHint: .notDirectory
+            )
+            let firstKey = "layers.0.mlp.switch_mlp.gate_proj.tq_packed"
+            let secondKey = "layers.0.mlp.switch_mlp.up_proj.tq_packed"
+            try writeSparseFloat32Safetensors(
+                at: safetensorsPath,
+                firstKey: firstKey,
+                firstValues: [1, 2, 3, 4],
+                secondKey: secondKey,
+                secondValues: [5, 6, 7, 8],
+                gapBytes: 1 << 20)
+
+            let fileBytes = try FileManager.default
+                .attributesOfItem(atPath: safetensorsPath.path)[.size] as? Int
+                ?? 0
+
+            try withEnvironment("MLX_SAFETENSORS_MMAP", value: "1") {
+                try withEnvironment("MLX_SAFETENSORS_MMAP_TENSOR_BUFFERS", value: "1") {
+                    let loadedArrays = try MLX.loadArrays(url: safetensorsPath, stream: .cpu)
+                    let first = try XCTUnwrap(loadedArrays[firstKey])
+                    let second = try XCTUnwrap(loadedArrays[secondKey])
+                    let advisedBytes = mlx_safetensors_mmap_advise_layer(1, 0)
+                    let trackedBytes = mlx_safetensors_mmap_tracked_buffer_bytes()
+
+                    XCTAssertGreaterThan(
+                        advisedBytes,
+                        0,
+                        "tensor-buffer mmap mode should register layer regions")
+                    XCTAssertGreaterThan(
+                        trackedBytes,
+                        0,
+                        "tensor-buffer mmap mode should register live mmap-backed Metal buffers")
+                    XCTAssertLessThan(
+                        trackedBytes,
+                        Int64(fileBytes / 4),
+                        "tensor-buffer mmap mode should not keep a Metal buffer over the whole shard")
+
+                    let result = MLX.sum(first + second, stream: .gpu)
+                    XCTAssertEqual(result.item(Float.self), 36.0, accuracy: 0.001)
+                }
+            }
+        }
+    }
+
+    public func testMmapSafetensorsForceInvalidateCanRefaultGPUComputation() throws {
+        try withMLXMetallibForTests {
+            let safetensorsPath = temporaryPath.appending(
+                path: "mmap-force-invalidate-arrays.safetensors",
+                directoryHint: .notDirectory
+            )
+            let key = "layers.0.mlp.switch_mlp.gate_proj.tq_packed"
+            try writeAlignedFloat32Safetensors(
+                at: safetensorsPath,
+                key: key,
+                values: [1, 2, 3, 4],
+                shape: [4])
+
+            try withEnvironment("MLX_SAFETENSORS_MMAP", value: "1") {
+                try withEnvironment("MLX_SAFETENSORS_MMAP_TENSOR_BUFFERS", value: "1") {
+                    try withEnvironment("MLX_SAFETENSORS_MMAP_COLD_ADVICE", value: "force") {
+                        let loadedArrays = try MLX.loadArrays(url: safetensorsPath, stream: .cpu)
+                        let loaded = try XCTUnwrap(loadedArrays[key])
+                        let advisedBytes = mlx_safetensors_mmap_advise_layer(0, 0)
+                        XCTAssertGreaterThan(
+                            advisedBytes,
+                            0,
+                            "force invalidate should advise registered layer regions")
+
+                        let result = MLX.sum((loaded * MLXArray(2.0)) + MLXArray(1.0), stream: .gpu)
+                        XCTAssertEqual(result.item(Float.self), 24.0, accuracy: 0.001)
+                    }
+                }
+            }
+        }
+    }
+
+    public func testMmapFileRegionCanFeedGPUComputation() throws {
+        try withMLXMetallibForTests {
+            let path = temporaryPath.appending(
+                path: "mmap-region.bin",
+                directoryHint: .notDirectory
+            )
+            let offset = 4096
+            var data = Data(repeating: 0, count: offset)
+            for value in [Float(1), Float(2), Float(3), Float(4)] {
+                var bits = value.bitPattern.littleEndian
+                withUnsafeBytes(of: &bits) { data.append(contentsOf: $0) }
+            }
+            try data.write(to: path)
+
+            var array = mlx_array_new()
+            var shape = [Int32(4)]
+            let rc = path.withUnsafeFileSystemRepresentation { pathPtr -> Int32 in
+                guard let pathPtr else { return 1 }
+                return mlx_array_new_mmap_file_region(
+                    &array,
+                    pathPtr,
+                    UInt64(offset),
+                    4 * MemoryLayout<Float>.stride,
+                    &shape,
+                    Int32(shape.count),
+                    DType.float32.cmlxDtype)
+            }
+            XCTAssertEqual(rc, 0)
+
+            let loaded = MLXArray(array)
+            let result = MLX.sum((loaded * MLXArray(4.0)) + MLXArray(1.0), stream: .gpu)
+            XCTAssertEqual(result.item(Float.self), 44.0, accuracy: 0.001)
+        }
     }
 
     public func testSaveArray() throws {
@@ -96,4 +247,78 @@ final class SaveTests: XCTestCase {
         XCTAssertEqual(loadedMetadata, metadata)
     }
 
+}
+
+private func writeAlignedFloat32Safetensors(
+    at url: URL,
+    key: String,
+    values: [Float],
+    shape: [Int]
+) throws {
+    let byteCount = values.count * MemoryLayout<Float>.stride
+    var header = """
+    {"__metadata__":{},"\(key)":{"dtype":"F32","shape":\(shape),"data_offsets":[0,\(byteCount)]}}
+    """
+    while (8 + header.utf8.count) % MemoryLayout<Float>.stride != 0 {
+        header.append(" ")
+    }
+
+    var data = Data()
+    var headerLength = UInt64(header.utf8.count).littleEndian
+    withUnsafeBytes(of: &headerLength) { data.append(contentsOf: $0) }
+    data.append(contentsOf: header.utf8)
+    for value in values {
+        var bits = value.bitPattern.littleEndian
+        withUnsafeBytes(of: &bits) { data.append(contentsOf: $0) }
+    }
+    try data.write(to: url)
+}
+
+private func writeSparseFloat32Safetensors(
+    at url: URL,
+    firstKey: String,
+    firstValues: [Float],
+    secondKey: String,
+    secondValues: [Float],
+    gapBytes: Int
+) throws {
+    let firstByteCount = firstValues.count * MemoryLayout<Float>.stride
+    let gapStart = ((firstByteCount + 15) / 16) * 16
+    let secondStart = gapStart + max(0, gapBytes)
+    let secondEnd = secondStart + secondValues.count * MemoryLayout<Float>.stride
+    var header = """
+    {"__metadata__":{},"\(firstKey)":{"dtype":"F32","shape":[\(firstValues.count)],"data_offsets":[0,\(firstByteCount)]},"\(
+        secondKey)":{"dtype":"F32","shape":[\(secondValues.count)],"data_offsets":[\(secondStart),\(secondEnd)]}}
+    """
+    while (8 + header.utf8.count) % MemoryLayout<Float>.stride != 0 {
+        header.append(" ")
+    }
+
+    var data = Data()
+    var headerLength = UInt64(header.utf8.count).littleEndian
+    withUnsafeBytes(of: &headerLength) { data.append(contentsOf: $0) }
+    data.append(contentsOf: header.utf8)
+    for value in firstValues {
+        var bits = value.bitPattern.littleEndian
+        withUnsafeBytes(of: &bits) { data.append(contentsOf: $0) }
+    }
+    data.append(Data(repeating: 0, count: secondStart - firstByteCount))
+    for value in secondValues {
+        var bits = value.bitPattern.littleEndian
+        withUnsafeBytes(of: &bits) { data.append(contentsOf: $0) }
+    }
+    try data.write(to: url)
+}
+
+private func withEnvironment<T>(_ key: String, value: String, body: () throws -> T) rethrows -> T {
+    let oldValue = getenv(key).map { String(cString: $0) }
+    setenv(key, value, 1)
+    defer {
+        if let oldValue {
+            setenv(key, oldValue, 1)
+        } else {
+            unsetenv(key)
+        }
+    }
+    return try body()
 }

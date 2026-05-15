@@ -1,0 +1,198 @@
+// Copyright © 2026 Osaurus AI. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+import Foundation
+import Jinja
+import MLXLMCommon
+import Testing
+
+private extension Template {
+    func renderDSV4(_ context: [String: any Sendable]) throws -> String {
+        var values: [String: Value] = [:]
+        for (key, value) in context {
+            values[key] = try Value(any: value)
+        }
+        return try render(values)
+    }
+}
+
+@Suite("DeepseekV4 chat-template fallback")
+struct DeepseekV4ChatTemplateFallbackFocusedTests {
+    @Test("reasoning effort max reaches DSV4 fallback preface")
+    func reasoningEffortMaxReachesFallbackPreface() throws {
+        let template = try Template(ChatTemplateFallbacks.dsv4Minimal)
+        let rendered = try template.renderDSV4([
+            "messages": [
+                ["role": "user", "content": "Prove max reasoning reaches the template."],
+            ],
+            "add_generation_prompt": true,
+            "enable_thinking": true,
+            "reasoning_effort": "max",
+        ])
+
+        #expect(rendered.contains("Reasoning Effort: Absolute maximum with no shortcuts permitted."))
+        #expect(rendered.hasSuffix("<\u{FF5C}Assistant\u{FF5C}><think>"))
+    }
+
+    @Test("top-level OpenAI tools render in DSV4 DSML schema block")
+    func topLevelOpenAIToolsRenderInDSMLSchemaBlock() throws {
+        let template = try Template(ChatTemplateFallbacks.dsv4Minimal)
+        let rendered = try template.renderDSV4([
+            "messages": [
+                ["role": "system", "content": "You are a local Osaurus engine."],
+                ["role": "user", "content": "What can you do with tools?"],
+                ["role": "assistant", "content": "I can call tools when needed."],
+                ["role": "user", "content": "Use the available tool if helpful."],
+            ],
+            "tools": [
+                [
+                    "type": "function",
+                    "function": [
+                        "name": "osaurus_probe_tool_0",
+                        "description": "Probe live tool-schema rendering.",
+                        "parameters": [
+                            "type": "object",
+                            "properties": [
+                                "query": [
+                                    "type": "string",
+                                    "description": "Probe query.",
+                                ] as [String: any Sendable],
+                            ] as [String: any Sendable],
+                            "required": ["query"],
+                        ] as [String: any Sendable],
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable],
+            ],
+            "add_generation_prompt": true,
+            "enable_thinking": true,
+            "reasoning_effort": "high",
+        ])
+
+        #expect(rendered.contains("## Tools"))
+        #expect(rendered.contains("### Available Tool Schemas"))
+        #expect(rendered.contains("osaurus_probe_tool_0"))
+        #expect(rendered.contains("<\u{FF5C}DSML\u{FF5C}tool_calls>"))
+        #expect(rendered.hasSuffix(
+            "<\u{FF5C}User\u{FF5C}>Use the available tool if helpful.<\u{FF5C}Assistant\u{FF5C}><think>"))
+    }
+
+    @Test("Swift Jinja tojson accepts Python separators kwarg used by Kimi tools")
+    func tojsonAcceptsPythonSeparatorsKwarg() throws {
+        let template = try Template("{{ tools | tojson(separators=(',', ':')) }}")
+        let rendered = try template.renderDSV4([
+            "tools": [
+                [
+                    "type": "function",
+                    "function": [
+                        "name": "kimi_probe_tool",
+                        "parameters": [
+                            "type": "object",
+                            "properties": [
+                                "city": ["type": "string"] as [String: any Sendable],
+                            ] as [String: any Sendable],
+                        ] as [String: any Sendable],
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable],
+            ],
+        ])
+
+        #expect(rendered.contains("\"name\":\"kimi_probe_tool\""))
+        #expect(rendered.contains("\"city\""))
+        #expect(!rendered.contains("\": "))
+    }
+
+    @Test("ZAYA1-VL fallback preserves vision placeholders and ZAYA XML tools")
+    func zayaVLFallbackPreservesVisionAndTools() throws {
+        let template = try Template(ChatTemplateFallbacks.zayaVLVisionToolMinimal)
+        let rendered = try template.renderDSV4([
+            "messages": [
+                [
+                    "role": "user",
+                    "content": [
+                        ["type": "image"],
+                        ["type": "text", "text": "Describe the image, then call a tool if needed."],
+                    ],
+                ] as [String: any Sendable],
+            ],
+            "tools": [
+                [
+                    "type": "function",
+                    "function": [
+                        "name": "osaurus_probe_tool_0",
+                        "description": "Probe ZAYA1-VL tool rendering.",
+                        "parameters": [
+                            "type": "object",
+                            "properties": [
+                                "query": ["type": "string"] as [String: any Sendable],
+                            ] as [String: any Sendable],
+                            "required": ["query"],
+                        ] as [String: any Sendable],
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable],
+            ],
+            "bos_token": "<bos>",
+            "add_generation_prompt": true,
+            "enable_thinking": false,
+        ])
+
+        #expect(rendered.contains("<|vision_start|><image><|vision_end|>"))
+        #expect(rendered.contains("Describe the image"))
+        #expect(rendered.contains("<name>osaurus_probe_tool_0</name>"))
+        #expect(rendered.contains("<zyphra_tool_call>"))
+        #expect(rendered.hasSuffix("<|im_start|>assistant\n<think>\n</think>\n\n"))
+    }
+
+    @Test("ZAYA1-VL sidecar shim rewrites every loader-visible template source")
+    func zayaVLSidecarShimRewritesTemplateSources() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(
+            "zaya-vl-sidecar-shim-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let tokenizerConfig: [String: Any] = [
+            "bos_token": "<bos>",
+            "eos_token": "<|im_end|>",
+            "chat_template": "user: {{ messages[0]['content'] }}",
+        ]
+        let sidecarConfig: [String: Any] = [
+            "chat_template": "{{ '<|vision_start|><image><|vision_end|>\\n' }}",
+        ]
+        let jangConfig: [String: Any] = [
+            "capabilities": [
+                "family": "zaya1_vl",
+                "tool_parser": "zaya_xml",
+                "supports_tools": true,
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: tokenizerConfig).write(
+            to: root.appendingPathComponent("tokenizer_config.json"))
+        try JSONSerialization.data(withJSONObject: sidecarConfig).write(
+            to: root.appendingPathComponent("chat_template.json"))
+        try JSONSerialization.data(withJSONObject: jangConfig).write(
+            to: root.appendingPathComponent("jang_config.json"))
+
+        let shim = JangLoader.resolveChatTemplateSidecarSubstitution(for: root)
+        #expect(shim != root)
+
+        let rewrittenTokenizerData = try Data(
+            contentsOf: shim.appendingPathComponent("tokenizer_config.json"))
+        let rewrittenTokenizer = try #require(
+            JSONSerialization.jsonObject(with: rewrittenTokenizerData) as? [String: Any])
+        let tokenizerTemplate = try #require(rewrittenTokenizer["chat_template"] as? String)
+        #expect(tokenizerTemplate.contains("zyphra_tool_call"))
+        #expect(tokenizerTemplate.contains("<|vision_start|><image><|vision_end|>"))
+
+        let rewrittenSidecarData = try Data(
+            contentsOf: shim.appendingPathComponent("chat_template.json"))
+        let rewrittenSidecar = try #require(
+            JSONSerialization.jsonObject(with: rewrittenSidecarData) as? [String: Any])
+        let sidecarTemplate = try #require(rewrittenSidecar["chat_template"] as? String)
+        #expect(sidecarTemplate == tokenizerTemplate)
+
+        let jinjaTemplate = try String(
+            contentsOf: shim.appendingPathComponent("chat_template.jinja"),
+            encoding: .utf8)
+        #expect(jinjaTemplate == tokenizerTemplate)
+    }
+}
