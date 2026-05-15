@@ -350,6 +350,18 @@ Goal: support real MTP-capable models as an explicit activation path while
 keeping plain autoregressive decode as the baseline until MTP proves itself per
 family.
 
+Current package surface added on 2026-05-15:
+
+- `MTPBundleInspector`, `MTPBundleStatus`, and `MTPRuntimeMode` provide no-load
+  detection from config metadata, JANG runtime metadata, safetensors indexes, and
+  safetensors headers.
+- `ModelConfiguration` / `ResolvedModelConfiguration` carry `mtpStatus` so
+  Osaurus can expose truthful capabilities after model load.
+- `preserved_enabled` is status only: it means the artifact has MTP tensors
+  preserved, not that speculative MTP decode may auto-launch.
+- Detailed Osaurus, cache, and VL wiring is in
+  `docs/VMLX_SWIFT_MTP_OSAURUS_WIRING_2026_05_15.md`.
+
 Required gates:
 
 - MTP must be off by default unless the model bundle explicitly declares a valid

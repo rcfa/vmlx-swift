@@ -633,6 +633,7 @@ let package = Package(
                 "DeepseekV4ReasoningPolicyTests.swift",
                 "MediaCachePlaceholderTests.swift",
                 "NemotronHOmniPreEncodedAudioTests.swift",
+                "MTPRuntimeFocusedTests.swift",
             ]
         ),
 

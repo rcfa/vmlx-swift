@@ -536,6 +536,9 @@ public final class VLMModelFactory: ModelFactory {
         } else {
             jangConfig = nil
         }
+        let mtpStatus = try? MTPBundleInspector.inspect(
+            modelDirectory: modelDirectory,
+            jangConfig: jangConfig)
 
         // Tool-format resolution priority (same rationale as LLMModelFactory):
         //   1. Caller-supplied `configuration.toolCallFormat` (explicit override).
@@ -667,7 +670,8 @@ public final class VLMModelFactory: ModelFactory {
             eosTokenIds: mutableConfiguration.eosTokenIds,
             toolCallFormat: mutableConfiguration.toolCallFormat,
             reasoningParserName: mutableConfiguration.reasoningParserName,
-            generationDefaults: generationConfig)
+            generationDefaults: generationConfig,
+            mtpStatus: mtpStatus)
 
         return .init(
             configuration: modelConfig, model: model, processor: processor,

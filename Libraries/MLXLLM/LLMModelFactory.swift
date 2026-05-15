@@ -1428,6 +1428,9 @@ public final class LLMModelFactory: ModelFactory {
         } else {
             jangConfig = nil
         }
+        let mtpStatus = try? MTPBundleInspector.inspect(
+            modelDirectory: modelDirectory,
+            jangConfig: jangConfig)
 
         // Build a ModelConfiguration with loaded EOS token IDs and tool call format.
         //
@@ -1547,7 +1550,8 @@ public final class LLMModelFactory: ModelFactory {
             eosTokenIds: mutableConfiguration.eosTokenIds,
             toolCallFormat: mutableConfiguration.toolCallFormat,
             reasoningParserName: mutableConfiguration.reasoningParserName,
-            generationDefaults: generationConfig)
+            generationDefaults: generationConfig,
+            mtpStatus: mtpStatus)
 
         let processor = LLMUserInputProcessor(
             tokenizer: tokenizer, configuration: modelConfig,

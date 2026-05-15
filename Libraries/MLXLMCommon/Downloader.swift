@@ -82,6 +82,9 @@ public struct ResolvedModelConfiguration: Sendable {
     /// Optional defaults loaded from `generation_config.json`.
     public var generationDefaults: GenerationConfigFile?
 
+    /// No-load MTP/VL status inferred from bundle metadata and tensor names.
+    public var mtpStatus: MTPBundleStatus?
+
     public init(
         modelDirectory: URL,
         tokenizerDirectory: URL,
@@ -91,7 +94,8 @@ public struct ResolvedModelConfiguration: Sendable {
         eosTokenIds: Set<Int>,
         toolCallFormat: ToolCallFormat?,
         reasoningParserName: String? = nil,
-        generationDefaults: GenerationConfigFile? = nil
+        generationDefaults: GenerationConfigFile? = nil,
+        mtpStatus: MTPBundleStatus? = nil
     ) {
         self.modelDirectory = modelDirectory
         self.tokenizerDirectory = tokenizerDirectory
@@ -102,6 +106,7 @@ public struct ResolvedModelConfiguration: Sendable {
         self.toolCallFormat = toolCallFormat
         self.reasoningParserName = reasoningParserName
         self.generationDefaults = generationDefaults
+        self.mtpStatus = mtpStatus
     }
 }
 

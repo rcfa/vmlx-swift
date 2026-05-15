@@ -124,10 +124,22 @@ public struct JangArchitecture: Sendable, Equatable {
 public struct JangRuntime: Sendable, Equatable {
     public let totalWeightBytes: Int
     public let totalWeightGB: Float
+    public let bundleHasMTP: Bool
+    public let mtpLayers: Int
+    public let mtpMode: MTPRuntimeMode
 
-    public init(totalWeightBytes: Int = 0, totalWeightGB: Float = 0) {
+    public init(
+        totalWeightBytes: Int = 0,
+        totalWeightGB: Float = 0,
+        bundleHasMTP: Bool = false,
+        mtpLayers: Int = 0,
+        mtpMode: MTPRuntimeMode = .none
+    ) {
         self.totalWeightBytes = totalWeightBytes
         self.totalWeightGB = totalWeightGB
+        self.bundleHasMTP = bundleHasMTP
+        self.mtpLayers = mtpLayers
+        self.mtpMode = mtpMode
     }
 }
 
@@ -1024,7 +1036,10 @@ public struct JangLoader: Sendable {
         if let rDict = json["runtime"] as? [String: Any] {
             runtime = JangRuntime(
                 totalWeightBytes: rDict["total_weight_bytes"] as? Int ?? 0,
-                totalWeightGB: floatValue(rDict["total_weight_gb"]) ?? 0
+                totalWeightGB: floatValue(rDict["total_weight_gb"]) ?? 0,
+                bundleHasMTP: rDict["bundle_has_mtp"] as? Bool ?? false,
+                mtpLayers: rDict["mtp_layers"] as? Int ?? 0,
+                mtpMode: MTPRuntimeMode(rawMode: rDict["mtp_mode"] as? String)
             )
         } else {
             runtime = JangRuntime()

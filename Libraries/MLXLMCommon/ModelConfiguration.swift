@@ -115,6 +115,13 @@ public struct ModelConfiguration: Sendable {
     /// Optional defaults loaded from `generation_config.json`.
     public var generationDefaults: GenerationConfigFile?
 
+    /// No-load MTP/VL status inferred from bundle metadata and tensor names.
+    ///
+    /// This is a capability/status surface only. `preserved_enabled` means the
+    /// artifact has MTP tensors preserved; it does not enable speculative MTP
+    /// decode unless ``MTPBundleStatus/speculativeDecodeEnabled`` is true.
+    public var mtpStatus: MTPBundleStatus?
+
     public init(
         id: String, revision: String = "main",
         tokenizerSource: TokenizerSource? = nil,
@@ -122,7 +129,8 @@ public struct ModelConfiguration: Sendable {
         extraEOSTokens: Set<String> = [],
         toolCallFormat: ToolCallFormat? = nil,
         reasoningParserName: String? = nil,
-        generationDefaults: GenerationConfigFile? = nil
+        generationDefaults: GenerationConfigFile? = nil,
+        mtpStatus: MTPBundleStatus? = nil
     ) {
         self.id = .id(id, revision: revision)
         self.tokenizerSource = tokenizerSource
@@ -131,6 +139,7 @@ public struct ModelConfiguration: Sendable {
         self.toolCallFormat = toolCallFormat
         self.reasoningParserName = reasoningParserName
         self.generationDefaults = generationDefaults
+        self.mtpStatus = mtpStatus
     }
 
     public init(
@@ -141,7 +150,8 @@ public struct ModelConfiguration: Sendable {
         eosTokenIds: Set<Int> = [],
         toolCallFormat: ToolCallFormat? = nil,
         reasoningParserName: String? = nil,
-        generationDefaults: GenerationConfigFile? = nil
+        generationDefaults: GenerationConfigFile? = nil,
+        mtpStatus: MTPBundleStatus? = nil
     ) {
         self.id = .directory(directory)
         self.tokenizerSource = tokenizerSource
@@ -151,6 +161,7 @@ public struct ModelConfiguration: Sendable {
         self.toolCallFormat = toolCallFormat
         self.reasoningParserName = reasoningParserName
         self.generationDefaults = generationDefaults
+        self.mtpStatus = mtpStatus
     }
 
     /// Maps this configuration's behavioral properties into a
@@ -170,7 +181,8 @@ public struct ModelConfiguration: Sendable {
             eosTokenIds: eosTokenIds,
             toolCallFormat: toolCallFormat,
             reasoningParserName: reasoningParserName,
-            generationDefaults: generationDefaults)
+            generationDefaults: generationDefaults,
+            mtpStatus: mtpStatus)
     }
 
 }
