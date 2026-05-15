@@ -263,11 +263,15 @@ public enum LLMTypeRegistry {
                 case mxtqSeed = "mxtq_seed"
             }
         }
-        // mxtq_bits in the bundle may be a flat int OR a per-role dict
-        // (e.g. `{routed_expert: 2, attention: 8, ...}`). Accept both.
+        // mxtq_bits in the bundle may be a flat int, a per-role dict
+        // (e.g. `{routed_expert: 2, attention: 8, ...}`), or a JANGTQ_K
+        // per-projection dict. Accept all real metadata shapes, but reject
+        // gate/up width disagreement because the fused gate+up kernel cannot
+        // dispatch mixed widths.
         enum ProbeBits: Codable {
             case flat(Int)
             case roles([String: Int])
+            case projections(gateUp: Int?, down: Int?)
             init(from decoder: Decoder) throws {
                 let c = try decoder.singleValueContainer()
                 if let v = try? c.decode(Int.self) {
@@ -276,25 +280,64 @@ public enum LLMTypeRegistry {
                 if let v = try? c.decode([String: Int].self) {
                     self = .roles(v); return
                 }
+                struct ProjectionBits: Decodable {
+                    let gateProj: Int?
+                    let upProj: Int?
+                    let downProj: Int?
+                    enum CodingKeys: String, CodingKey {
+                        case gateProj = "gate_proj"
+                        case upProj = "up_proj"
+                        case downProj = "down_proj"
+                    }
+                }
+                struct NestedBits: Decodable {
+                    let routedExpert: ProjectionBits?
+                    enum CodingKeys: String, CodingKey { case routedExpert = "routed_expert" }
+                }
+                if let v = try? c.decode(NestedBits.self),
+                    let routedExpert = v.routedExpert
+                {
+                    let gate = routedExpert.gateProj
+                    let up = routedExpert.upProj
+                    if let gate, let up, gate != up {
+                        throw DecodingError.dataCorruptedError(
+                            in: c,
+                            debugDescription:
+                                "mxtq_bits.routed_expert gate_proj and up_proj must match for fused gate/up kernels")
+                    }
+                    self = .projections(
+                        gateUp: gate ?? up,
+                        down: routedExpert.downProj)
+                    return
+                }
                 throw DecodingError.typeMismatch(
                     ProbeBits.self,
                     .init(codingPath: decoder.codingPath,
-                          debugDescription: "mxtq_bits must be Int or [String: Int]"))
+                          debugDescription: "mxtq_bits must be Int, [String: Int], or routed projection metadata"))
             }
         }
-        let config = try JSONDecoder().decode(ZayaConfiguration.self, from: data)
-        let probe = try? JSONDecoder().decode(Probe.self, from: data)
+        let config = try JSONDecoder.json5().decode(ZayaConfiguration.self, from: data)
+        let probe = try? JSONDecoder.json5().decode(Probe.self, from: data)
 
         // Resolve routed-expert bit width from the probe, accepting both shapes.
         let routedBits: Int? = {
             switch probe?.mxtqBits {
             case .flat(let v): return v
             case .roles(let dict): return dict["routed_expert"] ?? dict.values.first
+            case .projections(let gateUp, let down): return gateUp ?? down
             case nil: return nil
             }
         }()
+        let projectedBits: (gateUp: Int?, down: Int?) = {
+            switch probe?.mxtqBits {
+            case .projections(let gateUp, let down): return (gateUp, down)
+            default: return (nil, nil)
+            }
+        }()
 
-        let weightFormat = probe?.weightFormat?.lowercased()
+        let weightFormat = (probe?.weightFormat ?? config.textConfig.weightFormat)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
         let isJANGTQ =
             weightFormat == "mxtq"
             || weightFormat == "jangtq2"
@@ -302,8 +345,8 @@ public enum LLMTypeRegistry {
             || routedBits != nil
 
         let context: ZayaMoEContext? = isJANGTQ ? .jangtq(
-            gateUpBits: probe?.mxtqGateUpBits ?? routedBits ?? 2,
-            downBits:   probe?.mxtqDownBits   ?? routedBits ?? 2,
+            gateUpBits: probe?.mxtqGateUpBits ?? projectedBits.gateUp ?? routedBits ?? 2,
+            downBits:   probe?.mxtqDownBits   ?? projectedBits.down   ?? routedBits ?? 2,
             seed:       probe?.mxtqSeed ?? 42
         ) : nil
         return ZayaModel(config, moe: context)
@@ -1181,13 +1224,23 @@ public final class LLMModelFactory: ModelFactory {
                             configDict["mxtq_down_bits"] = d
                         }
                         break
-                    } else if let g = gate {
-                        // Mismatched gate/up — fall back to gate width
-                        // and warn. The model class will reject the
-                        // bundle on a same-bits assertion.
+                    } else if let g = gate, let u = up {
+                        throw ModelFactoryError.configurationFileError(
+                            jangConfigURL.lastPathComponent,
+                            configuration.name,
+                            NSError(
+                                domain: "LLMModelFactory",
+                                code: 4,
+                                userInfo: [
+                                    NSLocalizedDescriptionKey:
+                                        "mxtq_bits.routed_expert gate_proj (\(g)) and up_proj (\(u)) differ; fused gate/up JANGTQ kernels require matching widths"
+                                ]))
+                    } else if let g = gate ?? up {
                         configDict["mxtq_bits"] = g
-                        FileHandle.standardError.write(Data(
-                            "[Load] WARNING: mxtq_bits.routed_expert has gate_proj != up_proj; the fused gate+up Metal kernel cannot dispatch mismatched bit widths\n".utf8))
+                        configDict["mxtq_gate_up_bits"] = g
+                        if let d = down {
+                            configDict["mxtq_down_bits"] = d
+                        }
                         break
                     }
                 }

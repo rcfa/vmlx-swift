@@ -146,6 +146,7 @@ public struct Zaya1VLConfiguration: Codable, Sendable {
     private let mxtqBits: Int?
     private let mxtqGateUpBits: Int?
     private let mxtqDownBits: Int?
+    public let mxtqSeed: Int?
     public var routedExpertBits: Int? { mxtqBits }
     public var routedExpertGateUpBits: Int? { mxtqGateUpBits ?? mxtqBits }
     public var routedExpertDownBits: Int? { mxtqDownBits ?? mxtqBits }
@@ -187,6 +188,7 @@ public struct Zaya1VLConfiguration: Codable, Sendable {
         case mxtqBits = "mxtq_bits"
         case mxtqGateUpBits = "mxtq_gate_up_bits"
         case mxtqDownBits = "mxtq_down_bits"
+        case mxtqSeed = "mxtq_seed"
         case visionConfiguration = "vision_config"
     }
 
@@ -243,6 +245,7 @@ public struct Zaya1VLConfiguration: Codable, Sendable {
         self.mxtqBits = explicitGateUp ?? routedBits?.gateUp
         self.mxtqGateUpBits = explicitGateUp ?? routedBits?.gateUp
         self.mxtqDownBits = explicitDown ?? routedBits?.down ?? explicitGateUp ?? routedBits?.gateUp
+        self.mxtqSeed = try container.decodeIfPresent(Int.self, forKey: .mxtqSeed)
         self.visionConfiguration = try container.decode(
             VisionConfiguration.self, forKey: .visionConfiguration)
     }
@@ -285,6 +288,7 @@ public struct Zaya1VLConfiguration: Codable, Sendable {
         try container.encodeIfPresent(mxtqBits, forKey: .mxtqBits)
         try container.encodeIfPresent(mxtqGateUpBits, forKey: .mxtqGateUpBits)
         try container.encodeIfPresent(mxtqDownBits, forKey: .mxtqDownBits)
+        try container.encodeIfPresent(mxtqSeed, forKey: .mxtqSeed)
         try container.encode(visionConfiguration, forKey: .visionConfiguration)
     }
 
@@ -423,6 +427,7 @@ public struct Zaya1VLConfiguration: Codable, Sendable {
         text.mxtqBits = routedExpertGateUpBits
         text.mxtqGateUpBits = routedExpertGateUpBits
         text.mxtqDownBits = routedExpertDownBits
+        text.mxtqSeed = mxtqSeed
         text.zayaExpertLayout = zayaExpertLayout
         return text
     }
@@ -1595,7 +1600,10 @@ public final class Zaya1VL: Module, VLMModel {
             }
             return nil
         }
-        return .jangtq(gateUpBits: gateUpBits ?? 2, downBits: downBits ?? gateUpBits ?? 2, seed: 42)
+        return .jangtq(
+            gateUpBits: gateUpBits ?? 2,
+            downBits: downBits ?? gateUpBits ?? 2,
+            seed: config.mxtqSeed ?? 42)
     }
 
     public func newCache(parameters _: GenerateParameters?) -> [KVCache] {

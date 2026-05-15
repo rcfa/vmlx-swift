@@ -254,6 +254,7 @@ let package = Package(
         .library(name: "MLXDistributedJACCL", targets: ["MLXDistributedJACCL"]),
         .library(name: "MLXDistributedTP", targets: ["MLXDistributedTP"]),
         .library(name: "MLXPress", targets: ["MLXPress"]),
+        .library(name: "VMLX", targets: ["VMLX"]),
         .executable(name: "RunBench", targets: ["RunBench"]),
         .executable(name: "ANEProbe", targets: ["ANEProbe"]),
         .executable(name: "mlxpress", targets: ["MLXPressCLI"]),
@@ -517,6 +518,37 @@ let package = Package(
             ],
             path: "Sources/MLXPress"
         ),
+        .target(
+            name: "VMLX",
+            dependencies: [
+                "MLX",
+                "MLXRandom",
+                "MLXNN",
+                "MLXOptimizers",
+                "MLXFFT",
+                "MLXLinalg",
+                "MLXFast",
+                "Jinja",
+                "Hub",
+                "Tokenizers",
+                "Generation",
+                "Models",
+                "MLXLMCommon",
+                "MLXLLM",
+                "MLXVLM",
+                "MLXEmbedders",
+                "MLXHuggingFace",
+                "MLXDistributedCore",
+                "MLXDistributedTransport",
+                "MLXDistributedJACCL",
+                "MLXDistributedTP",
+                "MLXPress",
+            ],
+            path: "Libraries/VMLX",
+            swiftSettings: [
+                .enableExperimentalFeature("StrictConcurrency")
+            ]
+        ),
         .executableTarget(
             name: "MLXPressCLI",
             dependencies: ["MLXPress", "MLXLMCommon"],
@@ -583,12 +615,14 @@ let package = Package(
         ),
         .testTarget(
             name: "MLXLMCommonFocusedTests",
-            dependencies: ["MLX", "MLXLMCommon", "MLXLLM", "MLXVLM", "Jinja"],
+            dependencies: ["MLX", "MLXLMCommon", "MLXLLM", "MLXVLM", "Jinja", "VMLX"],
             path: "Tests/MLXLMCommonFocusedTests",
             sources: [
                 "DeepseekV4ChatTemplateFallbackFocusedTests.swift",
                 "FocusedMLXTestSupport.swift",
                 "CacheCoordinatorTopologyFocusedTests.swift",
+                "VMLXUmbrellaProductTests.swift",
+                "ZayaConfigDecodeFocusedTests.swift",
                 "VLShapeGuardFocusedTests.swift",
                 "JANGTQStreamingExpertDescriptorTests.swift",
                 "JANGTQHadamardShuffleTests.swift",

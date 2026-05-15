@@ -77,6 +77,49 @@ struct ZayaConfigDecodeTests {
         #expect(cfg.textConfig.mxtqBits == 2)
     }
 
+    @Test("Nested JANGTQ_K routed projection bits decode directly")
+    func nestedProjectionBitsDecode() throws {
+        let json = """
+        {
+          "model_type": "zaya",
+          "weight_format": "mxtq",
+          "mxtq_bits": {
+            "routed_expert": {
+              "gate_proj": 2,
+              "up_proj": 2,
+              "down_proj": 4
+            },
+            "attention": 8,
+            "router": 16
+          }
+        }
+        """.data(using: .utf8)!
+        let cfg = try JSONDecoder().decode(ZayaConfiguration.self, from: json)
+        #expect(cfg.textConfig.mxtqBits == 2)
+        #expect(cfg.textConfig.mxtqGateUpBits == 2)
+        #expect(cfg.textConfig.mxtqDownBits == 4)
+    }
+
+    @Test("Nested JANGTQ_K routed projection bits reject mismatched gate and up")
+    func nestedProjectionBitsRejectMismatchedGateUp() throws {
+        let json = """
+        {
+          "model_type": "zaya",
+          "weight_format": "mxtq",
+          "mxtq_bits": {
+            "routed_expert": {
+              "gate_proj": 2,
+              "up_proj": 4,
+              "down_proj": 4
+            }
+          }
+        }
+        """.data(using: .utf8)!
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(ZayaConfiguration.self, from: json)
+        }
+    }
+
     @Test("Per-projection mxtq_gate_up_bits / mxtq_down_bits decode independently")
     func perProjectionBitsDecode() throws {
         // Simulates LLMModelFactory:1046–1057 pre-merging the nested

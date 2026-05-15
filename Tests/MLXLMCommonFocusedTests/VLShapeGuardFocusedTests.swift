@@ -82,6 +82,8 @@ struct VLShapeGuardFocusedTests {
         #expect(text.mxtqBits == 2)
         #expect(text.mxtqGateUpBits == 2)
         #expect(text.mxtqDownBits == 4)
+        #expect(config.mxtqSeed == 123)
+        #expect(text.mxtqSeed == 123)
     }
 
     private static func source(_ relativePath: String) throws -> String {
@@ -125,6 +127,7 @@ struct VLShapeGuardFocusedTests {
       "vision_start_token_id": 151652,
       "vision_end_token_id": 151653,
       "weight_format": "mxtq",
+      "mxtq_seed": 123,
       "mxtq_bits": {
         "routed_expert": {
           "gate_proj": 2,
