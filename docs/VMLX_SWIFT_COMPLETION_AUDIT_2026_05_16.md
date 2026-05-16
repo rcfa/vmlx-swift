@@ -66,7 +66,7 @@ The package is complete only when all of these are true:
 | Disk L2 OFF/ON and fresh-session restore. | Existing docs and some rows exist; package-wide, per-topology proof remains incomplete. | open |
 | Qwen-style stateless full-history cache boundary. | `docs/local/live-model-matrix/20260516Tguard-removal/Qwen3.6-27B-JANG_4M-CRACK_growing_chat_cache_history_boundary_final.out` proves a real disk hit at the canonical history boundary after the rendered turn-2 history diverges from the turn-1 generation prompt. | live-proven for Qwen3.6 JANG_4M CRACK non-MTP |
 | SSM companion cache and async rederive. | Qwen/hybrid rows are required by docs; not exhaustively live-proven for all relevant local models. | open |
-| VL media salt, same-image hit, changed-image miss. | `docs/local/live-model-matrix/20260516Tzaya-vl-think-template-fix/ZAYA1-VL-8B-JANGTQ4_vl_chat_cache.out`: same-media replay HIT, different-media MISS, coherent blue/orange follow-up. | live-proven for ZAYA1-VL JANGTQ4 |
+| VL media salt, same-image hit, changed-image miss. | `docs/local/live-model-matrix/20260516Tzaya-vl-think-template-fix/ZAYA1-VL-8B-JANGTQ4_vl_chat_cache.out`: same-media replay HIT, different-media MISS, coherent blue/orange follow-up. `docs/local/live-model-matrix/20260516Tguard-removal/Qwen3.6-27B-JANG_4M-CRACK_vl_chat_cache_final.out`: Qwen3VLProcessor same-media disk HIT `84/84`, different-media MISS, coherent follow-up. | live-proven for ZAYA1-VL JANGTQ4 and Qwen3.6 JANG_4M CRACK |
 | Nemotron Omni audio/Parakeet/RADIO. | Video generation now carries the processor's post-EVS keep count and applies real EVS before prompt splice. `docs/local/live-model-matrix/20260516Tomni-nonmtp/Nemotron-Omni-Nano-JANGTQ4-CRACK_omni_evs_v2.out` passes 13/13 TokenIterator rows; strict pre-fix artifact `..._omni_strict.out` failed the video row. The second fix canonicalizes the closed no-thinking media tail to `<think>\n</think>\n\n`; tail probe `..._omni_tail_probe.out` proves compact tail fails and spaced tail grounds the same image, and `..._omni_batch_nothink_tail_fix.out` passes 18/18 including direct and BatchEngine image with `enable_thinking=false`. | live-proven for Omni JANGTQ4 |
 | Reasoning on/off/effort matrix. | Focused DSV4 pass-through exists. MiniMax Small now has live thinking ON/OFF alternation with `.reasoning` deltas ON and zero reasoning OFF. Ling/Bailing template has no active thinking rail in this bundle and returns visible content with no marker leak. Full model-family reasoning-effort matrix is not complete. | partial |
 | Tool parser matrix by family. | DSV4 and selected templates have focused proof; full dsml/deepseek/gemma4/kimi/jang/zaya/llama/qwen/mistral matrix remains open. | open |
@@ -295,10 +295,17 @@ Known failing rows from that snapshot:
   generation-control rails only on the active turn. This fix stores real KV/SSM
   state for the prefix the next request actually contains; it is not a forced
   hit, repetition guard, template monkeypatch, or fake cache reuse.
-- Still open: this row is text-only. VL/media cache rows still need separate
-  image/video/audio proofs for MRoPE, 2D/3D media vectors, Hadamard/JANGTQ
-  matmul, and media-salt cache behavior across same-media and changed-media
-  turns.
+- Qwen3.6 VL cache proof:
+  `docs/local/live-model-matrix/20260516Tguard-removal/Qwen3.6-27B-JANG_4M-CRACK_vl_chat_cache_final.out`
+  and `.err`. The model loads with `Qwen3VLProcessor`; the structured chat row
+  attaches real generated gradient images, gets a grounded cold answer, proves
+  same-media disk restore `HIT disk 84/84`, proves a changed image misses, and
+  answers the text-only follow-up coherently with `Red and blue.` This covers
+  Qwen VL chat-template/media-salt/MRoPE path at the real engine level for this
+  model.
+- Still open: broader VL/media cache rows still need separate video/audio
+  proofs where supported, plus per-family MRoPE 2D/3D vector and
+  Hadamard/JANGTQ matmul coverage beyond this Qwen3.6 JANG_4M row.
 
 2026-05-16 non-MTP Nemotron Omni follow-up:
 
