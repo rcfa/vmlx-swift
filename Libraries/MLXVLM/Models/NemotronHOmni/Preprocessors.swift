@@ -712,6 +712,18 @@ public func nemotronOmniApplyEVS(
 ) -> MLXArray {
     let nGroups = feats.dim(0)
     let tokensPerGroup = feats.dim(1)
+    let totalTokens = nGroups * tokensPerGroup
+    let q = min(max(Double(pruningRate), 0.0), 1.0)
+    let nKeep = max(tokensPerGroup, Int(Double(totalTokens) * (1.0 - q)))
+    return nemotronOmniApplyEVS(feats, targetTokenCount: nKeep)
+}
+
+public func nemotronOmniApplyEVS(
+    _ feats: MLXArray,
+    targetTokenCount: Int
+) -> MLXArray {
+    let nGroups = feats.dim(0)
+    let tokensPerGroup = feats.dim(1)
     let hidden = feats.dim(2)
 
     if nGroups < 2 {
@@ -724,42 +736,29 @@ public func nemotronOmniApplyEVS(
     let dot = (g0 * g1).sum(axis: -1) // (G-1, P)
     let n0 = MLX.sqrt((g0 * g0).sum(axis: -1) + 1e-8)
     let n1 = MLX.sqrt((g1 * g1).sum(axis: -1) + 1e-8)
-    let cos = dot / (n0 * n1) // (G-1, P)
+    let dissimilarity = 1 - (dot / (n0 * n1)) // (G-1, P)
 
-    // Keep first group entirely. For subsequent groups, drop tokens with
-    // highest similarity to corresponding token in prior group, until
-    // `pruningRate` of total dropped.
+    // Keep the same number of tokens as the source EVS path: at least one
+    // full temporal group, bounded by the available video tokens.
     let totalTokens = nGroups * tokensPerGroup
-    let dropTarget = Int(Float(totalTokens) * pruningRate)
+    let nKeep = min(totalTokens, max(tokensPerGroup, targetTokenCount))
 
-    // Convert cos to flat index list sorted by similarity desc, restricted
-    // to non-first-group tokens.
-    let cosFlat = cos.reshaped([(nGroups - 1) * tokensPerGroup])
-    let cosArray = cosFlat.asArray(Float.self)
-    let sortedIdx = (0 ..< cosArray.count).sorted { cosArray[$0] > cosArray[$1] }
+    // Source EVS gives the first group an artificially high dissimilarity
+    // score so the first video frame's post-shuffle grid is always retained.
+    var scores = [Float](repeating: 255, count: tokensPerGroup)
+    scores.append(contentsOf: dissimilarity.reshaped([(nGroups - 1) * tokensPerGroup])
+        .asArray(Float.self))
 
-    // Build keep mask of size nGroups*tokensPerGroup, default true.
-    var keep = [Bool](repeating: true, count: totalTokens)
-    var dropped = 0
-    for relIdx in sortedIdx {
-        if dropped >= dropTarget { break }
-        // relIdx in cosFlat corresponds to (group=1+relIdx/P, token=relIdx%P)
-        let group = 1 + relIdx / tokensPerGroup
-        let tokIn = relIdx % tokensPerGroup
-        let absIdx = group * tokensPerGroup + tokIn
-        if keep[absIdx] {
-            keep[absIdx] = false
-            dropped += 1
-        }
-    }
+    let keepIdx = (0 ..< totalTokens)
+        .sorted { scores[$0] > scores[$1] }
+        .prefix(nKeep)
+        .sorted()
 
-    // Gather kept indices and produce (1, kept, hidden) tensor.
-    let keptIdx = (0 ..< totalTokens).filter { keep[$0] }
-    if keptIdx.isEmpty {
+    if keepIdx.isEmpty {
         return feats[0 ..< 1]
     }
     let flat = feats.reshaped([totalTokens, hidden])
-    let idxArr = MLXArray(keptIdx.map { Int32($0) })
+    let idxArr = MLXArray(keepIdx.map { Int32($0) })
     let gathered = flat.take(idxArr, axis: 0)
-    return gathered.reshaped([1, keptIdx.count, hidden])
+    return gathered.reshaped([1, keepIdx.count, hidden])
 }

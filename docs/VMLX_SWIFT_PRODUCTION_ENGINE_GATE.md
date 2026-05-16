@@ -158,6 +158,42 @@ These rows are now covered in this checkout with artifacts under
   with parallel local edits. Treat it as evidence to compare, not a source to
   copy wholesale.
 
+## Current Focused Proof Added 2026-05-16
+
+- Scope boundary: MTP is parked for this non-MTP production pass. The current
+  work is DSV4 Flash, Nemotron Omni, ZAYA1-VL, cache/template correctness, and
+  live coherent multi-turn behavior.
+- DSV4 non-MTP live rows under
+  `docs/local/live-model-matrix/20260516Tdsv4-nonmtp/` prove JANGTQ-K/JANGTQ2
+  config/template detection, JANGTQ-K three-turn recall, reasoning
+  off/on/max, and explicit `repetition_penalty=1.0` without hidden sampler
+  floors. The 5.5k semantic recall row returns the requested facts, but the full
+  B7 long-context/vector drift gate is still open.
+- Nemotron Omni video generation now follows the real source contract: the
+  processor carries the post-EVS keep count through `LMInput.ProcessedVideo`,
+  and the model applies RADIO video embedding, class-token strip, pixel shuffle,
+  MLP projection, EVS, and post-EVS placeholder alignment before LM prompt
+  splice. The focused unit row asserts 16 groups x 256 tokens at pruning 0.7
+  becomes 1228 video tokens.
+- Nemotron Omni strict pre-fix proof:
+  `docs/local/live-model-matrix/20260516Tomni-nonmtp/Nemotron-Omni-Nano-JANGTQ4-CRACK_omni_strict.out`
+  fails the video LMInput row with a repeated filler loop. Post-fix proof:
+  `.../Nemotron-Omni-Nano-JANGTQ4-CRACK_omni_evs_v2.out` passes 13/13 text,
+  image, video, audio, reasoning toggle, mixed media, media salt, and hybrid SSM
+  warm-pass rows.
+- Nemotron Omni BatchEngine now has stricter false-green checks for empty
+  visible output, raw reasoning tags, repeated filler loops, repeated bigram
+  loops, and image-missing denials. With `maxBatchSize=2` forcing scheduler
+  traversal, text B=1, text B=2, and audio B=1 pass, but image B=1 with
+  explicit `enable_thinking=false` still returns a missing-image denial in
+  `.../Nemotron-Omni-Nano-JANGTQ4-CRACK_omni_batch_forced_evs_v3.out`.
+  This is a real blocker, not a row to mask by forcing reasoning on.
+- Build proof after the non-MTP runtime/harness changes:
+  `swift build -c release --product RunBench --jobs 2` passes. Focused
+  `swift test` is still blocked before the target test by the unrelated
+  `Tests/MLXPressPolicyTests/MLXPressLowRamPolicySourceTests.swift:4:8:
+  no such module 'Testing'` compile error.
+
 ## Fix Gates
 
 | Row | Python-side intent | Swift equivalent | Required proof |

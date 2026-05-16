@@ -85,6 +85,23 @@ final class NemotronHOmniSmokeTests: XCTestCase {
         XCTAssertEqual(outX.shape, [1, 2, 2, 64])
     }
 
+    func testVideoEVSMatchesSourceTokenCount() throws {
+        let feats = MLXArray.zeros([16, 256, 8])
+        let pruned = nemotronOmniApplyEVS(feats, pruningRate: 0.7)
+        XCTAssertEqual(pruned.shape, [1, 1228, 8])
+        let targetPruned = nemotronOmniApplyEVS(feats, targetTokenCount: 1024)
+        XCTAssertEqual(targetPruned.shape, [1, 1024, 8])
+        XCTAssertEqual(
+            NemotronHOmniProcessor.videoTokenCountAfterEVS(
+                groups: 16, tokensPerGroup: 256, pruningRate: 0.7),
+            1228)
+        let video = LMInput.ProcessedVideo(
+            pixels: MLXArray.zeros([16, 3, 512, 512]),
+            frames: nil,
+            embeddingTokenCount: 1228)
+        XCTAssertEqual(video.embeddingTokenCount, 1228)
+    }
+
     func testMelStftShape() throws {
         // 1 second of 16 kHz silence → expected 101 frames at hop_length=160:
         //   (16000 + 2*256) / 160 = 101.6 → 101 frames before center pad.

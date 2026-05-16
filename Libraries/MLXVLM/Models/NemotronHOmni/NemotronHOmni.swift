@@ -100,7 +100,7 @@ public struct NemotronHOmniConfiguration: Codable, Sendable {
         if weightFormat == "mxtq" {
             let bits = (try? c?.decodeIfPresent(Int.self, forKey: .mxtqBits)) ?? 2
             let seed = (try? c?.decodeIfPresent(Int.self, forKey: .mxtqSeed)) ?? 42
-            self.jangtqContext = NemotronHJANGTQContext(bits: bits ?? 2, mxtqSeed: seed ?? 42)
+            self.jangtqContext = NemotronHJANGTQContext(bits: bits, mxtqSeed: seed)
         } else {
             self.jangtqContext = nil
         }
@@ -259,8 +259,10 @@ public class NemotronHOmni: Module, VLMModel, KVCacheDimensionProvider, LoRAMode
         if let pixelValues = input.image?.pixels {
             visualEmbeds = extractImageEmbeds(pixelValues: pixelValues)
         }
-        if let videoPixels = input.video?.pixels {
-            let videoEmbeds = extractImageEmbeds(pixelValues: videoPixels, video: true)
+        if let video = input.video {
+            let videoEmbeds = extractVideoEmbeds(
+                pixelValues: video.pixels,
+                targetTokenCount: video.embeddingTokenCount)
             visualEmbeds = visualEmbeds.map {
                 MLX.concatenated([$0, videoEmbeds], axis: 0)
             } ?? videoEmbeds
@@ -317,6 +319,40 @@ public class NemotronHOmni: Module, VLMModel, KVCacheDimensionProvider, LoRAMode
         feats = visionMLP(feats)
         // Flatten to (N*tokens, llm_hidden)
         return feats.reshaped([N * tokens, feats.dim(-1)])
+    }
+
+    /// Run RADIO's video embedder, then apply Efficient Video Sampling
+    /// before the placeholders are spliced into the language-model prompt.
+    /// The source runtime builds its prompt from the post-EVS token count, so
+    /// video generation must not feed the full redundant 32-frame token stream.
+    public func extractVideoEmbeds(
+        pixelValues: MLXArray,
+        targetTokenCount: Int? = nil,
+        applyEVS: Bool = true,
+        pruningRate: Float = 0.7
+    ) -> MLXArray {
+        var feats = radioModel(pixelValues, video: true)
+        feats = feats[0..., config.visionNumClsTokens..., 0...]
+        let nGroups = feats.dim(0)
+        let patches = feats.dim(1)
+        let hidden = feats.dim(2)
+        let side = Int(Double(patches).squareRoot())
+        precondition(side * side == patches,
+                     "RADIO patch count must be a perfect square; got P=\(patches)")
+        feats = feats.reshaped([nGroups, side, side, hidden])
+        feats = nemotronOmniPixelShuffle(feats, scaleFactor: config.downsampleRatio)
+        let tokensPerGroup = feats.dim(1) * feats.dim(2)
+        let cIn = feats.dim(3)
+        feats = feats.reshaped([nGroups, tokensPerGroup, cIn])
+        feats = visionMLP(feats)
+        if applyEVS {
+            if let targetTokenCount {
+                feats = nemotronOmniApplyEVS(feats, targetTokenCount: targetTokenCount)
+            } else {
+                feats = nemotronOmniApplyEVS(feats, pruningRate: pruningRate)
+            }
+        }
+        return feats.reshaped([feats.dim(0) * feats.dim(1), feats.dim(-1)])
     }
 
     /// Run STFT + Parakeet + sound_projection on a mono waveform stored
@@ -462,6 +498,7 @@ public struct NemotronHOmniProcessorConfiguration: Codable, Sendable {
     public let minNumTiles: Int
     public let maxNumTiles: Int
     public let useThumbnail: Bool
+    public let videoPruningRate: Float
 
     public init() {
         self.processorClass = nil
@@ -469,6 +506,7 @@ public struct NemotronHOmniProcessorConfiguration: Codable, Sendable {
         self.minNumTiles = 1
         self.maxNumTiles = 12
         self.useThumbnail = true
+        self.videoPruningRate = 0.7
     }
 
     public init(from decoder: Decoder) throws {
@@ -478,6 +516,7 @@ public struct NemotronHOmniProcessorConfiguration: Codable, Sendable {
         self.minNumTiles = try c.decodeIfPresent(Int.self, forKey: .minNumTiles) ?? 1
         self.maxNumTiles = try c.decodeIfPresent(Int.self, forKey: .maxNumTiles) ?? 12
         self.useThumbnail = try c.decodeIfPresent(Bool.self, forKey: .useThumbnail) ?? true
+        self.videoPruningRate = try c.decodeIfPresent(Float.self, forKey: .videoPruningRate) ?? 0.7
     }
 
     enum CodingKeys: String, CodingKey {
@@ -486,6 +525,7 @@ public struct NemotronHOmniProcessorConfiguration: Codable, Sendable {
         case minNumTiles = "min_num_tiles"
         case maxNumTiles = "max_num_tiles"
         case useThumbnail = "use_thumbnail"
+        case videoPruningRate = "video_pruning_rate"
     }
 }
 
@@ -623,16 +663,19 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
 
         if !input.videos.isEmpty {
             let (pixels, groups) = try await preprocess(videos: input.videos)
+            // Each group emits 256 post-pixel-shuffle tokens before EVS.
+            // The source runtime applies EVS, then builds the prompt from
+            // the pruned embedding count. Match that contract here so the
+            // placeholder positions and video embeddings stay one-to-one.
+            let videoTokens = Self.videoTokenCountAfterEVS(
+                groups: groups,
+                tokensPerGroup: tokensPerTile,
+                pruningRate: config.videoPruningRate)
             processedVideo = LMInput.ProcessedVideo(
                 pixels: pixels,
-                frames: [THW(groups, config.imageSize, config.imageSize)])
-            // Each group emits 256 post-pixel-shuffle tokens, exactly the
-            // same as one image tile (32×32 → 16×16 → 256). EVS pruning
-            // happens at the embedding level inside extractImageEmbeds —
-            // we don't subtract here; the placeholder count matches the
-            // pre-pruning embed count, and the splice path tolerates
-            // them being equal.
-            totalVideoTokens = groups * tokensPerTile
+                frames: [THW(groups, config.imageSize, config.imageSize)],
+                embeddingTokenCount: videoTokens)
+            totalVideoTokens = videoTokens
         }
 
         if !input.audios.isEmpty {
@@ -755,6 +798,19 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
         }
         let text = contentText(from: messages[0]["content"])
         messages[0]["content"] = media + text
+    }
+
+    public static func videoTokenCountAfterEVS(
+        groups: Int,
+        tokensPerGroup: Int = 256,
+        pruningRate: Float = 0.7
+    ) -> Int {
+        guard groups > 0, tokensPerGroup > 0 else { return 0 }
+        if groups < 2 { return groups * tokensPerGroup }
+        let total = groups * tokensPerGroup
+        let q = min(max(Double(pruningRate), 0.0), 1.0)
+        let evsTokens = Int(Double(total) * (1.0 - q))
+        return max(tokensPerGroup, evsTokens)
     }
 
     private static func contentText(from value: (any Sendable)?) -> String {

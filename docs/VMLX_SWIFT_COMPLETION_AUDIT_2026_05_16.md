@@ -8,13 +8,15 @@ artifact or source reference. Everything else stays `open`.
 Current pushed branch state:
 
 - Branch: `vmlx-0.31.3`
-- Pushed HEAD: `0fdb164` (`feat(runtime): add exact native mtp sampling`)
-- Previous runtime commit: `9b1b254` (`feat(runtime): add tensor-gated qwen native mtp`)
+- Last pushed checkpoint entering this pass: `0deb14b`
+  (`audit(runtime): tighten zaya vl jangtq gates`)
+- Previous MTP runtime checkpoint: `0fdb164`
+  (`feat(runtime): add exact native mtp sampling`)
 - Current worktree is not clean because another agent is working on Flux-native
   Swift files. The dirty Flux files are excluded from this audit's commit scope.
-- Current non-MTP focus: ZAYA1-VL template/tool/vision correctness,
-  live multi-turn text rows, and VL media cache rows. Native MTP is parked for
-  this pass.
+- Current non-MTP focus: DSV4 Flash, Nemotron Omni, ZAYA1-VL, cache/template
+  correctness, and live coherent multi-turn rows. Native MTP is parked for this
+  pass.
 
 ## Objective Restated as Deliverables
 
@@ -55,17 +57,17 @@ The package is complete only when all of these are true:
 | MTP depth-3 production acceleration. | Current D3 rows prove recursive draft plus accepted-prefix cache commit, but remain below the 50 tok/s production target. Small-M verifier tuning is still open. | open |
 | Qwen3.6 MTP coherency and token/s. | D1 artifacts `jang4m-mtp-artifact-native-d1-postrevert-96.log` and `mx-mtp-artifact-native-d1-postrevert-96.log`: coherent, `30.2` and `34.0 tok/s` short rows. D3 prefix-commit artifacts under `docs/local/native-mtp-qwen36-20260516-d3-prefix-commit/`: coherent, `prefixCommit>0`, `rollbackRepair=0`, no loops. | live-proven for explicit MTP diagnostic rows |
 | Qwen3.6 50 tok/s target. | Not achieved. Current rows are below target and the rejected verifier argmax experiment was not committed. | open |
-| DSV4 native encoder, CSA/HSA/SWA, long context, vector drift. | Focused docs exist in `docs/VMLX_SWIFT_PRODUCTION_ENGINE_GATE.md`, but current full long-context/vector gate is still listed open in consolidation audit. | open |
+| DSV4 native encoder, CSA/HSA/SWA, long context, vector drift. | New non-MTP DSV4 JANGTQ-K rows under `docs/local/live-model-matrix/20260516Tdsv4-nonmtp/` prove config/template, three-turn recall, reasoning off/on/max with rep=1.0, and a 5.5k-token semantic recall row. Full B7 long-context/vector drift and speed matrix are still open. | partial |
 | Prefix cache OFF/ON and cache hit proof. | Existing matrix/harness describes rows; not complete for every topology and model family. | open |
 | Paged cache OFF/ON. | Existing focused tests and some model rows exist, but no package-wide matrix artifact proves all relevant architectures. | open |
 | Disk L2 OFF/ON and fresh-session restore. | Existing docs and some rows exist; package-wide, per-topology proof remains incomplete. | open |
 | SSM companion cache and async rederive. | Qwen/hybrid rows are required by docs; not exhaustively live-proven for all relevant local models. | open |
 | VL media salt, same-image hit, changed-image miss. | `docs/local/live-model-matrix/20260516Tzaya-vl-think-template-fix/ZAYA1-VL-8B-JANGTQ4_vl_chat_cache.out`: same-media replay HIT, different-media MISS, coherent blue/orange follow-up. | live-proven for ZAYA1-VL JANGTQ4 |
-| Nemotron Omni audio/Parakeet/RADIO. | `docs/local/live-model-matrix/20260515Tinfer-under20/` has Omni JANGTQ and JANGTQ4 `infer_omni` pass rows. Chunk-concat safety remains documented as not proven. | partial |
+| Nemotron Omni audio/Parakeet/RADIO. | Video generation now carries the processor's post-EVS keep count and applies real EVS before prompt splice. `docs/local/live-model-matrix/20260516Tomni-nonmtp/Nemotron-Omni-Nano-JANGTQ4-CRACK_omni_evs_v2.out` passes 13/13 TokenIterator rows; strict pre-fix artifact `..._omni_strict.out` failed the video row. BatchEngine text/audio scheduler rows pass, but BatchEngine image with explicit `enable_thinking=false` still returns a missing-image denial in `..._omni_batch_forced_evs_v3.out`. | partial |
 | Reasoning on/off/effort matrix. | Focused DSV4 pass-through exists; full model-family reasoning matrix is not complete. | open |
 | Tool parser matrix by family. | DSV4 and selected templates have focused proof; full dsml/deepseek/gemma4/kimi/jang/zaya/llama/qwen/mistral matrix remains open. | open |
 | Generation config defaults apply. | Harness supports resolved defaults; package-wide three-bundle proof and per-model override matrix remain incomplete. | open |
-| Single-batch and continuous batching. | Batch harness exists; full B=1/B>1 overlap and isolation proof per family remains incomplete. | open |
+| Single-batch and continuous batching. | Omni BatchEngine harness now forces `maxBatchSize=2` for B=1 rows so it exercises the scheduler path instead of the solo fast path. Text B=1, text B=2, and audio B=1 pass; image B=1 is blocked by grounding with `enable_thinking=false`. Full per-family batching remains incomplete. | partial |
 | TurboQuant/JANGTQ encode/decode and acceleration toggles. | Focused JANGTQ/Hadamard/matmul proof exists; live low-footprint active routed expert pass for all relevant models remains open. | open |
 | Distributed mode. | Targets exist (`MLXDistributed*`, `TPRankWorker`), but no no-peer distributed clean artifact is recorded for this audit. | open |
 | Full `swift test`. | Current filtered test attempt still fails before focused tests because SwiftPM compiles `MLXPressPolicyTests` first and that target errors with `no such module 'Testing'`. This is a blocker, not a pass. | open |
@@ -135,6 +137,47 @@ Known failing rows from that snapshot:
   40-layer CCA+MoE topology and vision-LoRA `local_experts`; K, JANGTQ4, and
   MXFP4 now pass contract at `.../*_contract_v2.out`.
 
+2026-05-16 non-MTP DSV4 follow-up:
+
+- Config/template gates pass for the local DSV4 Flash JANGTQ-K and JANGTQ2
+  bundles:
+  `docs/local/live-model-matrix/20260516Tdsv4-nonmtp/DeepSeek-V4-Flash-JANGTQ-K_config_smoke.out`,
+  `.../DeepSeek-V4-Flash-JANGTQ2_config_smoke.out`,
+  `.../DeepSeek-V4-Flash-JANGTQ-K_template_kwargs.out`, and
+  `.../DeepSeek-V4-Flash-JANGTQ2_template_kwargs.out`.
+- JANGTQ-K three-turn chat is coherent with thinking disabled and recalls the
+  injected `sapphire-42` token:
+  `.../DeepSeek-V4-Flash-JANGTQ-K_coherence_chat.out`.
+- Reasoning off/on/max with explicit `repetition_penalty=1.0` answers `12`,
+  does not need a hidden sampler floor, and does not leak raw reasoning tags:
+  `.../DeepSeek-V4-Flash-JANGTQ-K_coherence_reasoning_rep1.out`.
+- A 5.5k-token semantic recall row returns `CERULEAN RIVER and OSLO`, but it is
+  slow (`~0.07 tok/s`) and is not a substitute for the full DSV4 B7
+  long-context/vector drift gate:
+  `.../DeepSeek-V4-Flash-JANGTQ-K_coherence_long.out`.
+
+2026-05-16 non-MTP Nemotron Omni follow-up:
+
+- The strict pre-fix artifact
+  `docs/local/live-model-matrix/20260516Tomni-nonmtp/Nemotron-Omni-Nano-JANGTQ4-CRACK_omni_strict.out`
+  failed `5b. video LMInput end-to-end` with a repeated filler loop. That was a
+  real runtime bug, not model quality.
+- The fix carries the processor's post-EVS video token count through
+  `LMInput.ProcessedVideo`, then applies RADIO video embedding, pixel shuffle,
+  MLP projection, and EVS before LM prompt splice. The prompt placeholder count
+  now matches the post-EVS embedding count, so video placeholders and embeddings
+  stay one-to-one even if the EVS keep count changes.
+- Post-fix TokenIterator evidence:
+  `docs/local/live-model-matrix/20260516Tomni-nonmtp/Nemotron-Omni-Nano-JANGTQ4-CRACK_omni_evs_v2.out`
+  passes 13/13 text, image, video, audio, reasoning toggle, mixed media,
+  media-salt isolation, and hybrid SSM warm-pass rows.
+- BatchEngine evidence:
+  `docs/local/live-model-matrix/20260516Tomni-nonmtp/Nemotron-Omni-Nano-JANGTQ4-CRACK_omni_batch_forced_evs_v3.out`
+  passes text B=1, text B=2, and audio B=1 through a forced scheduler path, but
+  fails image B=1 because the model says the image is blank or missing when
+  `enable_thinking=false`. This is now correctly caught as a failure instead of
+  counted as a false pass. Do not hide it by forcing reasoning on.
+
 Skipped rows because of the 20GB cutoff include DSV4 Flash, Hy3, Kimi,
 MiniMax, Ling, and other large bundles. They are not production passes.
 
@@ -170,12 +213,16 @@ Not yet complete:
 1. Continue diagnosing the remaining `fail:133` rows without MTP scope:
    `ZAYA1-VL-8B-JANGTQ_K` is still a real coherence failure on one math row.
    The JANGTQ4/MXFP4 ZAYA1-VL text-template failures are fixed and live-proven.
-2. Run a clean-worktree focused test pass once Flux Package.swift edits are
+2. Fix Nemotron Omni BatchEngine image grounding with explicit
+   `enable_thinking=false`. Current text/audio scheduler rows pass, but the
+   image row still returns a missing-image denial.
+3. Run a clean-worktree focused test pass once Flux Package.swift edits are
    either committed by the Flux agent or isolated in a separate worktree.
-3. MTP is parked for this non-MTP production pass. Do not spend current
+4. MTP is parked for this non-MTP production pass. Do not spend current
    validation time on MTP unless the user re-opens that scope.
-4. Run DSV4 long-context/vector drift with current pushed engine.
-5. Expand the model matrix beyond the 20GB cutoff for DSV4, MiniMax, Ling, Hy3,
+5. Run DSV4 B7 long-context/vector drift with current pushed engine. The new
+   5.5k recall row proves a narrower path only.
+6. Expand the model matrix beyond the 20GB cutoff for DSV4, MiniMax, Ling, Hy3,
    and Kimi one family at a time, with process checks before and after each run.
 
 ## Mergeability Call

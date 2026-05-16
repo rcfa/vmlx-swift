@@ -425,7 +425,7 @@ enum OmniBench {
             // `.reasoning` events, never `.chunk`).
             results.append(await runRow("B1. BatchEngine text B=1", maxNew: maxNewTokens) {
                 nonisolated(unsafe) let ctxLocal = ctxBatch
-                let engine = BatchEngine(context: ctxLocal, maxBatchSize: 1)
+                let engine = BatchEngine(context: ctxLocal, maxBatchSize: 2)
                 var params = GenerateParameters(maxTokens: maxNewTokens, temperature: 0)
                 params.prefillStepSize = 512
                 var userInput = UserInput(prompt: "What is the capital of France?")
@@ -506,7 +506,7 @@ enum OmniBench {
             // model.prepare() and back, this passes.
             results.append(await runRow("B3. BatchEngine image B=1", maxNew: maxNewTokens) {
                 nonisolated(unsafe) let ctxLocal = ctxBatch
-                let engine = BatchEngine(context: ctxLocal, maxBatchSize: 1)
+                let engine = BatchEngine(context: ctxLocal, maxBatchSize: 2)
                 var params = GenerateParameters(maxTokens: maxNewTokens, temperature: 0)
                 params.prefillStepSize = 512
                 let img = try synthesiseGradient(side: 224)
@@ -535,6 +535,7 @@ enum OmniBench {
                         userInfo: [NSLocalizedDescriptionKey:
                             "BatchEngine image B=1: empty output stream"])
                 }
+                try validateVisibleOmniText(text, row: "BatchEngine image B=1")
                 return TurnResult(
                     shortText: text.replacingOccurrences(of: "\n", with: " "),
                     tokens: chunks, secs: secs)
@@ -546,7 +547,7 @@ enum OmniBench {
             if FileManager.default.fileExists(atPath: audioFixture.path) {
                 results.append(await runRow("B4. BatchEngine audio B=1", maxNew: maxNewTokens) {
                     nonisolated(unsafe) let ctxLocal = ctxBatch
-                let engine = BatchEngine(context: ctxLocal, maxBatchSize: 1)
+                    let engine = BatchEngine(context: ctxLocal, maxBatchSize: 2)
                     var params = GenerateParameters(maxTokens: maxNewTokens, temperature: 0)
                     params.prefillStepSize = 512
                     var userInput = UserInput(
@@ -574,6 +575,7 @@ enum OmniBench {
                             userInfo: [NSLocalizedDescriptionKey:
                                 "BatchEngine audio B=1: empty output stream"])
                     }
+                    try validateVisibleOmniText(text, row: "BatchEngine audio B=1")
                     return TurnResult(
                         shortText: text.replacingOccurrences(of: "\n", with: " "),
                         tokens: chunks, secs: secs)
@@ -692,6 +694,7 @@ enum OmniBench {
         let secs = CFAbsoluteTimeGetCurrent() - t0
         let text = userVisibleText(
             context: context, lmInput: lmInput, tokenIds: tokens)
+        try validateVisibleOmniText(text, row: "image turn")
         return TurnResult(
             shortText: text.replacingOccurrences(of: "\n", with: " "),
             tokens: tokens.count, secs: secs)
@@ -720,6 +723,7 @@ enum OmniBench {
         let secs = CFAbsoluteTimeGetCurrent() - t0
         let text = userVisibleText(
             context: context, lmInput: lmInput, tokenIds: tokens)
+        try validateVisibleOmniText(text, row: "video turn")
         return TurnResult(
             shortText: text.replacingOccurrences(of: "\n", with: " "),
             tokens: tokens.count, secs: secs)
@@ -782,6 +786,7 @@ enum OmniBench {
         let secs = CFAbsoluteTimeGetCurrent() - t0
         let text = userVisibleText(
             context: context, lmInput: lmInput, tokenIds: tokens)
+        try validateVisibleOmniText(text, row: "audio turn")
         return TurnResult(
             shortText: text.replacingOccurrences(of: "\n", with: " "),
             tokens: tokens.count, secs: secs)
@@ -865,6 +870,77 @@ enum OmniBench {
         }
         guard allowReasoningFallback else { return "" }
         return reasoning.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func validateVisibleOmniText(_ text: String, row: String) throws {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            throw NSError(
+                domain: "OmniBench", code: 20,
+                userInfo: [NSLocalizedDescriptionKey: "\(row): empty visible text"])
+        }
+        if trimmed.contains("<think>") || trimmed.contains("</think>") {
+            throw NSError(
+                domain: "OmniBench", code: 21,
+                userInfo: [NSLocalizedDescriptionKey: "\(row): raw reasoning tag leaked"])
+        }
+
+        let lower = trimmed.lowercased()
+        if occurrenceCount("let's see", in: lower) >= 3 {
+            throw NSError(
+                domain: "OmniBench", code: 22,
+                userInfo: [NSLocalizedDescriptionKey: "\(row): repeated filler phrase loop"])
+        }
+        if maxRepeatedBigramCount(in: lower) >= 4 {
+            throw NSError(
+                domain: "OmniBench", code: 23,
+                userInfo: [NSLocalizedDescriptionKey: "\(row): repeated bigram loop"])
+        }
+        if row.lowercased().contains("image") {
+            let missingMediaPhrases = [
+                "blank or missing",
+                "uploaded correctly",
+                "can't describe the image",
+                "cannot describe the image",
+                "unable to view the image",
+                "can't see the image",
+            ]
+            if missingMediaPhrases.contains(where: lower.contains) {
+                let excerpt = String(trimmed.prefix(160))
+                throw NSError(
+                    domain: "OmniBench", code: 24,
+                    userInfo: [NSLocalizedDescriptionKey:
+                        "\(row): image not grounded; excerpt=\(excerpt)"])
+            }
+        }
+    }
+
+    private static func occurrenceCount(_ needle: String, in haystack: String) -> Int {
+        guard !needle.isEmpty else { return 0 }
+        var count = 0
+        var rest = haystack[...]
+        while let range = rest.range(of: needle) {
+            count += 1
+            rest = rest[range.upperBound...]
+        }
+        return count
+    }
+
+    private static func maxRepeatedBigramCount(in text: String) -> Int {
+        let stopBigrams: Set<String> = [
+            "of the", "in the", "to the", "and the", "is a", "it is",
+        ]
+        let words = text
+            .split { !$0.isLetter && !$0.isNumber && $0 != "'" }
+            .map(String.init)
+        guard words.count >= 2 else { return 0 }
+        var counts: [String: Int] = [:]
+        for i in 0..<(words.count - 1) {
+            let key = words[i] + " " + words[i + 1]
+            guard !stopBigrams.contains(key) else { continue }
+            counts[key, default: 0] += 1
+        }
+        return counts.values.max() ?? 0
     }
 
     // MARK: - Synthesizers

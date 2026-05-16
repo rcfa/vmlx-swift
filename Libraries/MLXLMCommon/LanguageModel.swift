@@ -103,12 +103,14 @@ public struct LMInput {
 
         public let pixels: MLXArray
         public let frames: [THW]?
+        public let embeddingTokenCount: Int?
 
         public init(
-            pixels: MLXArray, frames: [THW]? = nil
+            pixels: MLXArray, frames: [THW]? = nil, embeddingTokenCount: Int? = nil
         ) {
             self.pixels = pixels
             self.frames = frames
+            self.embeddingTokenCount = embeddingTokenCount
         }
     }
 
