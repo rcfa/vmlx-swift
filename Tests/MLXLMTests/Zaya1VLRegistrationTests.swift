@@ -675,13 +675,14 @@ struct Zaya1VLRegistrationTests {
           .enabled(if: FileManager.default.fileExists(
               atPath: bundlePath("ZAYA1-VL-8B-JANGTQ2") + "/config.json")))
     func realBundleMetadataDecodes() throws {
-        let cases: [(String, String, Int?)] = [
-            ("ZAYA1-VL-8B-MXFP4", "mxfp4", nil),
-            ("ZAYA1-VL-8B-JANGTQ2", "mxtq", 2),
-            ("ZAYA1-VL-8B-JANGTQ4", "mxtq", 4),
+        let cases: [(String, String, Int?, Int?)] = [
+            ("ZAYA1-VL-8B-MXFP4", "mxfp4", nil, nil),
+            ("ZAYA1-VL-8B-JANGTQ2", "mxtq", 2, 2),
+            ("ZAYA1-VL-8B-JANGTQ4", "mxtq", 4, 4),
+            ("ZAYA1-VL-8B-JANGTQ_K", "mxtq", 2, 4),
         ]
 
-        for (bundle, weightFormat, routedBits) in cases {
+        for (bundle, weightFormat, gateUpBits, downBits) in cases {
             guard FileManager.default.fileExists(atPath: Self.bundlePath(bundle) + "/config.json")
             else { continue }
 
@@ -757,7 +758,9 @@ struct Zaya1VLRegistrationTests {
             #expect(!qwenVision.skipVision)
             #expect(qwenVision.hiddenAct == "silu")
             #expect(config.weightFormat == weightFormat)
-            #expect(config.routedExpertBits == routedBits)
+            #expect(config.routedExpertBits == gateUpBits)
+            #expect(config.routedExpertGateUpBits == gateUpBits)
+            #expect(config.routedExpertDownBits == downBits)
 
             #expect(processor.imageProcessorType == "Qwen2VLImageProcessor")
             #expect(processor.patchSize == 14)

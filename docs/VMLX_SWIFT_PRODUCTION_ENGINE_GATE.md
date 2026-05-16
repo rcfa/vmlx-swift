@@ -112,6 +112,12 @@ These rows are now covered in this checkout with artifacts under
 - ZAYA-VL JANGTQ_K schema: focused decoder test proves nested
   `mxtq_bits.routed_expert` dictionaries preserve gate/up and down bit widths
   instead of failing on non-`Int` metadata.
+- ZAYA-VL JANGTQ_K runtime module bits: live
+  `BENCH_ZAYA_MOE_BITS=1` reflects the real
+  `ZAYA1-VL-8B-JANGTQ_K` model as 40 `TurboQuantSwitchGLU` modules with
+  `gateUp=2`, `down=4`, `seed=42`. The metadata contract gate now handles
+  ZAYA1-VL's 40 CCA+MoE blocks and vision-LoRA local expert sidecars instead
+  of applying text-only ZAYA assumptions.
 - ZAYA-VL sidecar/tools: focused test and real-bundle template smokes prove
   JANGQ ZAYA-VL shims preserve vision placeholders while adding the ZAYA XML
   tool schema. The shim writes the corrected template into

@@ -4,6 +4,7 @@ import MLX
 import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
+import MLXNN
 import MLXVLM
 @preconcurrency import Jinja
 @preconcurrency import Tokenizers
@@ -220,6 +221,15 @@ struct Bench {
         // probe for the CCA/router port, not a throughput benchmark.
         if (env["BENCH_ZAYA_TOPK"] ?? "0") == "1" {
             try await runZayaTopK(modelPath: modelPath)
+            return
+        }
+
+        // BENCH_ZAYA_MOE_BITS=1: load the real ZAYA/ZAYA1-VL model and
+        // print the resolved JANGTQ gate/up/down bit widths from both
+        // decoded configuration and reflected SwitchGLU modules. This is
+        // diagnostics only; it does not alter generation.
+        if (env["BENCH_ZAYA_MOE_BITS"] ?? "0") == "1" {
+            try await runZayaMoEBits(modelPath: modelPath)
             return
         }
 
@@ -3618,18 +3628,21 @@ func runZayaContract(modelPath: String) async throws {
     let weightKeys = Array(weightMap.keys)
 
     let modelType = jsonString(config["model_type"]) ?? "nil"
+    let isZayaVL = modelType == "zaya1_vl"
     let layers = jsonInt(config["num_hidden_layers"])
     let hidden = jsonInt(config["hidden_size"])
     let heads = jsonInt(config["num_attention_heads"])
     let groups = jsonInt(config["num_query_groups"])
     let cca = (config["cca"] as? Bool) ?? false
     let ccaHeads = jsonInt(config["cca_num_q_heads"])
-    let kvChannels = jsonInt(config["kv_channels"])
+    let kvChannels = jsonInt(config["kv_channels"]) ?? jsonInt(config["head_dim"])
     let cacheSubtype = jsonString(jangConfig?["cache_subtype"])
     let cacheType = jsonString(jsonAt(jangConfig ?? [:], ["capabilities", "cache_type"]))
     let expertLayout =
         jsonString(jangConfig?["expert_layout"])
         ?? jsonString(jsonAt(config, ["quantization", "expert_layout"]))
+        ?? jsonString(config["zaya_expert_layout"])
+    let visionLora = (config["vision_lora"] as? Bool) ?? false
     let weightFormat =
         (jsonString(config["weight_format"]) ?? jsonString(jangConfig?["weight_format"]) ?? "nil")
             .lowercased()
@@ -3645,8 +3658,15 @@ func runZayaContract(modelPath: String) async throws {
 
     let attnLayers = layerSet(weightKeys, marker: ".self_attn.")
     let moeLayers = layerSet(weightKeys, marker: ".zaya_block.")
-    let expectedAttn = Set(stride(from: 0, to: 80, by: 2))
-    let expectedMoE = Set(stride(from: 1, to: 80, by: 2))
+    let expectedLayerCount = isZayaVL ? 40 : 80
+    let expectedHeads = isZayaVL ? 8 : 16
+    let expectedAttn = isZayaVL
+        ? Set(0..<expectedLayerCount)
+        : Set(stride(from: 0, to: expectedLayerCount, by: 2))
+    let expectedMoE = isZayaVL
+        ? Set(0..<expectedLayerCount)
+        : Set(stride(from: 1, to: expectedLayerCount, by: 2))
+    let expectedPathCount = 40
     let conv0 = weightKeys.filter { $0.hasSuffix(".self_attn.qkv.conv_qk.0.weight") }.count
     let conv1 = weightKeys.filter { $0.hasSuffix(".self_attn.qkv.conv_qk.1.weight") }.count
     let temp = weightKeys.filter { $0.hasSuffix(".self_attn.qkv.temp") }.count
@@ -3659,6 +3679,10 @@ func runZayaContract(modelPath: String) async throws {
     let tqNorms = weightKeys.filter { $0.hasSuffix(".tq_norms") }.count
     let tqBits = weightKeys.filter { $0.hasSuffix(".tq_bits") }.count
     let localExperts = weightKeys.filter { $0.contains(".local_experts.") }.count
+    let localExpertLoRA = weightKeys.filter {
+        $0.contains(".local_experts.") && $0.contains(".lora_")
+    }.count
+    let localExpertNonLoRA = localExperts - localExpertLoRA
     let sidecar = FileManager.default.fileExists(
         atPath: modelDir.appending(path: "jangtq_runtime.safetensors").path)
     let tqInFeatures = jangConfig?["tq_in_features"] as? [String: Any]
@@ -3669,13 +3693,25 @@ func runZayaContract(modelPath: String) async throws {
     var failures: [String] = []
     var warnings: [String] = []
 
-    if modelType != "zaya" { failures.append("model_type \(modelType) != zaya") }
-    if layers != 80 { failures.append("num_hidden_layers \(layers.map(String.init) ?? "nil") != 80") }
+    if modelType != "zaya" && !isZayaVL {
+        failures.append("model_type \(modelType) not in {zaya,zaya1_vl}")
+    }
+    if layers != expectedLayerCount {
+        failures.append(
+            "num_hidden_layers \(layers.map(String.init) ?? "nil") != \(expectedLayerCount)")
+    }
     if hidden != 2048 { failures.append("hidden_size \(hidden.map(String.init) ?? "nil") != 2048") }
-    if heads != 16 { failures.append("num_attention_heads \(heads.map(String.init) ?? "nil") != 16") }
+    if heads != expectedHeads {
+        failures.append(
+            "num_attention_heads \(heads.map(String.init) ?? "nil") != \(expectedHeads)")
+    }
     if groups != 2 { failures.append("num_query_groups \(groups.map(String.init) ?? "nil") != 2") }
     if !cca { failures.append("cca flag is not true") }
-    if ccaHeads != 8 { failures.append("cca_num_q_heads \(ccaHeads.map(String.init) ?? "nil") != 8") }
+    let effectiveCCAHeads = ccaHeads ?? (isZayaVL ? heads : nil)
+    if effectiveCCAHeads != 8 {
+        failures.append(
+            "cca_num_q_heads/head fallback \(effectiveCCAHeads.map(String.init) ?? "nil") != 8")
+    }
     if kvChannels != 128 { failures.append("kv_channels \(kvChannels.map(String.init) ?? "nil") != 128") }
     if cacheSubtype != "zaya_cca" {
         failures.append("jang_config.cache_subtype \(cacheSubtype ?? "nil") != zaya_cca")
@@ -3696,8 +3732,8 @@ func runZayaContract(modelPath: String) async throws {
         ("conv_qk.0", conv0), ("conv_qk.1", conv1), ("temp", temp),
         ("linear_q", qProj), ("linear_k", kProj),
         ("val_proj1", v1Proj), ("val_proj2", v2Proj),
-    ] where count != 40 {
-        failures.append("\(label) count \(count) != 40")
+    ] where count != expectedPathCount {
+        failures.append("\(label) count \(count) != \(expectedPathCount)")
     }
     if effectiveEOS.isEmpty {
         failures.append("empty effective EOS")
@@ -3715,14 +3751,27 @@ func runZayaContract(modelPath: String) async throws {
         if tqPacked != 120 || tqNorms != 120 || tqBits != 120 {
             failures.append("mxtq TQ group counts packed/norms/bits = \(tqPacked)/\(tqNorms)/\(tqBits), expected 120/120/120")
         }
-        if localExperts != 0 { failures.append("local_experts keys remain: \(localExperts)") }
+        if isZayaVL {
+            if localExpertNonLoRA != 0 {
+                failures.append("non-LoRA local_experts keys remain: \(localExpertNonLoRA)")
+            }
+            if visionLora && localExpertLoRA != 2560 {
+                failures.append("vision LoRA local_experts count \(localExpertLoRA) != 2560")
+            }
+        } else if localExperts != 0 {
+            failures.append("local_experts keys remain: \(localExperts)")
+        }
         if tqInFeatureCount != 120 {
             failures.append("tq_in_features count \(tqInFeatureCount) != 120")
         }
         if tqInFeatureBad != 0 {
             failures.append("tq_in_features has \(tqInFeatureBad) non-2048 entries")
         }
-        if routed.uniform != 2 && routed.uniform != 4 {
+        let routedUniformOK = routed.uniform == 2 || routed.uniform == 4
+        let routedMixedOK =
+            (routed.gateUp == 2 || routed.gateUp == 4)
+            && (routed.down == 2 || routed.down == 4)
+        if !routedUniformOK && !routedMixedOK {
             failures.append("routed bits \(routed.description) not in {2,4}")
         }
     case "mxfp4":
@@ -3735,7 +3784,7 @@ func runZayaContract(modelPath: String) async throws {
     }
 
     print(
-        "ZAYA_CONTRACT status=\(failures.isEmpty ? "PASS" : "FAIL") tokenizerDir=\(tokenizerDir.path) weightFormat=\(weightFormat) cacheSubtype=\(cacheSubtype ?? "nil") cacheType=\(cacheType ?? "nil") attnLayers=\(attnLayers.count) moeLayers=\(moeLayers.count) conv0=\(conv0) conv1=\(conv1) temp=\(temp) tqPacked=\(tqPacked) tqNorms=\(tqNorms) tqBits=\(tqBits) tqInFeatures=\(tqInFeatureCount) sidecar=\(sidecar) eosEffective=\(effectiveEOS) tokenizerEOS=\(tokenizerEOS.map(String.init) ?? "nil") template=\(tokenizerChatTemplate || templateFile)"
+        "ZAYA_CONTRACT status=\(failures.isEmpty ? "PASS" : "FAIL") modelType=\(modelType) tokenizerDir=\(tokenizerDir.path) weightFormat=\(weightFormat) cacheSubtype=\(cacheSubtype ?? "nil") cacheType=\(cacheType ?? "nil") attnLayers=\(attnLayers.count) moeLayers=\(moeLayers.count) conv0=\(conv0) conv1=\(conv1) temp=\(temp) tqPacked=\(tqPacked) tqNorms=\(tqNorms) tqBits=\(tqBits) tqInFeatures=\(tqInFeatureCount) localExpertLoRA=\(localExpertLoRA) localExpertNonLoRA=\(localExpertNonLoRA) routedBits=\(routed.description) sidecar=\(sidecar) eosEffective=\(effectiveEOS) tokenizerEOS=\(tokenizerEOS.map(String.init) ?? "nil") template=\(tokenizerChatTemplate || templateFile)"
     )
     if !warnings.isEmpty { print("ZAYA_CONTRACT warnings=\(warnings)") }
     if !failures.isEmpty {
@@ -3797,6 +3846,51 @@ func runZayaTopK(modelPath: String) async throws {
     }
     print(rows.joined(separator: "\n"))
     print("=== BENCH_ZAYA_TOPK: done ===")
+}
+
+func runZayaMoEBits(modelPath: String) async throws {
+    let modelDir = URL(fileURLWithPath: modelPath)
+    print("\n=== BENCH_ZAYA_MOE_BITS: resolved JANGTQ MoE bit probe ===")
+    print("Model: \(modelPath)")
+
+    let configData = try Data(contentsOf: modelDir.appending(path: "config.json"))
+    if let vlConfig = try? JSONDecoder.json5().decode(Zaya1VLConfiguration.self, from: configData)
+    {
+        print(
+            "Decoded ZAYA1-VL config: weightFormat=\(vlConfig.weightFormat ?? "nil") " +
+            "gateUp=\(vlConfig.routedExpertGateUpBits.map(String.init) ?? "nil") " +
+            "down=\(vlConfig.routedExpertDownBits.map(String.init) ?? "nil") " +
+            "seed=\(vlConfig.mxtqSeed.map(String.init) ?? "nil")"
+        )
+    }
+
+    let loadStart = CFAbsoluteTimeGetCurrent()
+    let context = try await MLXLMCommon.loadModel(
+        from: modelDir, using: #huggingFaceTokenizerLoader())
+    print(String(format: "Load: %.2fs", CFAbsoluteTimeGetCurrent() - loadStart))
+
+    print("Dynamic model: \(type(of: context.model))")
+
+    var rows: [String] = []
+    let module = context.model as Module
+    for (name, child) in module.namedModules() {
+        if let layer = child as? TurboQuantSwitchGLU {
+            rows.append(
+                "\(name): input=\(layer.inputDims) hidden=\(layer.hiddenDims) " +
+                "experts=\(layer.numExperts) gateUp=\(layer.gateUpBits) " +
+                "down=\(layer.downBits) seed=\(layer.mxtqSeed)"
+            )
+        }
+    }
+
+    print("TurboQuantSwitchGLU modules reflected: \(rows.count)")
+    for row in rows.prefix(12) {
+        print(row)
+    }
+    if rows.count > 12 {
+        print("... \(rows.count - 12) additional module(s) omitted")
+    }
+    print("=== BENCH_ZAYA_MOE_BITS: done ===")
 }
 
 private func loadJSONObject(_ url: URL) throws -> [String: Any] {

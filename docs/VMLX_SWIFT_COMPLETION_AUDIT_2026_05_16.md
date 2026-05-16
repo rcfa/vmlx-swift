@@ -120,6 +120,20 @@ Known failing rows from that snapshot:
   `docs/local/live-model-matrix/20260516Tzaya-vl-think-template-fix/ZAYA1-VL-8B-JANGTQ_K_prod.out`
   and `.../ZAYA1-VL-8B-JANGTQ_K_prod_greedy.out`. Do not call this variant
   production-ready until the quant/runtime cause is found.
+- Follow-up on `ZAYA1-VL-8B-JANGTQ_K` narrows the failure away from cache,
+  streaming, parser, EOS, and sampler policy. The real prompt/logit probe at
+  `docs/local/live-model-matrix/20260516Tzaya-vl-jangtqk-debug/ZAYA1-VL-8B-JANGTQ_K_topk_math.out`
+  uses the same rendered prompt and token IDs as JANGTQ4/MXFP4, but the K
+  bundle ranks `6`, `7`, `8`, then the correct `4` on the first assistant
+  token. JANGTQ4 and MXFP4 rank `4` first in
+  `.../ZAYA1-VL-8B-JANGTQ4_topk_math.out` and
+  `.../ZAYA1-VL-8B-MXFP4_topk_math.out`.
+- Runtime metadata is not the remaining K bug: the diagnostic at
+  `.../ZAYA1-VL-8B-JANGTQ_K_moe_bits_v2.out` loads the real model and reflects
+  all 40 `TurboQuantSwitchGLU` modules as `gateUp=2`, `down=4`, `seed=42`.
+  The `BENCH_ZAYA_CONTRACT` gate was corrected to understand ZAYA1-VL's
+  40-layer CCA+MoE topology and vision-LoRA `local_experts`; K, JANGTQ4, and
+  MXFP4 now pass contract at `.../*_contract_v2.out`.
 
 Skipped rows because of the 20GB cutoff include DSV4 Flash, Hy3, Kimi,
 MiniMax, Ling, and other large bundles. They are not production passes.
@@ -158,9 +172,8 @@ Not yet complete:
    The JANGTQ4/MXFP4 ZAYA1-VL text-template failures are fixed and live-proven.
 2. Run a clean-worktree focused test pass once Flux Package.swift edits are
    either committed by the Flux agent or isolated in a separate worktree.
-3. Optimize the native MTP D3 verifier hot path. The correctness baseline now
-   exists; the remaining production blocker is compiled/tuned small-M verifier
-   execution near the 50 tok/s target.
+3. MTP is parked for this non-MTP production pass. Do not spend current
+   validation time on MTP unless the user re-opens that scope.
 4. Run DSV4 long-context/vector drift with current pushed engine.
 5. Expand the model matrix beyond the 20GB cutoff for DSV4, MiniMax, Ling, Hy3,
    and Kimi one family at a time, with process checks before and after each run.
