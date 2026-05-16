@@ -55,7 +55,7 @@ pins the runtime stack as separate packages:
 | Dependency | Revision |
 | --- | --- |
 | `https://github.com/osaurus-ai/mlx-swift` | `0a56f9041d56b4b8161f67a6cbd540ae66efc9fd` |
-| `https://github.com/osaurus-ai/vmlx-swift-lm` | `c90898fb41955578d546cf8936acc813a53b0294` |
+| `https://github.com/osaurus-ai/vmlx-swift-lm` | `2cc64dd30f9faa877d4c5ecced63ab4ac9467df4` |
 | `https://github.com/osaurus-ai/Jinja.git` | `58d21aa5b69fdd9eb7e23ce2c3730f47db8e0c9d` |
 | `https://github.com/osaurus-ai/swift-transformers` | `087a66b17e482220b94909c5cf98688383ae481a` |
 
@@ -78,8 +78,16 @@ until the equivalent product surface exists here and the live matrix is proven.
 
 - It is behind `origin/main` by 5 commits.
 - It has many dirty runtime/cache/template/model edits from parallel local work.
-- It has untracked DSV4 reasoning-policy files whose behavior conflicts with
-  the no-hidden-downgrade rule and must not be copied.
+- Its local HEAD is `81c8ef7` (`bench: add omni audio chunk stability probe`).
+  `origin/main` currently adds `4365651`, `f728718`, `6561a72`, `e1280c3`,
+  and `4546a5d`, covering nested ZAYA JANGTQ bits and the latest DSV4 HSA /
+  overlap-compressor / fallback-DSML fixes.
+- OsaurusCore is pinned beyond the local sibling HEAD at `2cc64dd`
+  (`Wire native DSV4 chat encoder`), so package migration must compare against
+  the pinned commit, the sibling dirty worktree, and this repo separately.
+- It has untracked DSV4 reasoning-policy files. Treat them as audit inputs only;
+  do not copy any hidden downgrade, forced parser close, or family-specific
+  guard behavior.
 - It has in-flight batch/cache-salt test edits that should be treated as a
   signal to verify the same cache-key behavior here, not as an automatic patch.
 
@@ -88,11 +96,18 @@ Already reconciled in `vmlx-swift`:
 - ZAYA/ZAYA1-VL nested JANGTQ_K metadata and `mxtq_seed` plumbing.
 - VMLX umbrella product exposing the current Osaurus stable import surface.
 - MTP status detection and preserved/disabled/error bundle metadata plumbing.
+- Explicit tensor-gated Qwen3.6 native MTP activation via
+  `DraftStrategy.nativeMTP(depth:)` and `VMLINUX_NATIVE_MTP=1`, with fail-closed
+  behavior when config metadata exists but MTP tensors are absent.
 - DSV4 standalone `DSV4Minimal.jinja` no-system tool-schema rendering, aligned
   with the compiled Swift fallback and covered by a focused test.
 
 Still open before the Osaurus single-package PR:
 
+- Proper native-MTP depth-3 acceleration: one verifier over
+  `[primary, d1, d2, d3]`, intermediate Qwen hybrid SSM/KV capture/commit for
+  accepted prefix length `0...3`, and compiled/tuned small-M verifier shapes.
+  Current MTP rows are coherent correctness probes, not the 50 tok/s target.
 - DSV4 long-context CSA/HSA/SWA + prefix/paged/disk behavior, including vector
   drift status.
 - BatchEngine continuous batching, cancellation, cache-key salting, and
