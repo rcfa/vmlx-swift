@@ -2870,6 +2870,7 @@ private func generateLoopTask<Handler: TokenLoopHandler>(
                 }
             }
 
+            let unclosedReasoning = handler.unclosedReasoning
             handler.onGenerationEnd(emit: continuation.yield)
 
             let now = Date.timeIntervalSinceReferenceDate
@@ -2882,7 +2883,8 @@ private func generateLoopTask<Handler: TokenLoopHandler>(
                 generationTokenCount: tokenCount,
                 promptTime: promptTime + iterator.promptPrefillTime,
                 generationTime: generateTime,
-                stopReason: stopReason ?? .cancelled
+                stopReason: stopReason ?? .cancelled,
+                unclosedReasoning: unclosedReasoning
             )
             _ = continuation.yield(handler.infoEvent(info))
 
@@ -3171,10 +3173,16 @@ private protocol TokenLoopHandler: Sendable {
     /// `.info` event. Default `false` for handlers that don't consume
     /// text (e.g., the raw-token handler).
     var stopSequenceHit: Bool { get }
+
+    /// True when the handler is still inside a reasoning envelope before
+    /// terminal flush. Must be snapshotted before `onGenerationEnd`, because
+    /// flushing drains and closes parser state.
+    var unclosedReasoning: Bool { get }
 }
 
 extension TokenLoopHandler {
     var stopSequenceHit: Bool { false }
+    var unclosedReasoning: Bool { false }
 }
 
 private struct TextToolTokenLoopHandler: TokenLoopHandler, @unchecked Sendable {
@@ -3390,6 +3398,10 @@ private struct TextToolTokenLoopHandler: TokenLoopHandler, @unchecked Sendable {
 
     func infoEvent(_ info: GenerateCompletionInfo) -> Generation {
         .info(info)
+    }
+
+    var unclosedReasoning: Bool {
+        reasoningParser?.isInsideReasoning ?? false
     }
 }
 

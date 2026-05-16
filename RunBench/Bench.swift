@@ -449,6 +449,10 @@ struct Bench {
             try await runOfficialMultiTurn(modelPath: modelPath, maxNew: maxNew)
             return
         }
+        if (env["BENCH_NO_GUARD_SAMPLING"] ?? "0") == "1" {
+            try await runNoGuardSamplingProbe(modelPath: modelPath, maxNew: maxNew)
+            return
+        }
         if (env["BENCH_PROD"] ?? "0") == "1" {
             try await runProdMatrix(modelPath: modelPath, maxNew: maxNew)
             return
@@ -5142,6 +5146,22 @@ private func lagunaLoopHeuristic(_ text: String) -> Bool {
         .lowercased()
         .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
         .trimmingCharacters(in: .whitespacesAndNewlines)
+    var previousScalar: UnicodeScalar?
+    var repeatedScalarCount = 0
+    for scalar in normalized.unicodeScalars {
+        if CharacterSet.whitespacesAndNewlines.contains(scalar) {
+            previousScalar = nil
+            repeatedScalarCount = 0
+            continue
+        }
+        if scalar == previousScalar {
+            repeatedScalarCount += 1
+            if repeatedScalarCount >= 64 { return true }
+        } else {
+            previousScalar = scalar
+            repeatedScalarCount = 1
+        }
+    }
     let words = normalized.split(separator: " ").map(String.init)
     guard words.count >= 18 else { return false }
     let maxWidth = min(32, words.count / 3)
@@ -5168,6 +5188,268 @@ private func lagunaLoopHeuristic(_ text: String) -> Bool {
         }
     }
     return false
+}
+
+// MARK: - No-hidden-guard sampling probe
+
+/// Behavioral proof for the no-hidden-guards policy. This is a diagnostic
+/// harness only: it sends explicit request parameters, prints the effective
+/// values, and fails on loops, visible reasoning marker leaks, or empty visible
+/// content. It does not alter production defaults or family behavior.
+func runNoGuardSamplingProbe(modelPath: String, maxNew: Int) async throws {
+    let modelDir = URL(fileURLWithPath: modelPath)
+    let modelName = modelDir.lastPathComponent
+    print("\n=== BENCH_NO_GUARD_SAMPLING — \(modelName) ===")
+
+    let loadStart = CFAbsoluteTimeGetCurrent()
+    let context = try await MLXLMCommon.loadModel(
+        from: modelDir, using: #huggingFaceTokenizerLoader())
+    print(String(format: "Load: %.2fs  Model: %@",
+        CFAbsoluteTimeGetCurrent() - loadStart,
+        String(describing: type(of: context.model))))
+    print("Tool format: \(context.configuration.toolCallFormat.map{"\($0)"} ?? "json")")
+    print("Reasoning stamp: \(context.configuration.reasoningParserName ?? "nil")")
+    print("Tokenizer BOS: \(context.tokenizer.bosToken ?? "nil")")
+
+    struct Case {
+        var label: String
+        var prompt: String
+        var maxTokens: Int
+        var temperature: Float
+        var topP: Float
+        var topK: Int
+        var minP: Float
+        var repetitionPenalty: Float?
+        var enableThinking: Bool?
+    }
+
+    var cases: [Case] = [
+        Case(
+            label: "A_hi_greedy_no_rep",
+            prompt: "say hi",
+            maxTokens: max(64, min(maxNew, 96)),
+            temperature: 0,
+            topP: 1,
+            topK: 0,
+            minP: 0,
+            repetitionPenalty: nil,
+            enableThinking: nil),
+        Case(
+            label: "B_star_story_temp06_rep1_think_on",
+            prompt: "tell me a 2-sentence story about a star",
+            maxTokens: max(maxNew, 256),
+            temperature: 0.6,
+            topP: 1,
+            topK: 0,
+            minP: 0,
+            repetitionPenalty: 1.0,
+            enableThinking: true),
+    ]
+    if modelName.lowercased().contains("ling")
+        || modelName.lowercased().contains("bailing")
+    {
+        cases.append(Case(
+            label: "C_ling_russian_threejs_temp07",
+            prompt:
+                "Привет. Напиши краткий план одной HTML/Three.js игры: охотник бежит по лесу, стреляет из дробовика, а кабаны и лоси появляются как враги. Ответь по-русски структурировано в 5 пунктах; каждый пункт должен быть полным коротким предложением, без повторения одного слова или символа.",
+            maxTokens: max(maxNew, 420),
+            temperature: 0.7,
+            topP: 1,
+            topK: 0,
+            minP: 0,
+            repetitionPenalty: nil,
+            enableThinking: false))
+    }
+
+    nonisolated(unsafe) let ctx = context
+    let engine = BatchEngine(context: ctx, maxBatchSize: 1)
+
+    struct Result {
+        var text = ""
+        var reasoning = ""
+        var toolCalls = 0
+        var genTokens = 0
+        var genSec = 0.0
+        var totalSec = 0.0
+        var ttftSec = 0.0
+        var stop = "unknown"
+        var unclosedReasoning = false
+    }
+
+    func stopLabel(_ reason: GenerateStopReason) -> String {
+        switch reason {
+        case .stop: return "stop"
+        case .length: return "length"
+        case .cancelled: return "cancelled"
+        default: return "other"
+        }
+    }
+
+    func preview(_ text: String, limit: Int) -> String {
+        let collapsed = text.replacingOccurrences(of: "\n", with: "\\n")
+        return collapsed.count > limit
+            ? String(collapsed.prefix(limit)) + "..."
+            : collapsed
+    }
+
+    func markerLeaks(in text: String) -> [String] {
+        [
+            "<think>", "</think>",
+            "[THINK]", "[/THINK]",
+            "<|channel>", "<channel|>",
+            "<|channel|>analysis", "<|channel|>final",
+            "<|message|>",
+        ].filter { text.contains($0) }
+    }
+
+    func occurrenceCount(_ needle: String, in haystack: String) -> Int {
+        guard !needle.isEmpty else { return 0 }
+        var count = 0
+        var search = haystack[...]
+        while let range = search.range(of: needle) {
+            count += 1
+            search = search[range.upperBound...]
+        }
+        return count
+    }
+
+    func run(_ c: Case) async throws -> Result {
+        var input = UserInput(prompt: c.prompt)
+        if let thinking = c.enableThinking {
+            input.additionalContext = ["enable_thinking": thinking]
+        }
+        let prepared = try await ctx.processor.prepare(input: input)
+        let promptTokens = prepared.text.tokens.reshaped(-1).asArray(Int32.self)
+        let tail = ctx.tokenizer.decode(
+            tokenIds: Array(promptTokens.suffix(80)).map(Int.init),
+            skipSpecialTokens: false)
+        print("\n--- \(c.label) ---")
+        print("Prompt tokens: \(promptTokens.count)")
+        print("Prompt tail: \(tail.debugDescription)")
+        let params = GenerateParameters(
+            maxTokens: c.maxTokens,
+            temperature: c.temperature,
+            topP: c.topP,
+            topK: c.topK,
+            minP: c.minP,
+            repetitionPenalty: c.repetitionPenalty,
+            prefillStepSize: 512)
+        print(String(format:
+            "Sampling: maxTokens=%d temp=%.3f topP=%.3f topK=%d minP=%.3f rep=%@ enable_thinking=%@",
+            params.maxTokens ?? -1,
+            Double(params.temperature),
+            Double(params.topP),
+            params.topK,
+            Double(params.minP),
+            params.repetitionPenalty.map { String(format: "%.3f", Double($0)) } ?? "nil",
+            c.enableThinking.map(String.init) ?? "omitted"))
+
+        nonisolated(unsafe) let send = prepared
+        var result = Result()
+        let start = CFAbsoluteTimeGetCurrent()
+        let stream = await engine.generate(input: send, parameters: params)
+        for await event in stream {
+            switch event {
+            case .chunk(let text):
+                if result.ttftSec == 0 {
+                    result.ttftSec = CFAbsoluteTimeGetCurrent() - start
+                }
+                result.text += text
+            case .reasoning(let text):
+                if result.ttftSec == 0 {
+                    result.ttftSec = CFAbsoluteTimeGetCurrent() - start
+                }
+                result.reasoning += text
+            case .toolCall:
+                result.toolCalls += 1
+            case .info(let info):
+                result.genTokens = info.generationTokenCount
+                result.genSec = info.generateTime
+                result.stop = stopLabel(info.stopReason)
+                result.unclosedReasoning = info.unclosedReasoning
+            }
+        }
+        result.totalSec = CFAbsoluteTimeGetCurrent() - start
+        return result
+    }
+
+    var failures: [String] = []
+    do {
+        for c in cases {
+            let r = try await run(c)
+            let visible = r.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let display = visible.isEmpty ? r.reasoning : visible
+            let combined = r.text + "\n" + r.reasoning
+            let loop = lagunaLoopHeuristic(combined)
+            let leaks = markerLeaks(in: r.text)
+            let bosCount = context.tokenizer.bosToken.map {
+                occurrenceCount($0, in: combined)
+            } ?? 0
+            let tokps = r.genSec > 0 ? Double(r.genTokens) / r.genSec : 0
+            print(String(format:
+                "Result: stop=%@ unclosedReasoning=%@ genTokens=%d genSec=%.3f tokps=%.1f ttft_ms=%.0f textChars=%d reasoningChars=%d tools=%d loop=%@ bosRepeats=%d leaks=%@",
+                r.stop,
+                r.unclosedReasoning ? "YES" : "NO",
+                r.genTokens,
+                r.genSec,
+                tokps,
+                r.ttftSec * 1000,
+                r.text.count,
+                r.reasoning.count,
+                r.toolCalls,
+                loop ? "YES" : "NO",
+                bosCount,
+                leaks.isEmpty ? "none" : leaks.joined(separator: ",")))
+            print("First 400 visible: \"\(preview(display, limit: 400))\"")
+            print("Last 200 visible: \"\(preview(String(display.suffix(200)), limit: 240))\"")
+
+            if visible.isEmpty {
+                failures.append("\(c.label): no visible content")
+            }
+            if loop {
+                failures.append("\(c.label): repeated-output loop heuristic fired")
+            }
+            if bosCount >= 3 {
+                failures.append("\(c.label): BOS token repeated \(bosCount)x")
+            }
+            if !leaks.isEmpty {
+                failures.append("\(c.label): visible reasoning markers \(leaks.joined(separator: ","))")
+            }
+            if c.enableThinking == true && r.unclosedReasoning {
+                failures.append("\(c.label): reasoning did not close before stop")
+            }
+            if c.label == "A_hi_greedy_no_rep" {
+                let lower = visible.lowercased()
+                if !(lower.contains("hi") || lower.contains("hello")) {
+                    failures.append("\(c.label): visible output did not greet")
+                }
+            }
+            if c.label == "B_star_story_temp06_rep1_think_on"
+                && !visible.lowercased().contains("star")
+            {
+                failures.append("\(c.label): visible story did not mention star")
+            }
+            if c.label == "C_ling_russian_threejs_temp07" {
+                let lower = visible.lowercased()
+                if !(lower.contains("three.js") || lower.contains("html")
+                    || lower.contains("игр"))
+                {
+                    failures.append("\(c.label): output did not stay on the Three.js game task")
+                }
+            }
+        }
+    } catch {
+        await engine.shutdown()
+        throw error
+    }
+
+    await engine.shutdown()
+    if !failures.isEmpty {
+        throw NSError(domain: "BENCH_NO_GUARD_SAMPLING", code: 1,
+            userInfo: [NSLocalizedDescriptionKey:
+                failures.joined(separator: "; ")])
+    }
+    print("\n=== BENCH_NO_GUARD_SAMPLING: passed ===")
 }
 
 private func lagunaPromptFixture(env: [String: String]) throws -> String {

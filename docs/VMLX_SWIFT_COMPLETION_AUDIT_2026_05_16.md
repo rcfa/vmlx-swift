@@ -8,11 +8,11 @@ artifact or source reference. Everything else stays `open`.
 Current pushed branch state:
 
 - Branch: `vmlx-0.31.3`
-- Latest pushed runtime checkpoint entering the focused-test/doc refresh:
-  `9a56de1`
-  (`test(omni): cover focused evs and remap contracts`)
+- Latest pushed runtime checkpoint entering the guard-removal/doc refresh:
+  `b516f61`
+  (`docs(runtime): record dsv4 cache and long-context gates`)
 - Prior non-MTP checkpoints in this pass: `50df533`, `0deb14b`,
-  `6e435d7`, and `7962647`.
+  `6e435d7`, `7962647`, `9a56de1`, and `ed04161`.
 - Previous MTP runtime checkpoint: `0fdb164`
   (`feat(runtime): add exact native mtp sampling`)
 - Current worktree is not clean because another agent is working on Flux-native
@@ -67,10 +67,10 @@ The package is complete only when all of these are true:
 | SSM companion cache and async rederive. | Qwen/hybrid rows are required by docs; not exhaustively live-proven for all relevant local models. | open |
 | VL media salt, same-image hit, changed-image miss. | `docs/local/live-model-matrix/20260516Tzaya-vl-think-template-fix/ZAYA1-VL-8B-JANGTQ4_vl_chat_cache.out`: same-media replay HIT, different-media MISS, coherent blue/orange follow-up. | live-proven for ZAYA1-VL JANGTQ4 |
 | Nemotron Omni audio/Parakeet/RADIO. | Video generation now carries the processor's post-EVS keep count and applies real EVS before prompt splice. `docs/local/live-model-matrix/20260516Tomni-nonmtp/Nemotron-Omni-Nano-JANGTQ4-CRACK_omni_evs_v2.out` passes 13/13 TokenIterator rows; strict pre-fix artifact `..._omni_strict.out` failed the video row. The second fix canonicalizes the closed no-thinking media tail to `<think>\n</think>\n\n`; tail probe `..._omni_tail_probe.out` proves compact tail fails and spaced tail grounds the same image, and `..._omni_batch_nothink_tail_fix.out` passes 18/18 including direct and BatchEngine image with `enable_thinking=false`. | live-proven for Omni JANGTQ4 |
-| Reasoning on/off/effort matrix. | Focused DSV4 pass-through exists; full model-family reasoning matrix is not complete. | open |
+| Reasoning on/off/effort matrix. | Focused DSV4 pass-through exists. MiniMax Small now has live thinking ON/OFF alternation with `.reasoning` deltas ON and zero reasoning OFF. Ling/Bailing template has no active thinking rail in this bundle and returns visible content with no marker leak. Full model-family reasoning-effort matrix is not complete. | partial |
 | Tool parser matrix by family. | DSV4 and selected templates have focused proof; full dsml/deepseek/gemma4/kimi/jang/zaya/llama/qwen/mistral matrix remains open. | open |
-| Generation config defaults apply. | Harness supports resolved defaults; package-wide three-bundle proof and per-model override matrix remain incomplete. | open |
-| Single-batch and continuous batching. | Omni BatchEngine harness now forces `maxBatchSize=2` for B=1 rows so it exercises the scheduler path instead of the solo fast path. Text B=1, text B=2, image B=1, and audio B=1 pass after the no-thinking media-tail fix in `docs/local/live-model-matrix/20260516Tomni-nonmtp/Nemotron-Omni-Nano-JANGTQ4-CRACK_omni_batch_nothink_tail_fix.out`. Full per-family batching remains incomplete. | live-proven for Omni JANGTQ4; package-wide partial |
+| Generation config defaults apply. | `docs/local/live-model-matrix/20260516Tguard-removal/Ling-2.6-flash-JANGTQ2-CRACK_prod_bundle_defaults_coord.out` proves the Ling folder has no sampling defaults and resolves through fallback to `temp=0.600 topP=1.000 topK=0 minP=0.000 rep=nil`. `.../MiniMax-M2.7-Small-JANGTQ_prod_bundle_defaults_coord.out` proves MiniMax's `generation_config.json` applies `temp=1.000 topP=0.950 topK=40 rep=nil`. `.../Gemma-4-26B-A4B-it-JANG_4M-CRACK_prod_bundle_defaults_coord.out` proves Gemma 4's folder config applies `temp=1.000 topP=0.950 topK=64 rep=nil`. Package-wide override matrix remains incomplete. | partial |
+| Single-batch and continuous batching. | Omni BatchEngine harness now forces `maxBatchSize=2` for B=1 rows so it exercises the scheduler path instead of the solo fast path. Text B=1, text B=2, image B=1, and audio B=1 pass after the no-thinking media-tail fix in `docs/local/live-model-matrix/20260516Tomni-nonmtp/Nemotron-Omni-Nano-JANGTQ4-CRACK_omni_batch_nothink_tail_fix.out`. Ling and MiniMax Small have coordinated `BENCH_PROD` rows with same-prompt TTFT checks. Full per-family B>1 batching remains incomplete. | live-proven for Omni JANGTQ4; package-wide partial |
 | TurboQuant/JANGTQ encode/decode and acceleration toggles. | Focused JANGTQ/Hadamard/matmul proof exists; live low-footprint active routed expert pass for all relevant models remains open. | open |
 | Distributed mode. | Targets exist (`MLXDistributed*`, `TPRankWorker`), but no no-peer distributed clean artifact is recorded for this audit. | open |
 | Full `swift test`. | Full package test remains open, but the local `Testing`/`XCTest` import blocker was narrowed to the shell toolchain/framework search path, not source. The passing local invocation is `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test ... -Xswiftc -F -Xswiftc /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks`. Focused artifacts: `docs/local/live-model-matrix/20260516Tnonmtp-tests/NemotronHOmniPreEncodedAudioTests_expanded_xcode.out` and the MLXPress policy run from the same invocation. The wired Omni focused suite now covers 7 rows: live audio buffer, pre-encoded Parakeet embedding, video EVS token count, RADIO pixel shuffle, Parakeet relative shift, projector remaps, and Parakeet weight transpose. `Tests/MLXLMTests/NemotronHOmniSmokeTests.swift` is currently not wired into an active package test target, so the earlier filtered row that ran 0 tests is not counted. | partial |
@@ -184,6 +184,68 @@ Known failing rows from that snapshot:
   `tests/cross_matrix/dsv4_vector_probe.py` was not present at
   `/tmp/ds4-read/tests/test-vectors/official.vec` on this machine, so the
   vector-drift row remains explicitly blocked rather than inferred.
+
+2026-05-16 non-MTP Ling/MiniMax guard-removal follow-up:
+
+- A new diagnostic harness, `BENCH_NO_GUARD_SAMPLING=1`, was added to
+  `RunBench/Bench.swift`. It is test-only and does not modify production
+  defaults. It prints the rendered prompt tail and effective request sampling
+  values, then fails on empty visible output, repeated-output loops, repeated
+  BOS tokens, visible reasoning-marker leaks, or unclosed reasoning when
+  thinking is explicitly enabled.
+- Ling/Bailing explicit no-guard evidence:
+  `docs/local/live-model-matrix/20260516Tguard-removal/Ling-2.6-flash-JANGTQ2-CRACK_no_guard_sampling.out`.
+  The three live calls use `rep=nil` for greedy "say hi", explicit `rep=1.000`
+  for the temp-0.6 star story, and `temp=0.700 topP=1.000 topK=0 minP=0.000
+  rep=nil` for the Russian Three.js stress prompt. All stop normally with no
+  loops, no BOS repetition, no raw reasoning marker leaks, and measured decode
+  around `35-37 tok/s`.
+- Ling caveat: the Russian Three.js stress row is on-task and non-looping, but
+  it contains one Chinese token (`点位`) inside an otherwise Russian response.
+  That is recorded as a quality caveat, not hidden by a top-p/repetition
+  fallback. The bundle's `generation_config.json` has no sampling defaults, so
+  the resolved production fallback is genuinely `temp=0.600 topP=1.000 topK=0
+  minP=0.000 rep=nil`.
+- Ling coordinated bundle-default evidence:
+  `docs/local/live-model-matrix/20260516Tguard-removal/Ling-2.6-flash-JANGTQ2-CRACK_prod_bundle_defaults_coord.out`
+  passes 7/7 with an explicit cache coordinator and the same resolved fallback
+  values. Same-prompt TTFT drops from `284ms` to `193ms`.
+- MiniMax Small explicit no-guard evidence:
+  `docs/local/live-model-matrix/20260516Tguard-removal/MiniMax-M2.7-Small-JANGTQ_no_guard_sampling.out`.
+  Greedy/no-rep "say hi" returns visible `Hi!`; the temp-0.6, explicit
+  `rep=1.000`, thinking-on story returns visible content about a star, `.reasoning`
+  is separated, no markers leak, and decode is about `46-47 tok/s`.
+- MiniMax Small coordinated bundle-default evidence:
+  `docs/local/live-model-matrix/20260516Tguard-removal/MiniMax-M2.7-Small-JANGTQ_prod_bundle_defaults_coord.out`
+  passes 7/7 and proves its folder `generation_config.json` values apply:
+  `temp=1.000 topP=0.950 topK=40 minP=0.000 rep=nil`. Same-prompt TTFT drops
+  from `385ms` to `67ms`, and reasoning ON/OFF alternation is correct.
+
+2026-05-16 non-MTP Gemma 4 follow-up:
+
+- Gemma 4 coordinated bundle-default evidence:
+  `docs/local/live-model-matrix/20260516Tguard-removal/Gemma-4-26B-A4B-it-JANG_4M-CRACK_prod_bundle_defaults_coord.out`
+  passes 7/7 with an explicit cache coordinator. The resolved sampling line
+  proves the folder `generation_config.json` is used:
+  `temp=1.000 topP=0.950 topK=64 minP=0.000 rep=nil`. Same-prompt TTFT drops
+  from `458ms` to `63ms`; Harmony reasoning is separated from visible content,
+  and thinking-off rows emit zero reasoning.
+- Gemma 4 explicit no-guard evidence:
+  `docs/local/live-model-matrix/20260516Tguard-removal/Gemma-4-26B-A4B-it-JANG_4M-CRACK_no_guard_sampling_768_unclosed_loopheuristic.out`
+  and `.err`. Greedy/no-rep "say hi" is coherent. The thinking-on star-story
+  stress row fails honestly: at `maxTokens=768`, `temp=0.600 topP=1.000 topK=0
+  minP=0.000 rep=1.000`, it emits reasoning only, hits length, and produces no
+  visible answer. This is not hidden by a forced close or repetition floor.
+- The failure exposed a terminal-info bug in the shared solo generation loop:
+  public `BatchEngine.generate`/solo-fast-path info was snapshotting after
+  parser flush and could report `unclosedReasoning=NO` even when the parser
+  was still inside Harmony reasoning. `Libraries/MLXLMCommon/Evaluate.swift`
+  now snapshots `handler.unclosedReasoning` before `handler.onGenerationEnd`.
+  Focused proof:
+  `docs/local/live-model-matrix/20260516Tguard-removal/NoHiddenReasoningCloseBiasFocusedTests_unclosed_info.out`.
+- The diagnostic loop heuristic now also catches long repeated non-whitespace
+  scalar runs, so numeric/token-salad tails are not missed merely because they
+  are not repeated word spans.
 
 2026-05-16 non-MTP Nemotron Omni follow-up:
 
