@@ -427,6 +427,59 @@ struct Hy3ParserFocusedTests {
         }
     }
 
+    @Test("Hy3 sanitizer dequantizes mixed-bit qkv instead of crashing")
+    func sanitizerDequantizesMixedBitQKVBeforeFusion() throws {
+        try FocusedMLXTestSupport.withLock {
+            let config = try minimalHy3Config(
+                numHiddenLayers: 1,
+                firstKDenseReplace: 1,
+                numNextnPredictLayers: 0,
+                hiddenSize: 32)
+            let model = Hy3Model(config)
+            let prefix = "model.layers.0.self_attn"
+
+            let qDense = MLXArray(0 ..< 256, [8, 32]).asType(.float32)
+            let kDense = MLXArray(0 ..< 128, [4, 32]).asType(.float32)
+            let vDense = (MLXArray(0 ..< 128, [4, 32]) + 100).asType(.float32)
+            let (qW, qS, qB) = MLX.quantized(qDense, groupSize: 32, bits: 8)
+            let (kW, kS, kB) = MLX.quantized(kDense, groupSize: 32, bits: 4)
+            let (vW, vS, vB) = MLX.quantized(vDense, groupSize: 32, bits: 2)
+
+            var weights: [String: MLXArray] = [
+                "\(prefix).q_proj.weight": qW,
+                "\(prefix).q_proj.scales": qS,
+                "\(prefix).k_proj.weight": kW,
+                "\(prefix).k_proj.scales": kS,
+                "\(prefix).v_proj.weight": vW,
+                "\(prefix).v_proj.scales": vS,
+            ]
+            if let qB { weights["\(prefix).q_proj.biases"] = qB }
+            if let kB { weights["\(prefix).k_proj.biases"] = kB }
+            if let vB { weights["\(prefix).v_proj.biases"] = vB }
+
+            let sanitized = model.sanitize(weights: weights)
+
+            let fused = try #require(sanitized["\(prefix).qkv_proj.weight"])
+            #expect(fused.shape == [16, 32])
+            #expect(sanitized["\(prefix).qkv_proj.scales"] == nil)
+            #expect(sanitized["\(prefix).q_proj.weight"] == nil)
+            #expect(sanitized["\(prefix).k_proj.weight"] == nil)
+            #expect(sanitized["\(prefix).v_proj.weight"] == nil)
+
+            let expected = concatenated([
+                MLX.dequantized(qW, scales: qS, biases: qB, groupSize: 32, bits: 8)
+                    .asType(.float16),
+                MLX.dequantized(kW, scales: kS, biases: kB, groupSize: 32, bits: 4)
+                    .asType(.float16),
+                MLX.dequantized(vW, scales: vS, biases: vB, groupSize: 32, bits: 2)
+                    .asType(.float16),
+            ], axis: 0)
+            let maxDiff = (fused.asType(.float32) - expected.asType(.float32)).abs().max()
+                .item(Float.self)
+            #expect(maxDiff < 1e-5)
+        }
+    }
+
     private func collectParser(
         _ parser: inout ReasoningParser,
         _ text: String
@@ -450,18 +503,19 @@ struct Hy3ParserFocusedTests {
         numHiddenLayers: Int = 2,
         firstKDenseReplace: Int = 1,
         numExperts: Int = 2,
-        numNextnPredictLayers: Int = 0
+        numNextnPredictLayers: Int = 0,
+        hiddenSize: Int = 8
     ) throws -> Hy3Configuration {
         let json = """
             {
               "model_type": "hy_v3",
               "architectures": ["HYV3ForCausalLM"],
-              "hidden_size": 8,
+              "hidden_size": \(hiddenSize),
               "num_hidden_layers": \(numHiddenLayers),
               "num_attention_heads": 2,
               "num_key_value_heads": 1,
               "head_dim": 4,
-              "intermediate_size": 16,
+              "intermediate_size": \(hiddenSize * 2),
               "moe_intermediate_size": 4,
               "expert_hidden_dim": 4,
               "first_k_dense_replace": \(firstKDenseReplace),

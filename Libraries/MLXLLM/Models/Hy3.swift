@@ -556,14 +556,28 @@ public class Hy3Model: Module, LLMModel, KVCacheDimensionProvider {
             let kPacked = kW.dim(kW.ndim - 1)
             let vPacked = vW.dim(vW.ndim - 1)
             if qPacked != kPacked || kPacked != vPacked {
-                fatalError(
+                if let dense = fuseMixedBitQKV(
+                    sanitized: sanitized,
+                    qKey: qKey,
+                    kKey: kKey,
+                    vKey: vKey)
+                {
+                    sanitized["\(fusedKey).weight"] = dense
+                    for base in [qKey, kKey, vKey] {
+                        sanitized.removeValue(forKey: "\(base).weight")
+                        sanitized.removeValue(forKey: "\(base).scales")
+                        sanitized.removeValue(forKey: "\(base).biases")
+                    }
+                    continue
+                }
+
+                FileHandle.standardError.write(Data(
                     """
-                    [Hy3 sanitize] layer \(layer) self_attn has mismatched \
-                    bit widths across q/k/v projections (q packed_in=\(qPacked), \
-                    k=\(kPacked), v=\(vPacked)). QKV fusion requires identical \
-                    bit widths.
-                    """
-                )
+                    [Hy3 sanitize] layer \(layer) self_attn has mismatched bit widths across q/k/v projections \
+                    (q packed_in=\(qPacked), k=\(kPacked), v=\(vPacked)) and cannot be safely dequantized for QKV fusion. \
+                    Leaving source keys intact so load verification fails instead of running a random qkv projection.
+                    """.utf8))
+                continue
             }
 
             sanitized["\(fusedKey).weight"] = concatenated([qW, kW, vW], axis: 0)
@@ -629,6 +643,47 @@ public class Hy3Model: Module, LLMModel, KVCacheDimensionProvider {
         }
 
         return sanitized
+    }
+
+    private func fuseMixedBitQKV(
+        sanitized: [String: MLXArray],
+        qKey: String,
+        kKey: String,
+        vKey: String
+    ) -> MLXArray? {
+        let bases = [qKey, kKey, vKey]
+        var dense = [MLXArray]()
+        dense.reserveCapacity(bases.count)
+
+        for base in bases {
+            guard let weight = sanitized["\(base).weight"],
+                  let scales = sanitized["\(base).scales"]
+            else { return nil }
+            let numGroups = scales.shape.last ?? 0
+            let knownGroupSize =
+                numGroups > 0 && configuration.hiddenSize % numGroups == 0
+                ? configuration.hiddenSize / numGroups
+                : nil
+            let inferred = JangLoader.inferBitWidthAndGroupSize(
+                packedDim: weight.shape.last ?? 0,
+                numGroups: numGroups,
+                knownGroupSize: knownGroupSize,
+                bitWidthsUsed: [8, 6, 5, 4, 3, 2],
+                expectedInDim: configuration.hiddenSize)
+            let restored = MLX.dequantized(
+                weight,
+                scales: scales,
+                biases: sanitized["\(base).biases"],
+                groupSize: inferred.groupSize,
+                bits: inferred.bits)
+                .asType(.float16)
+            guard restored.shape.last == configuration.hiddenSize else {
+                return nil
+            }
+            dense.append(restored)
+        }
+
+        return concatenated(dense, axis: 0)
     }
 
     public var loraLayers: [Module] {

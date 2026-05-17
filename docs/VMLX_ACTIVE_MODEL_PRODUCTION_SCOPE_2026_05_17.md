@@ -45,6 +45,7 @@ Fresh focused MTP/settings artifact:
 docs/local/production-readiness/20260517T160343Z_qwen_mtp_settings_current/
 docs/local/production-readiness/20260517T165508Z_qwen_mtp_settings_recheck/
 docs/local/production-readiness/20260517T1252_ling_hy3_gemma4_runtime_contracts/
+docs/local/production-readiness/20260517T1300_hy3_mixed_qkv_runtime_contracts/
 ```
 
 That inventory contains 28 non-excluded local bundles:
@@ -718,6 +719,11 @@ docs/local/live-model-matrix/20260517T184132Z_hy3_jangtqk_streaming_autodir_afte
   base decode layers, `loraLayers` excludes preserved nextn/MTP layers, and the
   sanitizer fuses real q/k/v projection tensors while dropping preserved nextn
   tensors from the base runtime load path.
+- Hy3 mixed-bit q/k/v projection sanitize no longer aborts the process. If the
+  three projections use different packed widths but carry quant metadata, the
+  engine dequantizes them to dense tensors and fuses the real `qkv_proj.weight`;
+  if metadata is insufficient, source keys remain intact so load verification
+  fails instead of running a random qkv projection.
 - `RuntimeMoETopKOverrideFocusedTests` pins the override as lower-only and
   cache-key-scoped: an explicit override may reduce Hy3 routed experts for an
   experiment, but it will not raise another model's trained top-k and it does
@@ -816,8 +822,8 @@ docs/local/production-readiness/20260517T_laguna_mistral_gemma4_active_contracts
   proves `weight_format=mxtq` and `MXTQ` route to `Mistral3TextJANGTQModel`,
   `mxtq_bits=4` changes the packed dense width, and `mxfp4` or missing
   `weight_format` stays on the vanilla `Mistral3TextModel` path.
-- The fresh aggregate active focused target passes 167 tests in 26 suites in
-  `docs/local/production-readiness/20260517T1252_ling_hy3_gemma4_runtime_contracts/MLXLMCommonFocusedTests_after_ling_hy3_gemma4.log`.
+- The fresh aggregate active focused target passes 168 tests in 26 suites in
+  `docs/local/production-readiness/20260517T1300_hy3_mixed_qkv_runtime_contracts/MLXLMCommonFocusedTests_after_hy3_mixed_qkv.log`.
 - A post-fix live Gemma 4 `BENCH_HARMONY_CHECK` row passes: marker strings are
   absent from `.chunk`, the output is coherent visible README guidance, and
   generation stops through the normal path.
