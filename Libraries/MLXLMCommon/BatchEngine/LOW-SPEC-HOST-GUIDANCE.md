@@ -162,7 +162,9 @@ source-confirmed via per-prefix tests):**
 | Qwen 3 / 3.5 / 3.6 / coder | `qwen3*`, `qwen3_5`, `qwen3_6` → `xmlFunction` | `qwenAliases` |
 | Mistral 3 / Mistral 4 / Pixtral | `mistral*` prefix → mistral parser | `mistral3` hasPrefix |
 | Minimax M2 / M2.7 | `minimax`, `minimax_m2` → `minimaxM2` | `minimaxAlias` |
-| GLM4-MoE / GLM5 / DeepSeek | `glm*`, `deepseek*` → `glm4` family | `glmAndDeepseekAliases` |
+| GLM4-MoE / GLM5 / DeepSeek V3 | `glm*`, `deepseek`, `deepseek_v3*` → `glm4` family | `glmAndDeepseekAliases` |
+| DeepSeek V4 | `deepseek_v4*`, `dsml` → `dsml` | `deepseekV4CapabilityAliasesRouteToDSML` |
+| Hy3 / Hunyuan | `hy3*`, `hy_v3*`, `hunyuan*` → `hunyuan` | `parserResolutionFacadePreservesProductVersionAliases` |
 | Kimi K2 / K2.5 | `kimi`, `kimi_k2` → `kimiK2` | `directRawValueWins` |
 | LFM2 / DSV4 / Apertus / dense LLMs | fall through → `none` | `unknownReturnsNil` |
 

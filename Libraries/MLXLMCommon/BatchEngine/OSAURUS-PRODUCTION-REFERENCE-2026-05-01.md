@@ -378,9 +378,11 @@ or `model_type` prefix:
 | `gemma4*`                              | `.gemma4`       | Gemma 4               |
 | `kimi_k2*` / `kimi_k25*`               | `.kimiK2`       | Kimi K2 / K2.6        |
 | `minimax_m2*`                          | `.minimaxM2`    | MiniMax M2 / M2.7     |
-| `deepseek_v3*` / `deepseek_v4*`        | `.glm4`         | DeepSeek V3 / V4      |
-| `nemotron*`                            | `.dsml`         | NemotronH-Omni        |
-| `gpt_oss*`                             | `.harmony`      | OpenAI OSS GPT        |
+| `deepseek_v3*`                         | `.glm4`         | DeepSeek V3           |
+| `deepseek_v4*` / `dsml`                | `.dsml`         | DeepSeek V4           |
+| `nemotron*`                            | `.xmlFunction`  | NemotronH / Omni      |
+| `hy3*` / `hy_v3*` / `hunyuan*`         | `.hunyuan`      | Tencent Hunyuan / Hy3 |
+| `gpt_oss*`                             | `.glm4`         | GPT-OSS tools; Harmony is reasoning, not a tool enum |
 
 Cap stamp wins over heuristic when both present.
 

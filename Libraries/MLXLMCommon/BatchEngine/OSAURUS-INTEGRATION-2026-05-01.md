@@ -597,7 +597,8 @@ If any family's swift-jinja rendering breaks at HEAD:
 2. JANG `capabilities.reasoning_parser` stamp
 3. `reasoningStampFromModelType(model_type)` heuristic — explicit allowlist:
    - `gemma4*` → `harmony` (channel envelope)
-   - `qwen3*`, `deepseek*`, `glm4_moe*`, `glm5*`, `minimax*`, `kimi*`, `nemotron_h*`, `holo*`, `laguna*` → `think_xml`
+   - `gpt_oss*` → `harmony` (GPT-OSS channel protocol)
+   - `qwen3*`, `deepseek*`, `glm4_moe*`, `glm5*`, `minimax*`, `kimi*`, `nemotron_h*`, `holo*`, `laguna*`, `bailing*`, `ling*`, `hy3*`, `hy_v3*`, `hunyuan*`, `zaya*` → `think_xml`
    - Everything else → `none`
 
 ### Tool format resolution priority
@@ -700,6 +701,6 @@ Public APIs — see `OSAURUS-API-SURFACE.md` for the full list. Highlights:
 
 - `MLXLMCommon.loadModel(from:URL, using: tokenizerLoader)` — high-level dispatch (LLM vs VLM auto-detected)
 - `BatchEngine(context:maxBatchSize:cacheCoordinator:)` — admit `BatchRequest` → typed event stream
-- `ToolCallFormat.fromCapabilityName(_:)` — JANG short-name → enum (accepts `qwen`, `qwen3_6`, `minimax`, `glm47`, `deepseek`, `nemotron`, `gemma4`, `mistral`, `lfm2`, `kimi_k2`)
+- `ToolCallFormat.fromCapabilityName(_:)` — JANG short-name → enum (accepts `qwen`, `qwen3_6`, `minimax`, `glm47`, `glm5*`, `deepseek` / `deepseek_v3*`, `deepseek_v4*`, `nemotron`, `gemma4`, `mistral`, `mistral4*`, `pixtral*`, `lfm2`, `kimi_k2`, `zaya_xml`, `hunyuan*`, `hy3*`)
 - `ReasoningParser.fromCapabilityName(_:)` — same for reasoning stamps
 - `CacheCoordinatorConfig.defaultMaxKVSize` / `defaultKVMode` — coordinator-owned KV sizing (now honored by all hybrid families)
