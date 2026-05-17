@@ -247,6 +247,61 @@ Harness fix from this row:
   visible for root-cause work. This is a real blocked media-runtime row, not a
   sampling-policy issue.
 
+## Nemotron Omni Live Voice Consolidation - 2026-05-17
+
+The live voice benches from the standalone Swift LM package are now part of
+this package:
+
+- `OmniAudioLatencyBench`
+- `OmniAudioChunkStabilityBench`
+
+Build verification:
+
+```sh
+swift build -c release --product OmniAudioLatencyBench
+swift build -c release --product OmniAudioChunkStabilityBench
+```
+
+Fresh local JANGTQ live voice artifacts:
+
+```text
+docs/local/live-model-matrix/20260517T_omni_audio_latency_jangtq.jsonl
+docs/local/live-model-matrix/20260517T_omni_audio_latency_jangtq_prompt48.jsonl
+docs/local/live-model-matrix/20260517T_omni_audio_chunk_stability_jangtq.jsonl
+```
+
+Latency bench findings:
+
+- the fixture decodes to 80,620 samples at 16 kHz, about 5.04 seconds of audio;
+- Parakeet pre-encoding produced 63 audio tokens with hidden width 2688 in
+  about 44-48 ms;
+- raw and pre-encoded BatchEngine paths both stream; pre-encoded first-delta
+  was about 173 ms on the 48-token prompt, versus about 226 ms for raw audio;
+- raw and pre-encoded TokenIterator paths also stream; pre-encoded first-delta
+  was about 165 ms on the 48-token prompt, versus about 196 ms for raw audio;
+- the cache directory contains safetensors entries, `cache_index.db`, and
+  `ssm_companion`, proving the disk/SSM cache side is being exercised.
+
+Coherency boundary:
+
+- with the explicit prompt `What do you hear in the audio? Answer in one
+  concise sentence.`, all four raw/pre-encoded BatchEngine/TokenIterator rows
+  correctly identify the fixture as a single sharp high-pitched electronic
+  beep, notification, or alert;
+- at 48 tokens the answer repeats the concise sentence twice, so this is
+  coherent audio grounding but not a clean long-budget termination pass;
+- at 192 tokens, `OmniBench` still records repeated-bigram failures on several
+  media rows. That remains an engine/runtime stop or continuation issue to
+  root-cause, not a reason to clamp sampler settings.
+
+Chunk stability findings:
+
+- independent Parakeet chunk embeddings are not concat-safe;
+- every prefix/full comparison required rollback at the default tolerance;
+- live voice should retain PCM and either pre-encode the full current snapshot
+  or pass raw PCM for the model turn. Do not concatenate independently encoded
+  chunk embeddings into the model context.
+
 ## Required Proof Per Active Bundle
 
 For each non-excluded bundle, the production row must include:

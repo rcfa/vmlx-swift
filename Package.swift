@@ -257,6 +257,8 @@ let package = Package(
         .library(name: "VMLX", targets: ["VMLX"]),
         .executable(name: "RunBench", targets: ["RunBench"]),
         .executable(name: "ANEProbe", targets: ["ANEProbe"]),
+        .executable(name: "OmniAudioLatencyBench", targets: ["OmniAudioLatencyBench"]),
+        .executable(name: "OmniAudioChunkStabilityBench", targets: ["OmniAudioChunkStabilityBench"]),
         .executable(name: "mlxpress", targets: ["MLXPressCLI"]),
         .executable(name: "mlxpress-selfcheck", targets: ["MLXPressSelfCheck"]),
     ],
@@ -582,6 +584,30 @@ let package = Package(
             name: "ANEProbe",
             dependencies: ["MLXLMCommon"],
             path: "tools/ANEProbe"
+        ),
+        .executableTarget(
+            name: "OmniAudioLatencyBench",
+            dependencies: [
+                "MLXLMCommon",
+                "MLXLLM",
+                "MLXVLM",
+                "MLXHuggingFace",
+                "MLX",
+                "Tokenizers",
+            ],
+            path: "tools/OmniAudioLatencyBench"
+        ),
+        .executableTarget(
+            name: "OmniAudioChunkStabilityBench",
+            dependencies: [
+                "MLXLMCommon",
+                "MLXLLM",
+                "MLXVLM",
+                "MLXHuggingFace",
+                "MLX",
+                "Tokenizers",
+            ],
+            path: "tools/OmniAudioChunkStabilityBench"
         ),
         .executableTarget(
             name: "RunBench",
