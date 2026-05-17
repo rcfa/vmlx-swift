@@ -384,6 +384,39 @@ struct MTPRuntimeFocusedTests {
         #expect(sanitized["model.norm.weight"]?.asArray(Float.self) == [0.5, 0.5, 0.5, 0.5])
     }
 
+    @Test("Qwen3.5 sanitize honors explicit norm convention metadata")
+    func qwen35SanitizeHonorsExplicitNormConventionMetadata() async throws {
+        try await FocusedMLXTestSupport.withLock {
+            let model = try Qwen35TextModel(Self.tinyQwen35Config(mtpLayers: 1))
+            let norm = MLXArray([Float](repeating: 0.5, count: 16))
+            let conv = MLXArray.zeros([16, 4, 4], dtype: .float32)
+
+            let plusOne = model.sanitize(weights: [
+                "model.layers.0.input_layernorm.weight": norm,
+                "model.layers.0.linear_attn.conv1d.weight": conv,
+                "mtp.layers.0.input_layernorm.weight": norm,
+            ], metadata: ["norm_convention": "qwen3_5_language_mlx_plus_one"])
+            #expect(
+                plusOne["model.layers.0.input_layernorm.weight"]?.asArray(Float.self)
+                    == [Float](repeating: 1.5, count: 16))
+            #expect(
+                plusOne["mtp.layers.0.input_layernorm.weight"]?.asArray(Float.self)
+                    == [Float](repeating: 1.5, count: 16))
+
+            let explicitNative = model.sanitize(weights: [
+                "model.layers.0.input_layernorm.weight": norm,
+                "model.layers.0.linear_attn.conv1d.weight": conv,
+                "mtp.layers.0.input_layernorm.weight": norm,
+            ], metadata: ["norm_convention": "mlx"])
+            #expect(
+                explicitNative["model.layers.0.input_layernorm.weight"]?.asArray(Float.self)
+                    == [Float](repeating: 0.5, count: 16))
+            #expect(
+                explicitNative["mtp.layers.0.input_layernorm.weight"]?.asArray(Float.self)
+                    == [Float](repeating: 0.5, count: 16))
+        }
+    }
+
     @Test("Qwen3.5 JANGTQ sanitize also ignores MTP sidecar conv when deciding norm shifts")
     func qwen35JANGTQSanitizeDoesNotShiftBaseNormsForPreservedMTP() throws {
         let configData = """
@@ -444,6 +477,17 @@ struct MTPRuntimeFocusedTests {
             #expect(status.visionTensorCount > 0)
             #expect(status.bundleHasVision)
         }
+    }
+
+    @Test("Qwen3.6 loaders propagate norm convention metadata")
+    func qwen36LoadersPropagateNormConventionMetadata() throws {
+        let loadSource = try Self.source("Libraries/MLXLMCommon/Load.swift")
+        let vlmSource = try Self.source("Libraries/MLXVLM/Models/Qwen35.swift")
+
+        #expect(loadSource.contains("loadJangConfigSanitizeMetadata"))
+        #expect(loadSource.contains("\"norm_convention\""))
+        #expect(vlmSource.contains("normConvention: Self.normConvention(metadata)"))
+        #expect(vlmSource.contains("usesQwenPlusOneNormConvention"))
     }
 
     private func makeTemporaryBundle(name: String) throws -> URL {

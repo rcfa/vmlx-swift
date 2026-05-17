@@ -35,6 +35,32 @@ private func loadSafetensorsHeaderNamesForBaseLoad(_ url: URL) throws -> [String
     return header.keys.filter { $0 != "__metadata__" }
 }
 
+private func loadJangConfigSanitizeMetadata(at modelDirectory: URL) -> [String: String] {
+    guard let url = JangLoader.findConfigPath(at: modelDirectory),
+        let data = try? Data(contentsOf: url),
+        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else {
+        return [:]
+    }
+
+    var metadata: [String: String] = [:]
+    func set(_ key: String, _ value: Any?) {
+        if let value = value as? String, !value.isEmpty {
+            metadata[key] = value
+        }
+    }
+
+    set("norm_convention", json["norm_convention"])
+    set("weight_format", json["weight_format"])
+    if let runtime = json["runtime"] as? [String: Any] {
+        set("runtime.norm_convention", runtime["norm_convention"])
+        if metadata["norm_convention"] == nil {
+            set("norm_convention", runtime["norm_convention"])
+        }
+    }
+    return metadata
+}
+
 /// Load model weights.
 ///
 /// This is typically called via ``ModelFactory/load(from:configuration:progressHandler:)``.
@@ -240,6 +266,11 @@ public func loadWeights(
     MLX.Memory.cacheLimit = 1 * 1024 * 1024 * 1024  // 1 GB during load
     defer {
         MLX.Memory.cacheLimit = priorCacheLimit
+    }
+    for (key, value) in loadJangConfigSanitizeMetadata(at: modelDirectory)
+        where metadata[key] == nil
+    {
+        metadata[key] = value
     }
     weights = model.sanitize(weights: weights, metadata: metadata)
 

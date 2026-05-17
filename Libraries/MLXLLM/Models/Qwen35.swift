@@ -939,14 +939,28 @@ public class Qwen35TextModel: Module, LLMModel, KVCacheDimensionProvider, Hidden
         }
     }
 
+    public func sanitize(weights: [String: MLXArray], metadata: [String: String]) -> [String:
+        MLXArray]
+    {
+        sanitize(weights: weights, normConvention: Self.normConvention(metadata))
+    }
+
     public func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
+        sanitize(weights: weights, normConvention: nil)
+    }
+
+    private func sanitize(weights: [String: MLXArray], normConvention: String?) -> [String:
+        MLXArray]
+    {
         let loadNativeMTP = configuration.mtpNumHiddenLayers > 0
         var weights = loadNativeMTP ? weights : weights.filter { !Self.isMTPWeightKey($0.key) }
         let hasUnsanitizedConv1d = weights.contains { key, value in
             key.contains("conv1d.weight") && value.dim(-1) != 1
         }
-        let shouldShiftNormWeights =
-            hasUnsanitizedConv1d || Self.baseNormWeightsNeedShift(weights)
+        let explicitNormConvention = normConvention != nil
+        let shouldShiftNormWeights = Self.usesQwenPlusOneNormConvention(normConvention)
+            || (!explicitNormConvention
+                && (hasUnsanitizedConv1d || Self.baseNormWeightsNeedShift(weights)))
 
         if configuration.tieWordEmbeddings {
             weights["lm_head.weight"] = nil
@@ -972,7 +986,8 @@ public class Qwen35TextModel: Module, LLMModel, KVCacheDimensionProvider, Hidden
                 && (k.contains("norm") || k.contains("q_norm") || k.contains("k_norm"))
             let shouldShiftBaseNorm = shouldShiftNormWeights
                 && normKeysToShift.contains(where: { k.hasSuffix($0) })
-            if (shouldShiftBaseNorm || isMTPNorm)
+            let shouldShiftMTPNorm = isMTPNorm && shouldShiftNormWeights
+            if (shouldShiftBaseNorm || shouldShiftMTPNorm)
                 && v.ndim == 1
             {
                 weights[k] = v + MLXArray(1, dtype: v.dtype)
@@ -980,6 +995,17 @@ public class Qwen35TextModel: Module, LLMModel, KVCacheDimensionProvider, Hidden
         }
 
         return weights
+    }
+
+    private static func normConvention(_ metadata: [String: String]) -> String? {
+        let value = metadata["norm_convention"] ?? metadata["runtime.norm_convention"]
+        return value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func usesQwenPlusOneNormConvention(_ value: String?) -> Bool {
+        value == "qwen3_5_language_mlx_plus_one"
+            || value == "qwen35_language_mlx_plus_one"
+            || value == "mlx_plus_one"
     }
 
     private static func isMTPWeightKey(_ key: String) -> Bool {

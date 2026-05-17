@@ -1858,22 +1858,31 @@ public class Qwen35: Module, VLMModel, HiddenStateCaptureModel, TokenEmbedderMod
         MLXArray]
     {
         let isMLXFormat = metadata["format"]?.lowercased() == "mlx"
-        return sanitize(weights: weights, isMLXFormat: isMLXFormat)
+        return sanitize(
+            weights: weights,
+            isMLXFormat: isMLXFormat,
+            normConvention: Self.normConvention(metadata))
     }
 
     public func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
-        sanitize(weights: weights, isMLXFormat: false)
+        sanitize(weights: weights, isMLXFormat: false, normConvention: nil)
     }
 
-    private func sanitize(weights: [String: MLXArray], isMLXFormat: Bool) -> [String: MLXArray] {
+    private func sanitize(
+        weights: [String: MLXArray],
+        isMLXFormat: Bool,
+        normConvention: String?
+    ) -> [String: MLXArray] {
         let loadNativeMTP = config.textConfiguration.mtpNumHiddenLayers > 0
         var weights = loadNativeMTP ? weights : weights.filter { !Self.isMTPWeightKey($0.key) }
 
         let hasUnsanitizedConv1d = weights.contains { key, value in
             key.contains("conv1d.weight") && value.dim(-1) != 1
         }
-        let shouldShiftNormWeights =
-            hasUnsanitizedConv1d || Self.baseNormWeightsNeedShift(weights)
+        let explicitNormConvention = normConvention != nil
+        let shouldShiftNormWeights = Self.usesQwenPlusOneNormConvention(normConvention)
+            || (!explicitNormConvention
+                && (hasUnsanitizedConv1d || Self.baseNormWeightsNeedShift(weights)))
 
         if config.textConfiguration.tieWordEmbeddings {
             weights["lm_head.weight"] = nil
@@ -1931,7 +1940,8 @@ public class Qwen35: Module, VLMModel, HiddenStateCaptureModel, TokenEmbedderMod
                 && (key.contains("norm") || key.contains("q_norm") || key.contains("k_norm"))
             let shouldShiftBaseNorm = shouldShiftNormWeights
                 && normKeys.contains(where: { key.hasSuffix($0) })
-            if (shouldShiftBaseNorm || isMTPNorm) && value.ndim == 1 {
+            let shouldShiftMTPNorm = isMTPNorm && shouldShiftNormWeights
+            if (shouldShiftBaseNorm || shouldShiftMTPNorm) && value.ndim == 1 {
                 value = value + MLXArray(1, dtype: value.dtype)
             }
 
@@ -1939,6 +1949,17 @@ public class Qwen35: Module, VLMModel, HiddenStateCaptureModel, TokenEmbedderMod
         }
 
         return visionModel.sanitize(weights: sanitized)
+    }
+
+    private static func normConvention(_ metadata: [String: String]) -> String? {
+        let value = metadata["norm_convention"] ?? metadata["runtime.norm_convention"]
+        return value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func usesQwenPlusOneNormConvention(_ value: String?) -> Bool {
+        value == "qwen3_5_language_mlx_plus_one"
+            || value == "qwen35_language_mlx_plus_one"
+            || value == "mlx_plus_one"
     }
 
     private static func isMTPWeightKey(_ key: String) -> Bool {

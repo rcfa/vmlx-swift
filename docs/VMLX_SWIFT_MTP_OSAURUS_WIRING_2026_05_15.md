@@ -307,6 +307,23 @@ The D3 row is a correctness/coherency check for text hybrid-SSM partial-prefix
 commit. It is not a production speed pass, because it is slower than the
 matching AR row on this prompt and remains far below the 45 tok/s threshold.
 
+2026-05-17 MXFP8 norm-convention follow-up:
+
+- `loadWeights` now merges `norm_convention` from safetensor metadata or
+  `jang_config.json` into the metadata passed to `LanguageModel.sanitize`.
+- Qwen3.5/Qwen3.6 text and VLM sanitizers honor
+  `qwen3_5_language_mlx_plus_one` explicitly for language and MTP norms.
+- If a bundle explicitly reports a different norm convention, conv1d layout
+  sanitization still runs but does not imply a norm shift. This keeps the
+  MXFP8 norm contract orthogonal to the conv layout contract.
+- Focused proof:
+  `docs/local/production-readiness/20260517Tqwen36-mtp-ssm-offset/mtp_runtime_focused_after_norm_convention_v2.log`
+  passes 19/19 `MTPRuntimeFocusedTests`. Broader proof:
+  `docs/local/production-readiness/20260517Tqwen36-mtp-ssm-offset/mlxlmcommon_focused_after_norm_convention.log`
+  passes 85/85.
+- This is still unit/static proof in Swift until the local MXFP8 artifacts are
+  present and rerun through live text, cache-on, and VL gates.
+
 2026-05-16 Qwen3.6 VLM/MRoPE follow-up:
 
 - `Libraries/MLXVLM/Models/Qwen35.swift` now factors normal Qwen3VL position-ID
