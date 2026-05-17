@@ -18,6 +18,23 @@ the resolved sampling row. The current JANGTQ artifact shows
 `repetition_penalty=1.000`; no greedy temperature override is applied unless a
 caller adds one explicitly outside this bench.
 
+2026-05-17 fresh `vmlx-swift` reverify:
+`docs/local/live-model-matrix/20260517T_omni_reverify/omni_audio_latency_jangtq4_both_paths.log`
+loads `Nemotron-Omni-Nano-JANGTQ4-CRACK` as `NemotronHOmni`, uses the same
+bundle sampling defaults, and passes both streaming surfaces:
+
+- Parakeet pre-encode: 63 audio tokens, hidden size 2,688, 43.4 ms.
+- BatchEngine raw PCM turns: first delta 240.2 ms / 219.9 ms, coherent audio
+  descriptions, 35.1 / 37.1 effective tok/s.
+- BatchEngine pre-encoded turns: first delta 179.4 ms / 196.9 ms, coherent
+  audio descriptions, 42.7 / 41.3 effective tok/s.
+- TokenIterator raw PCM turns: first delta 192.8 ms / 194.8 ms, coherent audio
+  descriptions, 40.3 / 40.3 effective tok/s.
+- TokenIterator pre-encoded turns: first delta 159.5 ms / 162.0 ms, coherent
+  audio descriptions, 45.7 / 45.2 effective tok/s.
+- Prompt topology remains media-aware: 96 prompt tokens, 63 audio placeholders,
+  media token ids `[18, 27]`, 11 media tokens after the 64-token cache boundary.
+
 ## Command
 
 ```sh

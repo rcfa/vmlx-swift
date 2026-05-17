@@ -142,6 +142,39 @@ ZAYA1-8B-JANGTQ4 also passed the release `BENCH_PROD` cache-on multi-turn row:
 - ZAYA remains `pagedIncompatible=true` by topology, so generic paged-prefix
   hits must not be advertised for this family.
 
+## Nemotron Omni Live Voice Reverify
+
+Fresh 2026-05-17 artifacts:
+
+```text
+docs/local/live-model-matrix/20260517T_omni_reverify/
+```
+
+Current result on `Nemotron-Omni-Nano-JANGTQ4-CRACK`:
+
+- `NemotronHOmniPreEncodedAudioTests`: 8/8 focused tests pass. Coverage includes
+  retained live audio buffer snapshots, pre-encoded Parakeet embedding
+  preservation, RADIO pixel shuffle, Parakeet relative shift, projector remaps,
+  Parakeet source weight transposes, video EVS placeholder count, and no hidden
+  greedy sampling override in the latency bench.
+- Release build for `OmniAudioChunkStabilityBench` passed; `OmniAudioLatencyBench`
+  was already up to date in `.build/release`.
+- `omni_audio_latency_jangtq4_both_paths.log`: real audio fixture loads and runs
+  through both BatchEngine streaming and TokenIterator streaming. The bench uses
+  bundle defaults (`temp=0.600 topP=0.950 topK=0 minP=0.000 rep=1.000`), not a
+  hardcoded sampler guard. Parakeet pre-encode is 63 tokens in 43.4 ms; all
+  eight raw/pre-encoded repeated turns produce coherent audio-grounded text.
+- `omni_audio_chunk_stability_jangtq4.log`: full retained-audio Parakeet encode
+  is 63 tokens in 48.9 ms and all 10 prefix comparisons remain unstable at the
+  default tolerance. This confirms the live voice contract: accumulate PCM,
+  refresh a full retained-audio pre-encode while the user speaks, and submit the
+  latest exact pre-encoded snapshot at endpoint. Do not concatenate independently
+  encoded Parakeet chunks.
+- `omni_runbench_jangtq4_48.log`: integrated `BENCH_OMNI=1` passes 14/14 rows
+  with `maxTokens=48`, including text, multi-turn, image, video, audio,
+  reasoning on/off, mixed image+audio, media-salt isolation, and hybrid SSM
+  warm-pass. Load: 1.87 s. Decode rows: 85.4-105.5 tok/s.
+
 ## ZAYA Harness and VL Follow-Up - 2026-05-17
 
 Targeted rerun artifacts:

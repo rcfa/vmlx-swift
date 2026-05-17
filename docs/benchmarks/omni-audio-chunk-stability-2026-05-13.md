@@ -18,6 +18,15 @@ tokens in about 48 ms, every prefix/full comparison still had
 `stable_tokens_default=0`, and independently encoded chunks remain unsafe to
 concatenate into the model context.
 
+2026-05-17 fresh `vmlx-swift` reverify:
+`docs/local/live-model-matrix/20260517T_omni_reverify/omni_audio_chunk_stability_jangtq4.log`
+loads `Nemotron-Omni-Nano-JANGTQ4-CRACK` and reproduces the same conclusion:
+full retained-audio Parakeet encode is 63 tokens in 48.9 ms, prefix encodes
+range from 13 to 63 tokens in 22.7-31.3 ms, and all 10 prefix comparisons are
+unstable at the default tolerance. `chunk_concat_safe_default=false` is expected
+and is the reason the live voice path uses retained full-audio snapshots rather
+than concatenating independently encoded chunks.
+
 ## Command
 
 ```sh
