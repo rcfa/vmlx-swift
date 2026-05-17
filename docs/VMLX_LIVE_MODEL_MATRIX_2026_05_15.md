@@ -123,6 +123,9 @@ A model is not production-ready unless the artifact proves:
   payload row, not a separate fake model mode;
 - video rows that hit a processor-level "video input is not implemented" error
   are recorded as N-A for that family, not collapsed into either pass or fail;
+- aggregate benches such as Omni must exit nonzero when any printed subrow
+  fails. A row that says `[FAIL]` in the bench summary cannot be reported as
+  `pass` by `status.tsv`;
 - MTP rows prove preserved metadata and keep speculative decode disabled until
   accept/reject runtime exists;
 - physical footprint is low for JANGTQ/active-routed models.

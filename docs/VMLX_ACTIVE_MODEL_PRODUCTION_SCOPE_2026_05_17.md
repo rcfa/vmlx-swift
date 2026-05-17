@@ -216,6 +216,37 @@ Harness fix from this row:
   monopolize the actor executor, so the release gate now drains streams while
   observing both live `activeCount` and the engine's high-water mark.
 
+## Nemotron Omni JANGTQ Release Matrix - 2026-05-17
+
+Clean post-failgate artifact:
+
+```text
+docs/local/live-model-matrix/20260517T_release_turnmatrix_nemotron_omni_jangtq_after_omni_failgate_v2/
+```
+
+The text/cache/batch side is healthy, but the Omni media row is not
+production-clear:
+
+- config/template smoke: PASS;
+- `BENCH_PROD` cache OFF and cache ON: PASS with visible coherent answers,
+  reasoning on/off routed correctly, and no hidden sampler guard;
+- release text throughput is about 104-110 tok/s on direct text rows;
+- disk restore row: PASS, with `cache_index.db`, safetensors entries, and
+  `ssm_companion` present in the cache directory;
+- BatchEngine text B=1 and B=2: PASS;
+- Omni aggregate row: FAIL by design, because 5 of 18 subrows fail with
+  repeated bigram loops on image/audio LMInput paths:
+  image single-turn, image reasoning-off direct, image multi-turn,
+  audio LMInput end-to-end, and BatchEngine image B=1.
+
+Harness fix from this row:
+
+- `OmniBench` now exits nonzero when any printed subrow fails. The previous
+  artifact reported `.omni | pass` despite a summary of `13 passed, 5 failed`;
+  the fresh artifact reports `.omni | fail:1` and keeps the failed media rows
+  visible for root-cause work. This is a real blocked media-runtime row, not a
+  sampling-policy issue.
+
 ## Required Proof Per Active Bundle
 
 For each non-excluded bundle, the production row must include:

@@ -51,7 +51,7 @@ enum OmniBench {
         let configOmni = modelDir.appending(path: "config_omni.json")
         guard FileManager.default.fileExists(atPath: configOmni.path) else {
             print("FAIL: \(configOmni.lastPathComponent) not found — this isn't an omni bundle")
-            return
+            exit(1)
         }
 
         // Load context once. The omni bundle is detected automatically by
@@ -63,7 +63,7 @@ enum OmniBench {
                 from: modelDir, using: #huggingFaceTokenizerLoader())
         } catch {
             print("FAIL: load: \(error)")
-            return
+            exit(1)
         }
         let loadSecs = CFAbsoluteTimeGetCurrent() - loadStart
         print(String(format: "Load: %.2fs | Model: %@ | Processor: %@",
@@ -73,7 +73,7 @@ enum OmniBench {
 
         guard let omni = context.model as? NemotronHOmni else {
             print("FAIL: dispatch — got \(type(of: context.model)), expected NemotronHOmni")
-            return
+            exit(1)
         }
 
 
@@ -627,6 +627,10 @@ enum OmniBench {
             if r.passed { pass += 1 } else { fail += 1 }
         }
         print("\n=== \(pass) passed, \(fail) failed | load \(String(format: "%.2fs", loadSecs)) ===")
+        if fail > 0 {
+            print("FAIL: OmniBench failed \(fail) of \(results.count) rows")
+            exit(1)
+        }
     }
 
     // MARK: - Row runner
