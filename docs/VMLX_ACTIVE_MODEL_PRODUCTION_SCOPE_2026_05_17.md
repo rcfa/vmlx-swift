@@ -81,6 +81,13 @@ Fresh live DSV4 artifacts:
 docs/local/live-model-matrix/20260517T_dsv4_current_non_kimi_scope/
 ```
 
+Fresh live Qwen artifacts:
+
+```text
+docs/local/live-model-matrix/20260517T_qwen36_27b_mxfp4_crack_current_non_kimi_turnmatrix/
+docs/local/live-model-matrix/20260517T_qwen36_27b_mxfp4_crack_video_resize_postfix_turnmatrix/
+```
+
 Fresh live ZAYA artifacts:
 
 ```text
@@ -127,6 +134,7 @@ forced thinking closure, or name-based MTP activation.
 | ZAYA1-VL | Fresh current `20260517T_zaya_vl_jangtq4_current_non_kimi_turnmatrix/` passes JANGTQ4 config/template, production defaults cache OFF/ON, BatchEngine text rows, disk restore, B=2 concurrent/per-slot/TurboQuant rows, VL batch chat, structured VL chat cache, and media-salt isolation. The VL row grounds the image with compile OFF/ON, answers the follow-up color as `blue`, hits disk restore for same-media prompts (`97/97`), and correctly misses when the image changes. Earlier `20260517T_release_turnmatrix_zaya_scope/` and targeted rows also prove MXFP4 image/text/cache surfaces. | PASS for current JANGTQ4 and prior MXFP4 implemented image/text/cache; JANGTQ_K needs current re-run before promotion | The K variant keeps a historical math/top-k diagnostic and cannot be promoted from old evidence. Video is `N-A` because the processor does not implement video input. Do not relabel the disk-backed media-salt cache proof as generic paged-prefix reuse. |
 | Nemotron Omni / Parakeet / RADIO | JANGTQ4 core artifacts under `20260517T170614Z_omni_live_voice_fresh_recheck/` and related Omni rows prove wrapper-token parity, pre-encoded Parakeet shape, raw PCM/pre-encoded paths, and 65-76 tok/s cache-off streaming rows without literal sound-marker leaks. Fresh `20260517T214045Z_nemotron_jangtq_omni_recheck/` passes the JANGTQ 48-token Omni matrix 18/18 with text, image, video/audio LMInput, media salt, hybrid SSM, and BatchEngine rows. Fresh `20260517T2215_nemotron_mxfp4_omni_recheck/` passes the MXFP4 48-token Omni matrix 18/18 with the same core surfaces. | PASS for JANGTQ, JANGTQ4, and MXFP4 core; PARTIAL for repeated cache-on audio | Independently encoded Parakeet chunks are not concat-safe. Live voice must retain PCM and submit full-snapshot pre-encoded audio or raw PCM at endpoint. Repeated cache-on live audio still needs a focused quality/root-cause gate before full live-voice production promotion. |
 | MiniMax M2.7 | Small JANGTQ rows prove generation config (`temp=1.000 topP=0.950 topK=40 rep=nil`), greedy/no-guard behavior, coherent thinking on/off alternation, and no loops/leaks at 38-47 tok/s depending on row. | PARTIAL | CRACK models are not MTP models unless tensor evidence proves otherwise. Larger JANG/JANGTQ_K CRACK proof still needs real low-footprint active routed evidence, and no hidden sampler guard is allowed to compensate for any failure. |
+| Qwen3.6 27B MXFP4 non-MTP | Fresh `20260517T_qwen36_27b_mxfp4_crack_video_resize_postfix_turnmatrix/` passes config/template, bundle-default production cache OFF/ON, BatchEngine text rows, disk restore, B=2 concurrent/per-slot/TurboQuant rows, VL batch chat, structured VL cache, media-salt isolation, and mixed text/image/video. Bundle defaults apply as `temp=1.000 topP=0.950 topK=20 rep=nil`; MTP depth is `off`; reasoning ON/OFF flips work at a 2048-token production budget; same-media image cache hits disk `99/99`; video uses explicit `BENCH_VL_VIDEO_RESIZE=224` and logs `video pixels shape: [560, 1536]`. The preserved pre-fix artifact `20260517T_qwen36_27b_mxfp4_crack_current_non_kimi_turnmatrix/` shows the unbounded 1080p video turn failed after peaking at 164.2 GiB physical footprint in MLX/Metal allocation. | PASS for implemented bounded text/image/video/cache surfaces; high-res video scaling remains PARTIAL | Do not auto-enable MTP on this CRACK bundle. Do not treat raw high-resolution video as production-clear; Osaurus wiring needs an explicit media resize/token budget setting rather than relying on the bundle's very large video preprocessor limit. |
 | Qwen3.5 35B non-MTP | `20260517T164940Z_release_turnmatrix_qwen35_35b_4bit_after_compat_split/` passes config/template, production cache off/on, BatchEngine, TQ B=2 compatibility split, VL cache, media salt, and mixed text/image/video. | PASS with throughput watch | High-resolution video can be very slow; Qwen hybrid SSM cache restore must stay topology-specific. |
 
 ## No-Fake-Guard Invariants For The Remaining Rows
@@ -141,8 +149,9 @@ forced thinking closure, or name-based MTP activation.
   well-formed hidden reasoning away from visible text; they are not allowed to
   make incoherent output look coherent.
 - Native MTP is tensor-evidence gated. Metadata rows and model names are not
-  sufficient; preserved-only or CRACK bundles must stay fail-closed unless the
-  real `mtp.*` tensors and runtime contract are present.
+  sufficient; CRACK or metadata-only bundles stay fail-closed. Supported Qwen
+  bundles with real MTP tensors now auto-resolve native D3 through the settings
+  bridge.
 - Generic paged/prefix cache hits are not accepted for path-dependent families.
   ZAYA CCA, Ling/Bailing linear attention, Qwen hybrid SSM, Gemma4 SWA, Omni
   media, and VL media salts require their family-specific cache proof.
@@ -245,7 +254,7 @@ docs/local/production-readiness/20260517T174743Z_qwen_mtp_chunk_policy_finalize/
 
 - `MTPRuntimeFocusedTests_after_prefix_snapshot_materialize.log`: 42/42 pass.
   Coverage includes cached verifier
-  masks carrying cache offsets, preserved-only MTP detection without
+  masks carrying cache offsets, tensor-proven preserved MTP detection with
   auto-enable, metadata-only bundles without tensor evidence, explicit
   tensor-gated Qwen3.5 MoE activation, task-local activation and env override
   behavior, JANG metadata parsing, tensor/runtime-evidence-gated auto policy,
@@ -266,8 +275,9 @@ docs/local/production-readiness/20260517T174743Z_qwen_mtp_chunk_policy_finalize/
   probabilities, no hidden sampler guards, invalid sampling/sleep values
   reported instead of clamped, concrete prefix/paged/L2/SSM cache coordinator
   settings, paged-vs-legacy disk conflict rejection, TurboQuant KV bit-width
-  validation, preserved-only MTP auto-launch denial, force-on requiring verified
-  accept/reject runtime, and policy/draft-limit launch resolution.
+  validation, tensor-proven Qwen MTP auto-launch, load-time native-MTP sidecar
+  selection, metadata-only force-on rejection, and policy/draft-limit launch
+  resolution.
 - Fresh 09:55 PDT recheck after the BatchEngine mixed-codec patch keeps both
   gates green on the current checkout: `MTPRuntimeFocusedTests.log` passes
   40/40 and `VMLINUXServerRuntimeSettingsTests.log` passes 12/12. The rerun
@@ -280,13 +290,13 @@ docs/local/production-readiness/20260517T174743Z_qwen_mtp_chunk_policy_finalize/
   server settings green: `VMLINUXServerRuntimeSettingsTests_after_prefix_snapshot_materialize.log`
   passes 12/12, and the release `RunBench` product builds successfully in
   `build_RunBench_release_after_prefix_snapshot_materialize.log`.
-- Fresh 13:05 PDT profile-validation recheck keeps server settings green:
-  `VMLINUXServerRuntimeSettingsTests_profile_validation.log` passes 15/15 and
+- Fresh real-MTP auto-launch policy recheck under
+  `docs/local/production-readiness/20260517T_real_mtp_auto_launch_policy/`
   proves Osaurus launch-time validation can use full `config.json` plus optional
-  `jang_config.json` evidence. A preserved Qwen MTP bundle is visible as a D3
-  `sequential_repair` candidate for UI/reporting, but auto launch stays off and
-  no draft strategy is emitted. A force-on request against a blocked verified
-  profile such as Qwen3.6 JANG_2K now produces a settings error before launch.
+  `jang_config.json` evidence. Supported tensor-proven Qwen MXFP bundles resolve
+  `LoadConfiguration.nativeMTP=true` plus native D3 draft strategy; a force-on
+  request against a blocked profile such as Qwen3.6 JANG_2K still produces a
+  settings error before launch.
 - Fresh 13:35 PDT settings-validation recheck passes
   `VMLINUXServerRuntimeSettingsTests.log` 16/16. It adds fail-loud validation
   for network host/port/rate-limit/timeout, concurrency batch sizes, and prefix
@@ -493,11 +503,44 @@ Open boundary:
   the true high-resolution video row still needs a throughput/scaling gate. Do
   not count high-res video as production-clear for this bundle yet.
 
+## Qwen3.6 27B MXFP4 Non-MTP Video-Budget Gate - 2026-05-17
+
+Fresh artifacts:
+
+```text
+docs/local/live-model-matrix/20260517T_qwen36_27b_mxfp4_crack_current_non_kimi_turnmatrix/
+docs/local/live-model-matrix/20260517T_qwen36_27b_mxfp4_crack_video_resize_postfix_turnmatrix/
+```
+
+Current proof:
+
+- The post-fix turnmatrix passes config/template, production defaults with cache
+  OFF/ON, BatchEngine single/chat/disk-restore/concurrent/per-slot/TurboQuant
+  B=2, VL batch chat, structured VL chat cache, media-salt isolation, and mixed
+  text/image/video.
+- Bundle generation defaults reach runtime as
+  `temp=1.000 topP=0.950 topK=20 minP=0.000 rep=nil`; MTP depth is `off`, as
+  expected for this CRACK bundle.
+- Reasoning ON/OFF closes with visible answers at a 2048-token production
+  budget, and OFF rows emit no reasoning deltas.
+- The structured VL cache row proves same-media disk restore HIT `99/99` and
+  changed-media MISS; the text-only follow-up remains grounded in the image.
+- The mixed video row now passes with explicit `BENCH_VL_VIDEO_RESIZE=224` and
+  logs `video pixels shape: [560, 1536]`.
+
+Open boundary:
+
+- The preserved pre-fix artifact records the unbounded 1080p video turn failing
+  after peaking at 164.2 GiB physical footprint inside MLX/Metal allocation.
+  This is not a sampler guard issue and not a model-coherency failure. Osaurus
+  needs a real Qwen video media resize/token-budget setting before raw
+  high-resolution video can be exposed as production-clear.
+
 ## Active Non-Excluded Family Matrix
 
 | Family | Local bundles | Engine surfaces to prove | Current MTP policy |
 |---|---|---|---|
-| Qwen3.6/Qwen3.5 text+VL MXFP/JANG/JANGTQ | Qwen3.6 MTP, Qwen3.6 CRACK, Qwen3.5 A3B 4-bit | Qwen chat template, `generation_config.json`, GatedDelta/hybrid SSM cache, disk L2 + SSM companion, VL media salt, text-only continuation after media, reasoning on/off | Only Qwen bundles with real MTP tensor evidence may be manually requested. No auto-launch yet. |
+| Qwen3.6/Qwen3.5 text+VL MXFP/JANG/JANGTQ | Qwen3.6 MTP, Qwen3.6 CRACK, Qwen3.5 A3B 4-bit | Qwen chat template, `generation_config.json`, GatedDelta/hybrid SSM cache, disk L2 + SSM companion, VL media salt, explicit video resize/token budget, text-only continuation after media, reasoning on/off | Supported Qwen bundles with real MTP tensor evidence auto-resolve native D3; CRACK/no-tensor bundles stay off; JANG_2K remains blocked. |
 | ZAYA text/VL JANGTQ/MXFP | JANGQ and Osaurus ZAYA1 text/VL | Zaya CCA cache, JANGTQ/MXFP decode, VL adapters, media salt, Hadamard/matmul shape coverage, multi-turn cache hit | No native MTP. |
 | MiniMax M2.7 JANG/JANGTQ | Small JANGTQ and CRACK JANG; JANGTQ_K needs current re-run | MiniMax template, reasoning on/off, JANGTQ streaming experts, low-footprint active routed decode, prefix/paged/disk/TurboQuant KV, multi-turn coherence | Local MiniMax CRACK rows are non-MTP unless real MTP tensor evidence appears. Larger K/JANG CRACK rows need fresh current evidence before Osaurus promotion. |
 | Ling/Bailing hybrid | Ling JANGTQ2 and MXFP4 CRACK | Bailing thinking template, hybrid cache/SSM rederive, nextn metadata handling, JANGTQ/MXFP decode, multi-turn coherence | Extra nextn-layer evidence exists, but Swift native-MTP auto-launch remains off. |
@@ -506,10 +549,10 @@ Open boundary:
 | Nemotron Omni | JANGTQ/JANGTQ4/MXFP4 Omni Nano | Parakeet audio encoder, RADIO vision, Omni text/image/audio/video ingest, BatchEngine stress, cache/media state, text output coherence | No native MTP. |
 | Laguna | Laguna XS JANGTQ | Laguna/Mistral-style template and RoPE params, JANGTQ decode, prefix/paged/disk cache, multi-turn coherence | No native MTP. |
 
-The no-load MTP census confirms every `mtp=yes` row currently reports
-`canAutoLaunch=false`. That includes Qwen3.6, Hy3, and Ling/Bailing bundles.
-This is the right fail-closed Osaurus behavior until the relevant family has a
-verified accept/reject runtime and live cache/VL/reasoning proof.
+The no-load MTP census now distinguishes supported Qwen MTP from metadata-only
+or unsupported nextn/MTP rows. Tensor-proven supported Qwen MTP resolves native
+D3 through the settings bridge; Hy3/Ling nextn-style rows and JANG_2K remain off
+or blocked until their own runtime policy is proven.
 
 The no-load metadata/template sweep passed 56/56 rows across the 28
 non-excluded bundles. Warnings remain visible and must not be collapsed into a

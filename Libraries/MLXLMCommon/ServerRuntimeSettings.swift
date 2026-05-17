@@ -219,7 +219,7 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
                 if !status.canAutoLaunchMTP {
                     issues.append(.error(
                         field: "mtp.mode",
-                        message: "MTP cannot be forced on until the bundle has a verified accept/reject speculative runtime."))
+                        message: "MTP cannot be forced on until the bundle has complete tensor evidence for a supported native-MTP runtime."))
                 }
             } else {
                 issues.append(.warning(
@@ -284,7 +284,7 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
     /// ``effectiveMTPLaunchMode(for:)`` is a status-only helper. Osaurus should
     /// use this method when it has the bundle's `config.json` bytes and optional
     /// JANG metadata so profile-specific depth blocks such as Qwen3.6 JANG_2K do
-    /// not accidentally inherit a generic `speculative_verified` status.
+    /// not accidentally inherit a generic complete-tensor status.
     public func resolvedMTPLaunch(
         configData: Data?,
         jangConfig: JangConfig?,
@@ -310,7 +310,7 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
             return .init(
                 launchMode: mode,
                 recommendation: nil,
-                reason: "No verified native-MTP accept/reject recommendation for this bundle.")
+                reason: "No supported tensor-proven native-MTP recommendation for this bundle.")
         }
 
         let resolvedRecommendation: NativeMTPAutoDecodeRecommendation
@@ -351,6 +351,27 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
             return nil
         }
         return .nativeMTP(depth: depth)
+    }
+
+    /// Resolve the load-time switch that preserves native-MTP sidecar weights.
+    ///
+    /// Native MTP needs two coordinated decisions: the model must be loaded with
+    /// MTP tensors present, and generation must use ``DraftStrategy/nativeMTP``.
+    /// Hosts should call this alongside ``resolvedMTPDraftStrategy`` so a real
+    /// Qwen MTP bundle starts with the sidecar loaded, while non-MTP CRACK or
+    /// metadata-only bundles keep the loader's MTP scrub path.
+    public func resolvedLoadConfiguration(
+        base: LoadConfiguration = .default,
+        configData: Data?,
+        jangConfig: JangConfig?,
+        status: MTPBundleStatus?
+    ) -> LoadConfiguration {
+        var resolved = base
+        resolved.nativeMTP = resolvedMTPLaunch(
+            configData: configData,
+            jangConfig: jangConfig,
+            status: status).launchMode == .speculative
+        return resolved
     }
 
     /// Resolve decode parameters for a server request.

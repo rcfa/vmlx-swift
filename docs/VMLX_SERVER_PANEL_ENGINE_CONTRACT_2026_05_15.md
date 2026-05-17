@@ -26,7 +26,7 @@ fallbacks.
 | Performance & Generation | `VMLXServerGenerationDefaults` | `nil` means bundle metadata first, then documented engine fallback. Do not write hidden default sampling guards here. |
 | Tool Integration | `VMLXServerToolSettings` | MCP config, auto tool choice, parser overrides, reasoning parser override, optional custom template. |
 | Multimodal Support | `VMLXServerMultimodalSettings` | Auto/force off/force on VLM mode plus video/audio toggles and media-salt cache requirement. |
-| Speculative Decoding / MTP | `VMLXServerMTPSettings` | Auto does not launch MTP unless `MTPBundleStatus.canAutoLaunchMTP` is true. Force-on errors until accept/reject decode is verified. |
+| Speculative Decoding / MTP | `VMLXServerMTPSettings` | Auto launches native MTP only when real tensor evidence plus the supported Qwen profile policy resolve a D3 launch. Force-on errors for metadata-only or unsupported profiles. |
 
 ## Gateway Runtime States
 
@@ -119,11 +119,20 @@ VL models add cache and shape invariants beyond text:
 ## MTP Contract
 
 `MTPBundleStatus.mode == preserved_enabled` means the bundle preserved MTP
-metadata/tensors. It does not mean speculative decode is live. The engine may
-only auto-launch MTP when status says a verified accept/reject runtime exists.
-The status must be derived from actual weight-map or safetensors-header tensor
-names, not from model or directory names. If metadata claims MTP but tensor names
-do not prove it, the server must surface `metadata_only_missing_weights`.
+metadata/tensors. The status must be derived from actual weight-map or
+safetensors-header tensor names, not from model or directory names. If metadata
+claims MTP but tensor names do not prove it, the server must surface
+`metadata_only_missing_weights` and keep native MTP off.
+
+For Qwen3.6/Qwen3.5 MTP-capable bundles, the server should call
+`resolvedMTPLaunch(configData:jangConfig:status:)`,
+`resolvedLoadConfiguration(base:configData:jangConfig:status:)`, and
+`resolvedMTPDraftStrategy(configData:jangConfig:status:)` from the same
+evidence snapshot. A real supported MTP bundle resolves to
+`LoadConfiguration.nativeMTP=true` plus `.nativeMTP(depth: 3)`. A non-MTP CRACK
+bundle, metadata-only bundle, or unsupported profile resolves with native MTP
+off. This avoids the broken middle state where the request asks for MTP but the
+loader scrubbed the sidecar weights.
 
 MTP cache rules:
 

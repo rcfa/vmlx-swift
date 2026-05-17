@@ -14,15 +14,15 @@ Key changes since this plan was first written:
 
 - All six local Qwen3.6 MTP/VL bundles are now present:
   27B JANG_4M, 27B MXFP4, 27B MXFP8, 35B JANG_2K, 35B MXFP4, and 35B MXFP8.
-- MTP activation remains explicit and tensor-gated. `canAutoLaunch=false` is
-  still the correct product state.
+- MTP activation is tensor-gated. Supported Qwen MXFP/JANG_4M MTP bundles now
+  resolve auto native D3 from real weight evidence; JANG_2K remains blocked.
 - Text MTP speed rows now clear the target for the MXFP artifacts where the
   current gate selected MTP: 27B MXFP4 D3, 35B MXFP4 D3, and 35B MXFP8 D3.
   27B MXFP8 currently prefers D2 on the count prompt. 35B JANG_2K remains
   blocked and should stay AR-only.
 - Exact-cache repeat and growing-chat rows hit disk L2 plus SSM companion state.
-  Qwen hybrid/SSM native MTP is still explicit-only until the remaining
-  scheduling and VL rows are exhausted.
+  Qwen hybrid/SSM native MTP auto-launch remains limited to the exclusive
+  single-request path until raw B>1 scheduling is implemented.
 - VL+MTP must use `BatchEngine.generate`/`Evaluate.generate` exclusive paths.
   `BatchEngine.submit` raw native-MTP scheduling is intentionally rejected until
   per-slot draft/verify/cache scheduling is implemented.
@@ -100,15 +100,15 @@ The copied 35B A3B MXFP8-MTP bundle has these properties:
 - `quantization.norm_convention=qwen3_5_language_mlx_plus_one`
 - no MTP `.biases`; MTP linears use MXFP8 weights/scales plus fp16 norms.
 
-That proves the artifact preserves MTP and VL. Swift must still distinguish
-artifact preservation from runtime readiness:
+That proves the artifact preserves MTP and VL. Swift now distinguishes real
+tensor-proven runtime eligibility from metadata-only claims:
 
 ```text
 mode=preserved_enabled
 hasCompleteMTPArtifact=true
-speculativeDecodeEnabled=false unless explicitly requested
-canAutoLaunchMTP=false until the full gate passes
-requiresAcceptRejectBeforeEnable=true
+speculativeDecodeEnabled=true for supported Qwen native-MTP profiles
+canAutoLaunchMTP=true for supported Qwen native-MTP profiles
+requiresAcceptRejectBeforeEnable=false
 ```
 
 ## Detection Rules
@@ -162,10 +162,10 @@ loaded. Suggested capability/health shape:
     "tensor_count": 31,
     "vision_tensor_count": 333,
     "has_complete_artifact": true,
-    "speculative_decode_enabled": false,
-    "can_auto_launch": false,
-    "requires_accept_reject_before_enable": true,
-    "status_line": "mtp: preserved_enabled, layers=1, tensors=31, speculative=off (accept/reject required)"
+    "speculative_decode_enabled": true,
+    "can_auto_launch": true,
+    "requires_accept_reject_before_enable": false,
+    "status_line": "mtp: preserved_enabled, layers=1, tensors=31, speculative=on"
   }
 }
 ```
@@ -175,15 +175,17 @@ Osaurus launch policy must be:
 - `mode=none`: run normal autoregressive decode; report MTP unavailable.
 - `mode=metadata_only_missing_weights`: run normal autoregressive decode; report
   that config advertises MTP but the artifact is missing MTP tensors.
-- `mode=preserved_disabled` or `preserved_enabled`: run normal autoregressive
-  decode; report that MTP is preserved but runtime activation is pending.
-- `mode=enabled` or `speculative_verified`: MTP may auto-launch only when
-  `canAutoLaunchMTP=true`.
+- `mode=preserved_disabled`: run normal autoregressive decode; report MTP
+  preserved but disabled.
+- `mode=preserved_enabled`, `enabled`, or `speculative_verified`: call the
+  full-evidence resolver. Supported Qwen profiles with real MTP tensors
+  auto-launch native MTP; unsupported profiles, such as current JANG_2K, remain
+  off or blocked if force-on is requested.
 
-If a caller explicitly requests MTP while `canAutoLaunchMTP=false`, Osaurus
-should return a clear unsupported/error response. It must not silently route
-through a fake guard, force a hidden sampler fallback, cap output length, or
-pretend speculative MTP ran.
+If a caller explicitly requests MTP while the full-evidence resolver returns
+`.off` or `.blocked`, Osaurus should return a clear unsupported/error response.
+It must not silently route through a fake guard, force a hidden sampler
+fallback, cap output length, or pretend speculative MTP ran.
 
 Swift now exposes a full-evidence settings bridge for this policy:
 
@@ -194,16 +196,24 @@ Swift now exposes a full-evidence settings bridge for this policy:
 - `VMLXServerRuntimeSettings.resolvedMTPDraftStrategy(...)` returns
   `.nativeMTP(depth:)` only when the full-evidence launch decision is
   `.speculative`.
+- `VMLXServerRuntimeSettings.resolvedLoadConfiguration(...)` returns a
+  `LoadConfiguration` with `nativeMTP=true` for the same full-evidence
+  `.speculative` decision. Osaurus should use this load configuration and the
+  draft strategy together so the sidecar weights are present before the request
+  selects native MTP.
 - `mtp.draftTokenLimit` must be positive when set. If it is below the
   recommended depth, the resolver caps the native-MTP depth and records
   `server_draft_token_limit=<n>` in the recommendation evidence.
-- `effectiveMTPLaunchMode(for:)` remains status-only and should not be the
-  Osaurus auto-launch gate by itself.
+- `effectiveMTPLaunchMode(for:)` remains status-only. It is useful for display,
+  but Osaurus should use the full-evidence resolver before launch because
+  profile-specific blocks require `config.json` and optional `jang_config.json`.
 
 ## Explicit Swift Runtime Activation
 
-The package has an opt-in Qwen3.6 native-MTP path behind
-`LoadConfiguration.nativeMTP=true` plus `DraftStrategy.nativeMTP(depth:)`.
+The package has an automatic Qwen3.6 native-MTP path for supported bundles with
+real MTP tensor evidence. The concrete runtime still uses
+`LoadConfiguration.nativeMTP=true` plus `DraftStrategy.nativeMTP(depth:)`; the
+server settings resolver now derives both from the same evidence snapshot.
 `ModelFactory.loadModel` passes that load-time decision through a task-local
 activation override so concurrent loads do not share a process-global MTP env
 flag. The `VMLINUX_NATIVE_MTP=1` environment knob remains compatibility-only
@@ -214,7 +224,8 @@ and is not inferred from `mtp_num_hidden_layers` alone. It requires:
 - supported Qwen3.5/Qwen3.6 text, VL, or Qwen3.5 MoE model type;
 - complete MTP tensor evidence from the index or safetensors headers;
 - an active Swift model exposing `NativeMTPModel`;
-- explicit load-time and request-time runtime selection;
+- resolved load-time and request-time runtime selection from
+  `VMLXServerRuntimeSettings`;
 - greedy `temperature=0` or the native exact p/q stochastic verifier path
   described below.
 
@@ -456,11 +467,11 @@ matching AR row on this prompt and remains far below the 45 tok/s threshold.
   MTP decoder to instantiate `SparseMoeBlock` for MoE sidecars.
 
 The current 45 tok/s acceptance threshold, and the older 50 tok/s Qwen3.6 27B
-target, are not achieved by the current Swift path. The D3 path is correct
-enough to keep as an explicit diagnostic, including stochastic exact p/q
-acceptance, but it must not auto-launch as a production acceleration mode. The
-attempted verifier argmax vectorization was rejected after live rows were
-slower, so it is not part of the implementation. The next real speed work is:
+target, are not achieved by every current Swift row. Native MTP is still
+auto-launch limited to supported tensor-proven Qwen bundles, and release review
+must keep token/s plus output-tail evidence attached. The attempted verifier
+argmax vectorization was rejected after live rows were slower, so it is not part
+of the implementation. The next real speed work is:
 
 1. recursive MTP draft returns logits and hidden state for `d1`, `d2`, and
    `d3` without recomputing state traces;
@@ -624,9 +635,10 @@ rows all pass with coherent output. The current Swift source path now preserves
 Qwen3VL MRoPE continuation state during native-MTP verifier forwards, but this
 is still only a prerequisite for the live VL+MTP gate, not the gate itself.
 
-## Verification Gates Before Auto-Launch
+## Verification Gates For Auto-Launch Expansion
 
-Before changing `canAutoLaunchMTP` to true for any family, produce artifacts for:
+Before changing native-MTP auto-launch beyond supported Qwen MXFP/JANG_4M
+profiles, produce artifacts for:
 
 - No-load status: `MTPBundleInspector` sees config layers, MTP tensors, and VL
   tensors correctly.

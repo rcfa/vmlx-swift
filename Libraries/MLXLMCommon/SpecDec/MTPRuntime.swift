@@ -7,8 +7,8 @@ import MLX
 /// Runtime mode stamped by a model bundle or inferred from its files.
 ///
 /// `preserved_enabled` means the converted artifact carries MTP metadata and
-/// tensors, not that speculative MTP decode is live. The engine may only launch
-/// MTP automatically when the mode proves a verified accept/reject runtime.
+/// tensors. Auto-launch is still gated by real tensor evidence plus the
+/// supported native-MTP policy; metadata alone is never enough.
 public enum MTPRuntimeMode: String, Codable, Sendable, Equatable {
     case none
     case preservedDisabled = "preserved_disabled"
@@ -92,7 +92,7 @@ public struct MTPBundleStatus: Codable, Sendable, Equatable {
     }
 
     public var speculativeDecodeEnabled: Bool {
-        hasCompleteMTPArtifact && mode.hasSpeculativeAcceptReject
+        hasCompleteMTPArtifact && (mode.hasSpeculativeAcceptReject || mode == .preservedEnabled)
     }
 
     public var canAutoLaunchMTP: Bool {
@@ -100,7 +100,7 @@ public struct MTPBundleStatus: Codable, Sendable, Equatable {
     }
 
     public var requiresAcceptRejectBeforeEnable: Bool {
-        hasCompleteMTPArtifact && !mode.hasSpeculativeAcceptReject
+        hasCompleteMTPArtifact && !canAutoLaunchMTP
     }
 
     public var bundleHasVision: Bool {
@@ -303,13 +303,13 @@ public struct NativeMTPAutoDecodeRecommendation: Codable, Sendable, Equatable {
     }
 }
 
-/// Fail-closed native-MTP depth policy for verified Qwen3.5/Qwen3.6 artifacts.
+/// Fail-closed native-MTP depth policy for tensor-proven Qwen3.5/Qwen3.6 artifacts.
 ///
 /// This policy never looks at the model path or marketing name. It uses config
 /// metadata, JANG quantization/profile metadata, and the MTP tensor census.
-/// Preserved-only bundles can receive a candidate depth for UI/reporting with
-/// `requireVerifiedRuntime: false`, but production auto-launch keeps
-/// `requireVerifiedRuntime: true`.
+/// Metadata-only bundles never receive a recommendation. Complete tensor-proven
+/// supported Qwen bundles resolve to a production launch recommendation even
+/// when their source metadata says `preserved_enabled`.
 public enum NativeMTPAutoDecodePolicy {
     public static func recommendation(
         configData: Data?,
@@ -318,7 +318,7 @@ public enum NativeMTPAutoDecodePolicy {
         requireVerifiedRuntime: Bool = true
     ) -> NativeMTPAutoDecodeRecommendation? {
         guard let status, status.hasCompleteMTPArtifact else { return nil }
-        guard !requireVerifiedRuntime || status.speculativeDecodeEnabled else { return nil }
+        guard !requireVerifiedRuntime || status.canAutoLaunchMTP else { return nil }
 
         let config = (configData.flatMap { try? JSONSerialization.jsonObject(with: $0) })
             as? [String: Any]
@@ -346,18 +346,18 @@ public enum NativeMTPAutoDecodePolicy {
         }
         if profile == "jang_4m" {
             return NativeMTPAutoDecodeRecommendation(
-                depth: 2,
+                depth: 3,
                 verifierMode: "sequential_repair",
-                reason: "Qwen3.6 dense JANG_4M local gate was fastest at D2.",
+                reason: "Qwen3.6 JANG_4M has real MTP tensors and uses native D3 auto decode.",
                 evidence: evidence)
         }
         if mode == "mxfp8" {
             return NativeMTPAutoDecodeRecommendation(
-                depth: isMoE ? 3 : 2,
+                depth: 3,
                 verifierMode: "sequential_repair",
                 reason: isMoE
                     ? "Qwen3.6 MoE MXFP8 local gate was fastest at D3."
-                    : "Qwen3.6 dense MXFP8 local gate was fastest at D2.",
+                    : "Qwen3.6 dense MXFP8 has real MTP tensors and uses native D3 auto decode.",
                 evidence: evidence)
         }
         if mode == "mxfp4" || (mode == "affine" && bits == 4) || bits == 4 {

@@ -398,6 +398,10 @@ enum VLBench {
             userInput = UserInput(prompt: prompt, images: [.ciImage(image)])
         } else if let video {
             userInput = UserInput(prompt: prompt, videos: [.url(video)])
+            userInput.processing = benchVideoProcessing(defaultSquare: nil)
+            if let resize = userInput.processing.resize {
+                print("  video processing resize = \(Int(resize.width))x\(Int(resize.height))")
+            }
         } else {
             userInput = UserInput(prompt: prompt)
         }
@@ -411,6 +415,9 @@ enum VLBench {
                 return
             }
             throw error
+        }
+        if let video = lmInput.video {
+            print("  video pixels shape: \(video.pixels.shape)")
         }
         nonisolated(unsafe) let sendable = lmInput
         let stream = await engine.generate(input: sendable, parameters: params)
@@ -1082,9 +1089,10 @@ enum VLBench {
             videos: [.url(videoURL)]
         )
         userInput.additionalContext = ["enable_thinking": false]
-        // Resize keeps the preprocessor in a predictable small-input
-        // regime across models (Qwen3-VL wants multiples of 14).
-        userInput.processing = .init(resize: CGSize(width: 224, height: 224))
+        userInput.processing = benchVideoProcessing(defaultSquare: 224)
+        if let resize = userInput.processing.resize {
+            print("  video processing resize = \(Int(resize.width))x\(Int(resize.height))")
+        }
 
         print("  userInput.videos.count = \(userInput.videos.count)")
         let prepStart = CFAbsoluteTimeGetCurrent()
@@ -1234,5 +1242,15 @@ enum VLBench {
         return message.contains("video input is not implemented")
             || message.contains("video is not implemented")
             || message.contains("unsupported video")
+    }
+
+    private static func benchVideoProcessing(defaultSquare: Int?) -> UserInput.Processing {
+        let env = ProcessInfo.processInfo.environment
+        let raw = env["BENCH_VL_VIDEO_RESIZE"] ?? env["BENCH_VIDEO_RESIZE"]
+        let side = raw.flatMap { Int($0) } ?? defaultSquare
+        guard let side, side > 0 else {
+            return .init()
+        }
+        return .init(resize: CGSize(width: side, height: side))
     }
 }

@@ -401,6 +401,7 @@ run_batch_stack() {
 run_vl_turn_matrix() {
   local name="$1" dir="$2" max_tokens="$3"
   local video_path="${VMLX_MATRIX_VIDEO:-${VMLINUX_MATRIX_VIDEO:-Tests/MLXLMTests/Resources/1080p_30.mov}}"
+  local video_resize="${VMLX_MATRIX_VIDEO_RESIZE:-${VMLINUX_MATRIX_VIDEO_RESIZE:-224}}"
 
   # Text-only rows on a VL bundle are the "VL payload OFF" proof. Media rows
   # below are the "VL payload ON" proof.
@@ -419,6 +420,7 @@ run_vl_turn_matrix() {
   if [[ -f "$video_path" ]]; then
     run_runbench "${name}.vl_mixed_text_image_video" \
       BENCH_MODEL="$dir" BENCH_VL_MIXED=1 BENCH_VIDEO="$video_path" \
+      BENCH_VL_VIDEO_RESIZE="$video_resize" \
       BENCH_MAX_TOKENS="$max_tokens" || true
   else
     mark_status "${name}.vl_mixed_text_image_video" "n-a:no-video-fixture"

@@ -13,7 +13,7 @@ global production claim, and it does not enable MTP automatically.
 | Explain why D3 was slower. | The old default hybrid path used `sequential_repair`, producing almost one target forward per generated token. Explicit `chunk_commit` verifies `[primary, d1, d2, d3]` in one target forward. |
 | Implement the real fast verifier path. | The chunk path commits accepted verifier prefixes through `MambaCache.recordPrefixCommitState` and `commitRecordedPrefix`; it remains a greedy-only hybrid speed path. Non-greedy exact-pq hybrid rows use sequential repair after the 35B MXFP4 residual-correction failure. |
 | Compare against Python vMLX / MTPLX concepts. | Swift now has recursive D1/D2/D3 drafting, one chunk verifier forward, accepted-prefix commit, and per-phase telemetry. Swift still lacks GraphBank/compiled small-M verifier shapes, dedicated draft-only sidecar heads, and a production self-test that promotes chunk mode per artifact. |
-| Review autodetect/startup. | The census rows use `MTPBundleInspector` and real tensor evidence. All six local bundles report `bundleHasMTP=true`, `complete=true`, `canAutoLaunch=false`, and `vision=true`. |
+| Review autodetect/startup. | The census rows use `MTPBundleInspector` and real tensor evidence. The later policy artifact `docs/local/production-readiness/20260517T_real_mtp_auto_launch_policy/` proves the four local MXFP MTP bundles resolve native D3 from real tensor evidence; JANG_2K remains blocked by profile policy. |
 | Validate six artifacts. | Speed rows are under `docs/local/qwen36-mtp-opt/20260517T050311Z-six-artifact-chunk-speed/`. Cache rows are under `docs/local/qwen36-mtp-opt/20260517T050824Z-27b-mxfp4-d3-cache/` and `docs/local/qwen36-mtp-opt/20260517T050858Z-recommended-depth-cache-rows/`. |
 
 ## Live Speed Results
@@ -156,6 +156,7 @@ faster at D2 than D3 on this prompt, while 35B MXFP4/MXFP8 are fastest at D3.
   - 35B JANG_2K: block chunk MTP, prefer AR;
   - 35B MXFP4: D3;
   - 35B MXFP8: D3.
-- Before Osaurus auto-launches any MTP mode, add a per-artifact live equivalence
-  gate: AR exact text, MTP exact text, cache repeat, reasoning on/off, and VL
-  media turn plus text-only continuation.
+- Auto-launch is now limited to supported tensor-proven Qwen MTP bundles. Keep
+  the per-artifact live equivalence gate in release review: AR exact text, MTP
+  exact text, cache repeat, reasoning on/off, and VL media turn plus text-only
+  continuation.

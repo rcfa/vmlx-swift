@@ -45,10 +45,9 @@ Current pushed branch state:
 - 2026-05-17 MTP launch-settings follow-up:
   `docs/local/production-readiness/20260517T1305_mtp_settings_profile_validation/`
   passes `VMLINUXServerRuntimeSettingsTests` with 15 Swift Testing rows. The
-  server settings surface now has a full-evidence validation path so preserved
-  Qwen MTP can be shown as a D3 candidate without auto-launch, while a force-on
-  launch against blocked profiles such as Qwen3.6 JANG_2K is rejected before an
-  Osaurus session starts.
+  server settings surface now has a full-evidence validation path so tensor-
+  proven Qwen MTP resolves native D3, while a force-on launch against blocked
+  profiles such as Qwen3.6 JANG_2K is rejected before an Osaurus session starts.
 - 2026-05-17 Harmony prompt-tail follow-up:
   `docs/local/production-readiness/20260517T1315_harmony_prompt_tail_parser/`
   passes the `HarmonyParserFocusedTests` suite with 6/6 rows. The added guard
@@ -281,6 +280,22 @@ Current pushed branch state:
   the image and answers the follow-up color as `blue`, bundle defaults are
   `temp=0.600 topP=1.000 topK=0 rep=nil`, peak RSS is about 6.8 GiB, and video
   remains explicit `N-A` because this processor does not implement video input.
+- 2026-05-17 Qwen3.6 27B MXFP4 non-MTP current turnmatrix:
+  `docs/local/live-model-matrix/20260517T_qwen36_27b_mxfp4_crack_video_resize_postfix_turnmatrix/`
+  passes config/template, bundle-default production cache OFF/ON, BatchEngine
+  single/chat/disk restore/concurrent/per-slot/TurboQuant B=2, VL batch chat,
+  structured VL cache, media-salt isolation, and mixed text/image/video. The
+  matrix records `temp=1.000 topP=0.950 topK=20 minP=0.000 rep=nil`, MTP depth
+  `off`, reasoning ON/OFF visible answers at a 2048-token production budget,
+  same-media image disk restore HIT `99/99`, and video grounding with explicit
+  `BENCH_VL_VIDEO_RESIZE=224` plus `video pixels shape: [560, 1536]`.
+- Preserved pre-fix Qwen artifact:
+  `docs/local/live-model-matrix/20260517T_qwen36_27b_mxfp4_crack_current_non_kimi_turnmatrix/`
+  records the raw 1080p video failure and
+  `qwen36_video_hang_sample.txt` shows a 164.2 GiB peak physical footprint in
+  MLX/Metal allocation. The fix is not a hidden sampler/model guard: the bench
+  now exposes a real video resize knob so Osaurus can wire Qwen video media
+  budgets explicitly.
 - 2026-05-17 Gemma4 multi-turn reasoning follow-up:
   `docs/local/live-model-matrix/20260517T_reasoning_turn_matrix_harness/`
   adds `BENCH_REASONING_TURN_MATRIX=1` and passes Gemma4 through one loaded
@@ -302,8 +317,8 @@ Current pushed branch state:
   bundle defaults `temp=1.000 topP=0.950 topK=64 rep=nil`, disk-backed cache
   hits, and no fake sampler/reasoning guard.
 - Current focus: Nemotron Omni, non-K ZAYA1-VL, cache/template correctness,
-  live coherent multi-turn rows, and explicit-only Qwen3.6 native MTP
-  readiness. Native MTP is not auto-launch eligible yet.
+  live coherent multi-turn rows, and Qwen3.6 native-MTP auto-launch readiness
+  for real tensor-proven bundles only.
 
 ## Objective Restated as Deliverables
 
@@ -340,8 +355,8 @@ The package is complete only when all of these are true:
 | Compare `../vmlx-swift-lm`. | `docs/VMLX_SWIFT_LM_DEEP_COMPARISON_2026_05_15.md` plus updated consolidation audit. Sibling is dirty and behind origin; do not copy blindly. | static-proven |
 | Local model inventory. | `docs/VMLX_LIVE_MODEL_MATRIX_2026_05_15.md`; local `find ~/models -maxdepth 4 -name config.json` shows DSV4, Hy3, Kimi, Laguna, MiniMax, ZAYA/ZAYA-VL, Qwen3.5/3.6, Gemma4, Ling, and Nemotron Omni families. | static-proven |
 | Live infer matrix for installed models. | `docs/local/live-model-matrix/20260515Tinfer-under20/REPORT.md` and `status.tsv`. Many under-20GB rows passed; several rows failed or were skipped. | partial |
-| MTP activation must use real tensor evidence, not names. | `9b1b254`; `docs/VMLX_SWIFT_MTP_OSAURUS_WIRING_2026_05_15.md`; local fail-closed artifact `docs/local/native-mtp-qwen36-20260515/jang4m-crack-native-mtp-denied-postrevert.log`. Fresh settings proof `docs/local/production-readiness/20260517T1305_mtp_settings_profile_validation/VMLXServerRuntimeSettingsTests_profile_validation.log` passes 15/15 and proves preserved-only Qwen MTP can be exposed as a D3 candidate without auto-launch, while profile-blocked force-on launch reports a real settings error before runtime. | live-proven |
-| MTP depth-3 production acceleration. | Current local Swift rows prove recursive D3 draft, accepted-prefix commit, coherent visible output, and no loop/leak for Qwen3.6 27B JANG_4M, 27B MXFP4, 27B MXFP8, 35B MXFP4, and 35B MXFP8. The fresh MXFP production reverify passes 27B/35B MXFP4/MXFP8 7/7 with `BENCH_MAX_TOKENS=384`, explicit `chunk_commit`, bundle defaults, disk L2 hit, and SSM companion hit. The latest focused artifact `docs/local/production-readiness/20260517T174743Z_qwen_mtp_chunk_policy_finalize/MTPRuntimeFocusedTests_after_prefix_snapshot_materialize.log` passes 42/42 and pins tensor-gated activation, preserved-only denial, D3 hidden-state draft/verify, accepted-prefix SSM offsets, partial-reject repair, verifier env override ordering, materialized recurrent prefix snapshots, BatchEngine exclusive native-MTP lane, quant shape-walk, and norm-convention behavior. Native MTP remains explicit/tensor-gated; auto-launch still needs Osaurus/server policy gates. | live-proven for explicit Qwen3.6 correctness rows; speed partial |
+| MTP activation must use real tensor evidence, not names. | `9b1b254`; `docs/VMLX_SWIFT_MTP_OSAURUS_WIRING_2026_05_15.md`; local fail-closed artifact `docs/local/native-mtp-qwen36-20260515/jang4m-crack-native-mtp-denied-postrevert.log`. Fresh settings proof and real-bundle proof under `docs/local/production-readiness/20260517T_real_mtp_auto_launch_policy/` prove four local Qwen3.6 MXFP MTP bundles resolve native D3 from real tensor/index evidence and that `Qwen3.6-27B-MXFP4-CRACK` remains `mtp=no`. Profile-blocked force-on launch still reports a real settings error before runtime. | live-proven |
+| MTP depth-3 production acceleration. | Current local Swift rows prove recursive D3 draft, accepted-prefix commit, coherent visible output, and no loop/leak for Qwen3.6 27B JANG_4M, 27B MXFP4, 27B MXFP8, 35B MXFP4, and 35B MXFP8. The fresh MXFP production reverify passes 27B/35B MXFP4/MXFP8 7/7 with `BENCH_MAX_TOKENS=384`, explicit `chunk_commit`, bundle defaults, disk L2 hit, and SSM companion hit. The latest focused artifact `docs/local/production-readiness/20260517T174743Z_qwen_mtp_chunk_policy_finalize/MTPRuntimeFocusedTests_after_prefix_snapshot_materialize.log` passes 42/42 and pins tensor-gated activation, D3 hidden-state draft/verify, accepted-prefix SSM offsets, partial-reject repair, verifier env override ordering, materialized recurrent prefix snapshots, BatchEngine exclusive native-MTP lane, quant shape-walk, and norm-convention behavior. Native MTP now auto-resolves for supported tensor-proven Qwen bundles; speed target remains partial. | live-proven for Qwen3.6 correctness rows; speed partial |
 | Qwen3.6 MTP coherency and token/s. | Historical target artifacts include `qwen36_27b_jang4m_mtp_d3_count_python_prompt_normfix_regression.log` (`47.7 tok/s`), `qwen36_27b_mxfp4_mtp_d3_count_python_prompt_normfix.log` (`50.5 tok/s`), `qwen36_27b_mxfp4_mtp_d3_count_python_prompt_postaudit_count.log` (`49.6 tok/s` after task-local activation), `qwen36_27b_mxfp8_mtp_d3_count_python_prompt_normfix.log` (`29.5 tok/s`), and `qwen36_35b_mxfp8_mtp_d3_count_python_prompt.log` (`130.6 tok/s`). Fresh no-diagnostics snapshot-fix rows are more conservative: 35B MXFP4 exact `1..50` at `84.7 tok/s`, and 27B MXFP4 exact `1..50` at `26.1 tok/s`, both with `unclosedReasoning=NO`, `loop=NO`, `leaks=none`. | live-proven for coherency; current speed partial |
 | Qwen3.6 native-MTP speed target. | Historical rows met the 27B MXFP4 and JANG_4M target, but the current no-diagnostics Swift rows do not reproduce that speed. 27B MXFP4 is correct at `26.1 tok/s`, and 35B MXFP4 is correct at `84.7 tok/s` versus a fresh AR row at `91.0 tok/s`. Treat the speed target as open until the current verifier path reaches the Python/older Swift target without diagnostics. | partial |
 | Qwen3.6 text hybrid-SSM accepted-prefix cache commit and private MTP-cache reject semantics. | 2026-05-17 fixes align the text Qwen3.5/Qwen3.6 `GatedDeltaNet` with the VLM path: regular SSM forwards now advance `MambaCache.offset`, recorded partial-prefix snapshots store `baseOffset + prefixLength`, and partial rejects recreate the private MTP draft cache instead of trimming stale rejected state. The latest fix materializes prefix recurrent snapshots before saving a verifier commit point, closing the no-diagnostics `chunk_commit` failure in `docs/local/production-readiness/20260517T174743Z_qwen_mtp_chunk_policy_finalize/`. Focused proofs: `docs/local/production-readiness/20260517Tqwen36-mtp-ssm-offset/mtp_runtime_focused_after_private_mtp_refresh.log` passes 17/17, and `MTPRuntimeFocusedTests_after_prefix_snapshot_materialize.log` passes 42/42. | unit-tested and live-proven for current 35B MXFP4 no-diagnostics row |
@@ -661,9 +676,11 @@ MiniMax, Ling, and other large bundles. They are not production passes.
 
 Live-proven:
 
-- MTP activation is explicit and per-load through `LoadConfiguration.nativeMTP`;
-  `VMLINUX_NATIVE_MTP=1` remains a compatibility override for direct factory
-  callers only.
+- MTP activation is resolved per session through
+  `VMLXServerRuntimeSettings.resolvedLoadConfiguration(...)` and
+  `resolvedMTPDraftStrategy(...)`; the underlying load still uses
+  `LoadConfiguration.nativeMTP`. `VMLINUX_NATIVE_MTP=1` remains a compatibility
+  override for direct factory callers only.
 - Supported Qwen model types must expose real MTP tensor evidence.
 - CRACK config metadata without tensors fails closed.
 - Qwen3.6 MTP proof targets are
@@ -811,9 +828,10 @@ Not yet complete:
    JANGTQ/Hadamard/matmul, VL shape/MRoPE, ZAYA config, Omni Parakeet/RADIO, and
    MiniMax resident-expert contracts. A full-package clean-worktree pass still
    waits on the concurrent Flux `Package.swift` work to be committed or isolated.
-5. Keep native MTP explicit-only until the speed and cache-composition gates
-   close. The current BatchEngine fix prevents false positives; it does not
-   make native MTP auto-launch eligible.
+5. Keep native MTP auto-launch limited to supported Qwen bundles with real MTP
+   tensor evidence. The current BatchEngine fix prevents false positives by
+   keeping native MTP on the exclusive solo lane; B>1 native-MTP scheduling
+   remains a separate gate.
 6. DSV4 16k+ long-context memory behavior remains a live/open blocker for the
    DSV4 lane, which is back in the active pass under the latest non-Kimi scope.
 7. Expand the active model matrix beyond the 20GB cutoff for DSV4, MiniMax,

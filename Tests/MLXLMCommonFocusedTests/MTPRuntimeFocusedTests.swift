@@ -36,8 +36,8 @@ struct MTPRuntimeFocusedTests {
         }
     }
 
-    @Test("Qwen-style preserved MTP bundle is detected but not auto-enabled")
-    func qwenPreservedMTPBundleIsDetectedButNotAutoEnabled() throws {
+    @Test("Qwen-style preserved MTP bundle is tensor-detected and auto-enabled")
+    func qwenPreservedMTPBundleIsTensorDetectedAndAutoEnabled() throws {
         let root = try makeTemporaryBundle(name: "qwen-mtp-detected")
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -76,11 +76,11 @@ struct MTPRuntimeFocusedTests {
         #expect(status.visionTensorCount == 1)
         #expect(status.mode == .preservedEnabled)
         #expect(status.hasCompleteMTPArtifact)
-        #expect(status.requiresAcceptRejectBeforeEnable)
-        #expect(!status.speculativeDecodeEnabled)
-        #expect(!status.canAutoLaunchMTP)
+        #expect(!status.requiresAcceptRejectBeforeEnable)
+        #expect(status.speculativeDecodeEnabled)
+        #expect(status.canAutoLaunchMTP)
         #expect(status.configEvidence.contains("text_config.mtp_num_hidden_layers=1"))
-        #expect(status.statusLine.contains("accept/reject required"))
+        #expect(status.statusLine.contains("speculative=on"))
     }
 
     @Test("MTP config without tensors is reported as metadata-only")
@@ -322,11 +322,12 @@ struct MTPRuntimeFocusedTests {
 
         #expect(configuration.mtpStatus == status)
         #expect(resolved.mtpStatus == status)
-        #expect(resolved.mtpStatus?.requiresAcceptRejectBeforeEnable == true)
+        #expect(resolved.mtpStatus?.requiresAcceptRejectBeforeEnable == false)
+        #expect(resolved.mtpStatus?.canAutoLaunchMTP == true)
     }
 
-    @Test("native MTP auto decode policy is tensor and runtime evidence gated")
-    func nativeMTPAutoDecodePolicyIsTensorAndRuntimeEvidenceGated() throws {
+    @Test("native MTP auto decode policy is real tensor evidence gated")
+    func nativeMTPAutoDecodePolicyIsRealTensorEvidenceGated() throws {
         let denseMXFP8Config = """
         {
           "model_type": "qwen3_vl",
@@ -359,10 +360,12 @@ struct MTPRuntimeFocusedTests {
             tensorCount: 0,
             mode: .metadataOnlyMissingWeights)
 
-        #expect(NativeMTPAutoDecodePolicy.recommendation(
+        let denseAuto = NativeMTPAutoDecodePolicy.recommendation(
             configData: denseMXFP8Config,
             jangConfig: nil,
-            status: preserved) == nil)
+            status: preserved)
+        #expect(denseAuto?.depth == 3)
+        #expect(denseAuto?.verifierMode == "sequential_repair")
         #expect(NativeMTPAutoDecodePolicy.recommendation(
             configData: denseMXFP8Config,
             jangConfig: nil,
@@ -374,7 +377,7 @@ struct MTPRuntimeFocusedTests {
             jangConfig: nil,
             status: preserved,
             requireVerifiedRuntime: false)
-        #expect(denseReporting?.depth == 2)
+        #expect(denseReporting?.depth == 3)
         #expect(denseReporting?.verifierMode == "sequential_repair")
 
         let moeVerified = NativeMTPAutoDecodePolicy.recommendation(
@@ -970,10 +973,40 @@ struct MTPRuntimeFocusedTests {
         #expect(status.configuredLayers > 0)
         #expect(status.tensorCount > 0)
         #expect(status.hasCompleteMTPArtifact)
-        #expect(!status.canAutoLaunchMTP)
+        #expect(status.canAutoLaunchMTP)
         if ProcessInfo.processInfo.environment["VMLX_MTP_REAL_BUNDLE_EXPECTS_VL"] == "1" {
             #expect(status.visionTensorCount > 0)
             #expect(status.bundleHasVision)
+        }
+
+        let root = URL(fileURLWithPath: path)
+        let configData = try Data(contentsOf: root.appendingPathComponent("config.json"))
+        let jangConfig = try? JangLoader.loadConfig(at: root)
+        let settings = VMLXServerRuntimeSettings()
+        let launch = settings.resolvedMTPLaunch(
+            configData: configData,
+            jangConfig: jangConfig,
+            status: status)
+        let loadConfiguration = settings.resolvedLoadConfiguration(
+            base: .off,
+            configData: configData,
+            jangConfig: jangConfig,
+            status: status)
+        if ProcessInfo.processInfo.environment["VMLX_MTP_REAL_BUNDLE_EXPECTS_BLOCKED"] == "1" {
+            #expect(launch.launchMode == .off)
+            #expect(!loadConfiguration.nativeMTP)
+            var forceOn = settings
+            forceOn.mtp.mode = .forceOn
+            #expect(forceOn.validationIssues(
+                configData: configData,
+                jangConfig: jangConfig,
+                mtpStatus: status).contains {
+                    $0.severity == .error && $0.field == "mtp.mode"
+                })
+        } else {
+            #expect(launch.launchMode == .speculative)
+            #expect(launch.recommendation?.depth == 3)
+            #expect(loadConfiguration.nativeMTP)
         }
     }
 

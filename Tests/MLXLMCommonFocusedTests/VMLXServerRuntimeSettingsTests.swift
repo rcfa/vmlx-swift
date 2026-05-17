@@ -124,8 +124,8 @@ struct VMLXServerRuntimeSettingsTests {
         #expect(params.repetitionPenalty == nil)
     }
 
-    @Test("MTP auto does not launch preserved-only artifacts")
-    func mtpAutoDoesNotLaunchPreservedOnlyArtifacts() {
+    @Test("MTP auto launches complete tensor-proven artifacts")
+    func mtpAutoLaunchesCompleteTensorProvenArtifacts() {
         let settings = VMLXServerRuntimeSettings()
         let status = MTPBundleStatus(
             bundleHasMTP: true,
@@ -133,31 +133,31 @@ struct VMLXServerRuntimeSettingsTests {
             tensorCount: 31,
             mode: .preservedEnabled)
 
-        #expect(settings.effectiveMTPLaunchMode(for: status) == .off)
+        #expect(settings.effectiveMTPLaunchMode(for: status) == .speculative)
         #expect(settings.validationIssues(mtpStatus: status).isEmpty)
     }
 
-    @Test("MTP force-on requires verified accept reject runtime")
-    func mtpForceOnRequiresVerifiedAcceptRejectRuntime() {
+    @Test("MTP force-on requires complete tensor evidence")
+    func mtpForceOnRequiresCompleteTensorEvidence() {
         var settings = VMLXServerRuntimeSettings()
         settings.mtp.mode = .forceOn
-        let preservedOnly = MTPBundleStatus(
+        let tensorProven = MTPBundleStatus(
             bundleHasMTP: true,
             configuredLayers: 4,
             tensorCount: 31,
             mode: .preservedEnabled)
-        let verified = MTPBundleStatus(
-            bundleHasMTP: true,
+        let metadataOnly = MTPBundleStatus(
+            bundleHasMTP: false,
             configuredLayers: 4,
-            tensorCount: 31,
-            mode: .speculativeVerified)
+            tensorCount: 0,
+            mode: .metadataOnlyMissingWeights)
 
-        #expect(settings.effectiveMTPLaunchMode(for: preservedOnly) == .blocked)
-        #expect(settings.validationIssues(mtpStatus: preservedOnly).contains {
+        #expect(settings.effectiveMTPLaunchMode(for: metadataOnly) == .blocked)
+        #expect(settings.validationIssues(mtpStatus: metadataOnly).contains {
             $0.severity == .error && $0.field == "mtp.mode"
         })
-        #expect(settings.effectiveMTPLaunchMode(for: verified) == .speculative)
-        #expect(settings.validationIssues(mtpStatus: verified).isEmpty)
+        #expect(settings.effectiveMTPLaunchMode(for: tensorProven) == .speculative)
+        #expect(settings.validationIssues(mtpStatus: tensorProven).isEmpty)
     }
 
     @Test("MTP launch resolution uses config policy and draft limit")
@@ -197,8 +197,8 @@ struct VMLXServerRuntimeSettingsTests {
         }
     }
 
-    @Test("preserved Qwen MTP recommendation is visible but does not auto-launch")
-    func preservedQwenMTPCandidateDoesNotAutoLaunch() {
+    @Test("tensor-proven Qwen MTP auto-launch resolves D3 load and draft settings")
+    func tensorProvenQwenMTPAutoLaunchResolvesD3LoadAndDraftSettings() {
         let config = """
         {
           "model_type": "qwen3_vl",
@@ -223,15 +223,26 @@ struct VMLXServerRuntimeSettingsTests {
             configData: config,
             jangConfig: nil,
             status: preserved)
+        let loadConfiguration = settings.resolvedLoadConfiguration(
+            base: .off,
+            configData: config,
+            jangConfig: nil,
+            status: preserved)
 
         #expect(candidate?.depth == 3)
         #expect(candidate?.verifierMode == "sequential_repair")
-        #expect(settings.effectiveMTPLaunchMode(for: preserved) == .off)
-        #expect(launch.launchMode == .off)
-        #expect(settings.resolvedMTPDraftStrategy(
+        #expect(settings.effectiveMTPLaunchMode(for: preserved) == .speculative)
+        #expect(launch.launchMode == .speculative)
+        #expect(loadConfiguration.nativeMTP)
+        if case .nativeMTP(let depth)? = settings.resolvedMTPDraftStrategy(
             configData: config,
             jangConfig: nil,
-            status: preserved) == nil)
+            status: preserved)
+        {
+            #expect(depth == 3)
+        } else {
+            Issue.record("Tensor-proven Qwen MTP should resolve a native-MTP draft strategy")
+        }
         #expect(settings.validationIssues(
             configData: config,
             jangConfig: nil,
