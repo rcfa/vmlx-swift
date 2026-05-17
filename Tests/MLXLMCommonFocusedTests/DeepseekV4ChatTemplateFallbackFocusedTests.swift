@@ -172,6 +172,27 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         #expect(!rendered.contains("\": "))
     }
 
+    @Test("Swift Jinja for-loop iterable accepts binary expressions")
+    func forLoopIterableAcceptsBinaryExpression() throws {
+        let template = try Template("{% for item in left + right %}{{ item }}{% endfor %}")
+        let rendered = try template.renderDSV4([
+            "left": ["A"],
+            "right": ["B", "C"],
+        ])
+
+        #expect(rendered == "ABC")
+    }
+
+    @Test("Swift Jinja for-loop if clause remains a loop filter")
+    func forLoopIfClauseRemainsLoopFilter() throws {
+        let template = try Template("{% for item in values if item != 'B' %}{{ item }}{% endfor %}")
+        let rendered = try template.renderDSV4([
+            "values": ["A", "B", "C"],
+        ])
+
+        #expect(rendered == "AC")
+    }
+
     @Test("ZAYA1-VL fallback preserves vision placeholders and ZAYA XML tools")
     func zayaVLFallbackPreservesVisionAndTools() throws {
         let template = try Template(ChatTemplateFallbacks.zayaVLVisionToolMinimal)

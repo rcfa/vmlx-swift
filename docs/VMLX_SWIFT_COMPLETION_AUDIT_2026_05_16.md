@@ -196,6 +196,19 @@ Current pushed branch state:
   keeps Kimi and DSV4 excluded for this pass and restates the no-hidden-sampler,
   no-fake-reasoning-close, tensor-evidence-only MTP, and topology-specific
   cache invariants.
+- 2026-05-17 Osaurus PR/pin lineage expansion and Jinja parity fix:
+  `docs/VMLX_OSAURUS_PR_PIN_LINEAGE_2026_05_17.md` now includes user-authored
+  PRs #967, #990, #993, #998, #1037, #1057, #1066, #1073, and #1110, including
+  the app/workspace resolver skews in #967 and #998 and the pinned dependency
+  commit windows for `mlx-swift`, `Jinja`, `swift-transformers`, and
+  `vmlx-swift-lm`. During the check, vendored Jinja was found missing the
+  `58d21aa` binary-for-iterable behavior even though `tojson(separators:)` and
+  the swift-transformers unused-placeholder skip were present. The parser now
+  parses `for` iterables through the non-ternary binary/comparison path, with
+  focused regression coverage proving both `{% for x in left + right %}` and
+  `{% for x in values if ... %}` work. Artifact:
+  `docs/local/production-readiness/20260517T2200_jinja_pin_parity/deepseek_v4_jinja_fallback.log`
+  passes 10/10 rows.
 - Latest pushed runtime checkpoint for the Qwen text-SSM/private-MTP cache
   fix: `3146fac` (`fix(mtp): repair qwen ssm reject cache`)
 - The MTP/cache work for task-local load-time native MTP activation, MXFP8
