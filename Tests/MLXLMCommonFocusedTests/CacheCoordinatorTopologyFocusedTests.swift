@@ -552,6 +552,28 @@ struct Gemma4CacheTopologyFocusedTests {
         #expect(CacheFamily.classify(boundedCache) == .rotating)
     }
 
+    @Test("TokenIterator compiled decode promotes all-rotating SWA caches")
+    func tokenIteratorCompiledDecodePromotesAllRotatingCaches() throws {
+        let source = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/Evaluate.swift",
+            encoding: .utf8)
+        guard let start = source.range(of: "mutating func setupCompiledDecode("),
+              let end = source.range(
+                of: "\n    }\n\n    /// Evaluate the next token",
+                range: start.upperBound..<source.endIndex)
+        else {
+            Issue.record("Could not locate TokenIterator setupCompiledDecode helper")
+            return
+        }
+        let helper = String(source[start.lowerBound..<end.lowerBound])
+
+        #expect(helper.contains("cache.allSatisfy"))
+        #expect(helper.contains("$0 is RotatingKVCache"))
+        #expect(helper.contains("CompilableRotatingKVCache(from: layer as! RotatingKVCache"))
+        #expect(helper.contains("cache.allSatisfy({ $0 is KVCacheSimple })"))
+        #expect(helper.contains("CompilableKVCache(from: layer, maxLength: maxCacheLength)"))
+    }
+
     private static let minimalGemma4Config = #"""
     {
       "model_type": "gemma4_text",

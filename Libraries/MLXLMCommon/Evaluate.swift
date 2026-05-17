@@ -1563,12 +1563,21 @@ public struct TokenIterator: TokenIteratorProtocol {
         case .none where kvBits != nil:
             return
         case .none:
-            // KVCacheSimple -> CompilableKVCache (static buffer, graph-visible
-            // offset). Plain KVCacheSimple reads `offset` as an Int, which compile
-            // captures at trace-build time and then reuses for later tokens.
-            guard cache.allSatisfy({ $0 is KVCacheSimple }) else { return }
-            promoted = cache.map { layer in
-                CompilableKVCache(from: layer, maxLength: maxCacheLength) as KVCache
+            if cache.allSatisfy({ $0 is KVCacheSimple }) {
+                // KVCacheSimple -> CompilableKVCache (static buffer, graph-visible
+                // offset). Plain KVCacheSimple reads `offset` as an Int, which compile
+                // captures at trace-build time and then reuses for later tokens.
+                promoted = cache.map { layer in
+                    CompilableKVCache(from: layer, maxLength: maxCacheLength) as KVCache
+                }
+            } else if cache.allSatisfy({
+                $0 is RotatingKVCache && !($0 is CompilableRotatingKVCache)
+            }) {
+                promoted = cache.map { layer in
+                    CompilableRotatingKVCache(from: layer as! RotatingKVCache) as KVCache
+                }
+            } else {
+                return
             }
         }
         MLX.eval(promoted)

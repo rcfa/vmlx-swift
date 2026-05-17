@@ -55,6 +55,7 @@ docs/local/production-readiness/20260517T1348_cache_policy_salt_active/
 docs/local/production-readiness/20260517T1405_parser_fallback_matrix/
 docs/local/production-readiness/20260517T1415_qwen_vl_capability_aliases/
 docs/local/production-readiness/20260517T1435_harmony_fragment_leak/
+docs/local/production-readiness/20260517T1450_gemma4_rotating_compile_direct/
 ```
 
 That inventory contains 28 non-excluded local bundles:
@@ -238,6 +239,15 @@ docs/local/production-readiness/20260517T174743Z_qwen_mtp_chunk_policy_finalize/
   before the role suffix), so the final green run keeps `<|start|>assistant`
   buffered until channel resolution or terminal scrub. `HarmonyParserFocusedTests`
   passes 8/8 and the broader no-hidden/parser sweep passes 47/47.
+- Fresh 14:50 PDT Gemma4/SWA direct-compile recheck has a red/green artifact
+  for the direct `TokenIterator` compiled path. The red log proved
+  `setupCompiledDecode` still promoted only plain `KVCacheSimple` caches, so an
+  all-rotating cache produced by Gemma4 with explicit `maxKVSize` could not use
+  `CompilableRotatingKVCache` outside BatchEngine. The green log passes 6/6 in
+  `Gemma4CacheTopologyFocusedTests_green.log` after adding the real rotating
+  promotion; the broader cache topology sweep passes 25/25 across Gemma4,
+  Ling/Bailing hybrid cache, ZAYA CCA, DSV4 disk-pool restore, media salts, and
+  BatchKV rotating masks.
 
 ## Qwen3.5 35B 4-bit Loader Repair - 2026-05-17
 
@@ -821,6 +831,10 @@ turnmatrix:
   rotating caches keep the attention-sink shape; 4 BatchKVCache rotating-slot
   tests prove post-wrap masks use the capped effective key length instead of
   `offset + n`;
+- direct TokenIterator compiled decode now promotes all-rotating Gemma4/SWA
+  caches to `CompilableRotatingKVCache` when the caller explicitly supplies
+  `maxKVSize`; the default mixed SWA/full-attention topology remains
+  `.heterogeneous` and uncompiled;
 - the generic prefix-extension paged cache-hit row is N-A because this model is
   routed through the disk-backed paged-incompatible cache path.
 

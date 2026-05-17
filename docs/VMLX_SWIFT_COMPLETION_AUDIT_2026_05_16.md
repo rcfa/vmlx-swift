@@ -99,6 +99,13 @@ Current pushed branch state:
   `HarmonyParserFocusedTests` 8/8 and the broader no-hidden/parser sweep 47/47,
   including one-character token fragmentation and start-role buffering so
   `<|start|>assistant` does not leak `assistant` when split across chunks.
+- 2026-05-17 Gemma4/SWA direct compile follow-up:
+  `docs/local/production-readiness/20260517T1450_gemma4_rotating_compile_direct/`
+  contains a red/green pair for `Gemma4CacheTopologyFocusedTests`. The red log
+  proved direct `TokenIterator.setupCompiledDecode` still promoted only
+  `KVCacheSimple`, leaving all-rotating Gemma4/SWA caches uncompiled outside
+  BatchEngine. The green logs pass the Gemma4 suite 6/6 and the broader cache
+  topology suite 25/25 after adding real `CompilableRotatingKVCache` promotion.
 - Latest pushed runtime checkpoint for the Qwen text-SSM/private-MTP cache
   fix: `3146fac` (`fix(mtp): repair qwen ssm reject cache`)
 - The MTP/cache work for task-local load-time native MTP activation, MXFP8
