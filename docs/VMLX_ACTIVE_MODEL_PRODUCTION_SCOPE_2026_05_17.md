@@ -483,6 +483,41 @@ Current 48-token full Omni matrix after rebuilding `RunBench`:
   not an audio/Parakeet failure and must remain visible as a non-audio Omni
   media/runtime blocker. Do not hide it with sampler clamps.
 
+Fresh live voice recheck at 2026-05-17 08:10 PDT:
+
+```text
+docs/local/live-model-matrix/20260517T_omni_live_voice_recheck_now/
+```
+
+- Release builds passed for `OmniAudioLatencyBench`,
+  `OmniAudioChunkStabilityBench`, and `RunBench`.
+- `swift test --filter NemotronHOmniPreEncodedAudioTests` is blocked before
+  the focused Omni tests execute because this local CLI toolchain cannot import
+  Swift `Testing`; the failing log is preserved as a test-runner/toolchain
+  issue, not as runtime evidence.
+- `Nemotron-Omni-Nano-JANGTQ4-CRACK` full Omni `RunBench` passed 18/18 rows at
+  48 tokens using bundle generation defaults. Load was 1.92 s; direct decode
+  rows were about 92-113 tok/s and BatchEngine rows about 38-68 tok/s.
+- JANGTQ4 live audio path streamed both raw PCM and pre-encoded Parakeet
+  embeddings through BatchEngine and TokenIterator. Parakeet pre-encode was
+  46.2 ms for 63 audio tokens, and first-delta latency improved from raw
+  192-227 ms to pre-encoded 160-179 ms depending on path.
+- The other local Omni bundles also passed the live-audio smoke:
+  `Nemotron-Omni-Nano-JANGTQ-CRACK` pre-encoded in 43.9 ms and streamed all
+  four path/mode rows at 32 tokens; `Nemotron-Omni-Nano-MXFP4-CRACK`
+  pre-encoded in 48.1 ms and streamed all four path/mode rows at 32 tokens.
+- Cache proof exists for the audio benches: the emitted cache directories
+  contain `cache_index.db`, safetensors block entries, and `ssm_companion`
+  directories; see `cache_artifacts_listing.txt`.
+- Chunk stability remains negative by design: 10/10 prefix comparisons were
+  unstable at default tolerance, so production live voice must retain PCM and
+  refresh the full current pre-encode, or submit raw PCM. Concatenating
+  independently encoded Parakeet chunks would be wrong.
+- Coherency remains partial at longer audio budgets: answers are audio-grounded,
+  but some 48-token rows repeat concise sentences or continue to the token cap.
+  This is an honest runtime/termination boundary, not a reason to add hidden
+  sampling or forced-stop guards.
+
 ## Required Proof Per Active Bundle
 
 For each non-excluded bundle, the production row must include:

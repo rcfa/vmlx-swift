@@ -12,6 +12,44 @@ here now live in this package as `OmniAudioLatencyBench` and
 kept as historical evidence; current `vmlx-swift` release-built evidence is
 tracked in `docs/VMLX_ACTIVE_MODEL_PRODUCTION_SCOPE_2026_05_17.md`.
 
+2026-05-17 08:10 PDT recheck: release builds and live audio probes were rerun
+from this `vmlx-swift` checkout under
+`docs/local/live-model-matrix/20260517T_omni_live_voice_recheck_now/`.
+`OmniAudioLatencyBench`, `OmniAudioChunkStabilityBench`, and `RunBench` all
+rebuilt in release mode. `swift test --filter NemotronHOmniPreEncodedAudioTests`
+is blocked in this local toolchain before the Omni tests run because the Swift
+`Testing` module is unavailable; this is recorded as a test-runner/toolchain
+blocker, not as an Omni runtime pass.
+
+Fresh live evidence:
+
+- `Nemotron-Omni-Nano-JANGTQ4-CRACK` full Omni `RunBench` at 48 tokens passed
+  18/18 rows with bundle generation defaults, including text, image, video,
+  audio, mixed image+audio, media-salt isolation, hybrid SSM warm-pass, and
+  BatchEngine audio/image rows.
+- The JANGTQ4 live audio bench used `temperature=0.600`, `top_p=0.950`,
+  `top_k=0`, `min_p=0.000`, `repetition_penalty=1.000` from
+  `generation_config.json`; it pre-encoded Parakeet audio to `63 x 2688`
+  embeddings in 46.2 ms. Raw PCM and pre-encoded audio both streamed through
+  BatchEngine and TokenIterator. First deltas were about 211-227 ms for raw
+  BatchEngine, 178-179 ms for pre-encoded BatchEngine, 192 ms for raw
+  TokenIterator, and 160-162 ms for pre-encoded TokenIterator.
+- The JANGTQ and MXFP4 Omni bundles also loaded and streamed the same fixture
+  through raw/pre-encoded BatchEngine and TokenIterator paths at 32 tokens.
+  JANGTQ pre-encode was 43.9 ms; MXFP4 pre-encode was 48.1 ms.
+- Disk/SSM cache artifacts were written for the audio bench paths:
+  `cache_index.db`, safetensors entries, and `ssm_companion` directories are
+  listed in `cache_artifacts_listing.txt`.
+- `OmniAudioChunkStabilityBench` confirms independently encoded Parakeet chunks
+  are still not concat-safe: 10/10 prefix comparisons were unstable at the
+  default tolerance. The production live voice contract remains retained PCM
+  plus refreshed full-snapshot pre-encode, or raw PCM at endpoint. Do not stitch
+  independently encoded chunk embeddings into the model context.
+- Coherency caveat: the audio answers are grounded in the fixture, but several
+  48-token rows repeat a short sentence or continue instead of cleanly stopping.
+  This is a visible runtime/termination boundary; do not hide it with sampler
+  clamps or forced stop guards.
+
 ## Implemented
 
 - `UserInput.Audio.preEncoded(samples:sampleRate:embedding:)` exists for live
