@@ -184,6 +184,7 @@ Fresh 2026-05-17 artifacts:
 
 ```text
 docs/local/live-model-matrix/20260517T_omni_reverify/
+docs/local/live-model-matrix/20260517T_omni_current_recheck/
 ```
 
 Current result on `Nemotron-Omni-Nano-JANGTQ4-CRACK`:
@@ -210,6 +211,21 @@ Current result on `Nemotron-Omni-Nano-JANGTQ4-CRACK`:
   with `maxTokens=48`, including text, multi-turn, image, video, audio,
   reasoning on/off, mixed image+audio, media-salt isolation, and hybrid SSM
   warm-pass. Load: 1.87 s. Decode rows: 85.4-105.5 tok/s.
+- Current-checkout recheck:
+  - `NemotronHOmniPreEncodedAudioTests.log`: 8/8 passes.
+  - `omni_audio_latency_jangtq4_current_32.log`: release-built live audio bench
+    reloads JANGTQ4, uses bundle defaults (`temp=0.600 topP=0.950 topK=0
+    minP=0.000 rep=1.000`), pre-encodes Parakeet to 63 x 2688 in 46.8 ms, and
+    streams both BatchEngine and TokenIterator paths with raw PCM and
+    pre-encoded embeddings. First deltas are 157-224 ms; decode rates are
+    62.5-74.1 tok/s. The 16-token smoke in the same folder proves wiring but is
+    too short to judge every stochastic audio answer.
+  - `omni_audio_chunk_stability_jangtq4_current.log`: 10/10 prefix comparisons
+    are not concat-safe at the default tolerance, so the retained-full-snapshot
+    live-voice contract remains required.
+  - `omni_runbench_jangtq4_48_current.log`: integrated current `BENCH_OMNI=1`
+    passes 14/14 at `maxTokens=48`, with load 1.95 s and decode rows
+    90.4-109.9 tok/s.
 
 ## ZAYA Harness and VL Follow-Up - 2026-05-17
 

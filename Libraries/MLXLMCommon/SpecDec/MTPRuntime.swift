@@ -347,12 +347,14 @@ public enum NativeMTPAutoDecodePolicy {
         if profile == "jang_4m" {
             return NativeMTPAutoDecodeRecommendation(
                 depth: 2,
+                verifierMode: "sequential_repair",
                 reason: "Qwen3.6 dense JANG_4M local gate was fastest at D2.",
                 evidence: evidence)
         }
         if mode == "mxfp8" {
             return NativeMTPAutoDecodeRecommendation(
                 depth: isMoE ? 3 : 2,
+                verifierMode: "sequential_repair",
                 reason: isMoE
                     ? "Qwen3.6 MoE MXFP8 local gate was fastest at D3."
                     : "Qwen3.6 dense MXFP8 local gate was fastest at D2.",
@@ -361,6 +363,7 @@ public enum NativeMTPAutoDecodePolicy {
         if mode == "mxfp4" || (mode == "affine" && bits == 4) || bits == 4 {
             return NativeMTPAutoDecodeRecommendation(
                 depth: 3,
+                verifierMode: "sequential_repair",
                 reason: isMoE
                     ? "Qwen3.6 MoE 4-bit local gate was fastest at D3."
                     : "Qwen3.6 dense MXFP4 D3 clears the local MTP speed target.",

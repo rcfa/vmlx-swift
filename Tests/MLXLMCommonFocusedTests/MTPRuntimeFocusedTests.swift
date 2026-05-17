@@ -12,26 +12,28 @@ import Testing
 struct MTPRuntimeFocusedTests {
     @Test("cached multi-token verifier mask carries cache offset")
     func cachedMultiTokenVerifierMaskCarriesCacheOffset() {
-        let cache = KVCacheSimple()
-        _ = cache.update(
-            keys: MLXArray.ones([1, 2, 5, 4]),
-            values: MLXArray.ones([1, 2, 5, 4]))
+        FocusedMLXTestSupport.withLock {
+            let cache = KVCacheSimple()
+            _ = cache.update(
+                keys: MLXArray.ones([1, 2, 5, 4]),
+                values: MLXArray.ones([1, 2, 5, 4]))
 
-        let mask = cache.makeMask(n: 3, windowSize: nil, returnArray: false)
-        guard case .array(let maskArray) = mask else {
-            Issue.record("expected explicit offset-aware mask for cached multi-token forward")
-            return
+            let mask = cache.makeMask(n: 3, windowSize: nil, returnArray: false)
+            guard case .array(let maskArray) = mask else {
+                Issue.record("expected explicit offset-aware mask for cached multi-token forward")
+                return
+            }
+
+            MLX.eval(maskArray)
+            #expect(maskArray.shape == [3, 8])
+            #expect(maskArray[0, 4].item(Bool.self))
+            #expect(maskArray[0, 5].item(Bool.self))
+            #expect(!maskArray[0, 6].item(Bool.self))
+            #expect(!maskArray[0, 7].item(Bool.self))
+            #expect(maskArray[1, 6].item(Bool.self))
+            #expect(!maskArray[1, 7].item(Bool.self))
+            #expect(maskArray[2, 7].item(Bool.self))
         }
-
-        MLX.eval(maskArray)
-        #expect(maskArray.shape == [3, 8])
-        #expect(maskArray[0, 4].item(Bool.self))
-        #expect(maskArray[0, 5].item(Bool.self))
-        #expect(!maskArray[0, 6].item(Bool.self))
-        #expect(!maskArray[0, 7].item(Bool.self))
-        #expect(maskArray[1, 6].item(Bool.self))
-        #expect(!maskArray[1, 7].item(Bool.self))
-        #expect(maskArray[2, 7].item(Bool.self))
     }
 
     @Test("Qwen-style preserved MTP bundle is detected but not auto-enabled")
@@ -373,12 +375,14 @@ struct MTPRuntimeFocusedTests {
             status: preserved,
             requireVerifiedRuntime: false)
         #expect(denseReporting?.depth == 2)
+        #expect(denseReporting?.verifierMode == "sequential_repair")
 
         let moeVerified = NativeMTPAutoDecodePolicy.recommendation(
             configData: moeMXFP8Config,
             jangConfig: nil,
             status: verified)
         #expect(moeVerified?.depth == 3)
+        #expect(moeVerified?.verifierMode == "sequential_repair")
 
         let jang2k = NativeMTPAutoDecodePolicy.recommendation(
             configData: denseMXFP8Config,
@@ -557,6 +561,8 @@ struct MTPRuntimeFocusedTests {
         #expect(source.contains("private static func requiresChunkTokenReplayRepair"))
         #expect(source.contains("speculativeSampler: SpeculativeSamplingController"))
         #expect(source.contains("!speculativeSampler.isGreedy && cache.contains(where: { $0 is MambaCache })"))
+        #expect(source.contains("case invalidDepth(Int)"))
+        #expect(source.contains("throw NativeMTPRuntimeError.invalidDepth(requestedDepth)"))
         #expect(source.contains("case \"sequential\", \"sequential_repair\", \"repair\":"))
         #expect(source.contains("return cache.contains { $0 is MambaCache }"))
     }

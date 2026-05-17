@@ -136,6 +136,11 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
                 field: "cache.turboQuantValueBits",
                 message: "TurboQuant value bits must be between 2 and 8."))
         }
+        if let draftTokenLimit = mtp.draftTokenLimit, draftTokenLimit <= 0 {
+            issues.append(.error(
+                field: "mtp.draftTokenLimit",
+                message: "MTP draft token limit must be positive."))
+        }
         if let defaultMaxKVSize = cache.defaultMaxKVSize, defaultMaxKVSize <= 0 {
             issues.append(.error(
                 field: "cache.defaultMaxKVSize",
@@ -174,6 +179,80 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
         case .forceOn:
             return (status?.canAutoLaunchMTP == true) ? .speculative : .blocked
         }
+    }
+
+    /// Resolve a production MTP launch decision from the full model evidence.
+    ///
+    /// ``effectiveMTPLaunchMode(for:)`` is a status-only helper. Osaurus should
+    /// use this method when it has the bundle's `config.json` bytes and optional
+    /// JANG metadata so profile-specific depth blocks such as Qwen3.6 JANG_2K do
+    /// not accidentally inherit a generic `speculative_verified` status.
+    public func resolvedMTPLaunch(
+        configData: Data?,
+        jangConfig: JangConfig?,
+        status: MTPBundleStatus?
+    ) -> VMLXResolvedMTPLaunch {
+        guard mtp.mode != .off else {
+            return .init(launchMode: .off, recommendation: nil, reason: "MTP disabled by server settings.")
+        }
+        if let limit = mtp.draftTokenLimit, limit <= 0 {
+            return .init(
+                launchMode: .blocked,
+                recommendation: nil,
+                reason: "MTP draft token limit must be positive.")
+        }
+
+        guard let recommendation = NativeMTPAutoDecodePolicy.recommendation(
+            configData: configData,
+            jangConfig: jangConfig,
+            status: status,
+            requireVerifiedRuntime: true)
+        else {
+            let mode = mtp.mode == .forceOn ? VMLXMTPLaunchMode.blocked : .off
+            return .init(
+                launchMode: mode,
+                recommendation: nil,
+                reason: "No verified native-MTP accept/reject recommendation for this bundle.")
+        }
+
+        let resolvedRecommendation: NativeMTPAutoDecodeRecommendation
+        if let limit = mtp.draftTokenLimit, limit < recommendation.depth {
+            resolvedRecommendation = NativeMTPAutoDecodeRecommendation(
+                depth: limit,
+                verifierMode: recommendation.verifierMode,
+                reason: "\(recommendation.reason) Server draft-token limit capped depth from \(recommendation.depth) to \(limit).",
+                evidence: recommendation.evidence + ["server_draft_token_limit=\(limit)"])
+        } else {
+            resolvedRecommendation = recommendation
+        }
+
+        return .init(
+            launchMode: .speculative,
+            recommendation: resolvedRecommendation,
+            reason: resolvedRecommendation.reason)
+    }
+
+    /// Convenience bridge for request construction.
+    ///
+    /// Returns `nil` unless ``resolvedMTPLaunch(configData:jangConfig:status:)``
+    /// returns `.speculative` with a concrete depth. This keeps native MTP out
+    /// of raw batched paths unless the caller explicitly applies the returned
+    /// strategy to an exclusive generate request.
+    public func resolvedMTPDraftStrategy(
+        configData: Data?,
+        jangConfig: JangConfig?,
+        status: MTPBundleStatus?
+    ) -> DraftStrategy? {
+        let launch = resolvedMTPLaunch(
+            configData: configData,
+            jangConfig: jangConfig,
+            status: status)
+        guard launch.launchMode == .speculative,
+              let depth = launch.recommendation?.depth
+        else {
+            return nil
+        }
+        return .nativeMTP(depth: depth)
     }
 
     /// Resolve decode parameters for a server request.
@@ -594,6 +673,22 @@ public enum VMLXMTPLaunchMode: String, Codable, Sendable, Equatable, CaseIterabl
     case off
     case speculative
     case blocked
+}
+
+public struct VMLXResolvedMTPLaunch: Codable, Sendable, Equatable {
+    public var launchMode: VMLXMTPLaunchMode
+    public var recommendation: NativeMTPAutoDecodeRecommendation?
+    public var reason: String
+
+    public init(
+        launchMode: VMLXMTPLaunchMode,
+        recommendation: NativeMTPAutoDecodeRecommendation?,
+        reason: String
+    ) {
+        self.launchMode = launchMode
+        self.recommendation = recommendation
+        self.reason = reason
+    }
 }
 
 public struct VMLXServerSettingsIssue: Codable, Sendable, Equatable {

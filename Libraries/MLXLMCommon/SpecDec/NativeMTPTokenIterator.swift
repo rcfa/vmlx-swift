@@ -11,6 +11,7 @@ enum NativeMTPRuntimeError: Error, CustomStringConvertible {
     case maxTokensTooSmall
     case verifierProducedNoTokens
     case verifierCacheCommitFailed
+    case invalidDepth(Int)
 
     var description: String {
         switch self {
@@ -26,6 +27,8 @@ enum NativeMTPRuntimeError: Error, CustomStringConvertible {
             "native MTP verifier produced no token to emit"
         case .verifierCacheCommitFailed:
             "native MTP verifier could not commit accepted cache prefix"
+        case .invalidDepth(let depth):
+            "native MTP depth must be at least 1, got \(depth)"
         }
     }
 }
@@ -113,6 +116,9 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
         if let maxTokens = parameters.maxTokens, maxTokens <= 1 {
             throw NativeMTPRuntimeError.maxTokensTooSmall
         }
+        guard requestedDepth >= 1 else {
+            throw NativeMTPRuntimeError.invalidDepth(requestedDepth)
+        }
         guard input.text.tokens.size > 0 else {
             throw NativeMTPRuntimeError.emptyPrompt
         }
@@ -141,7 +147,7 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
         self.sampler = effectiveParameters.sampler()
         self.speculativeSampler = SpeculativeSamplingController(parameters: effectiveParameters)
         self.maxTokens = effectiveParameters.maxTokens
-        self.depth = Swift.max(1, requestedDepth)
+        self.depth = requestedDepth
         let promptTokenStart = Date.timeIntervalSinceReferenceDate
         let promptTokenIds = input.text.tokens.reshaped(-1).asArray(Int.self)
         let promptTokenElapsed = Date.timeIntervalSinceReferenceDate - promptTokenStart

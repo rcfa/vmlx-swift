@@ -16,18 +16,23 @@ Key changes since this plan was first written:
   27B JANG_4M, 27B MXFP4, 27B MXFP8, 35B JANG_2K, 35B MXFP4, and 35B MXFP8.
 - MTP activation remains explicit and tensor-gated. `canAutoLaunch=false` is
   still the correct product state.
-- Text MTP D3 is coherent for all six variants and exact-cache repeat rows hit
-  disk L2 plus SSM companion state.
-- MTP D3 is currently slower than AR in the latest Swift text matrix, so speed
-  is not production-complete despite coherent output.
+- Text MTP speed rows now clear the target for the MXFP artifacts where the
+  current gate selected MTP: 27B MXFP4 D3, 35B MXFP4 D3, and 35B MXFP8 D3.
+  27B MXFP8 currently prefers D2 on the count prompt. 35B JANG_2K remains
+  blocked and should stay AR-only.
+- Exact-cache repeat and growing-chat rows hit disk L2 plus SSM companion state.
+  Qwen hybrid/SSM native MTP is still explicit-only until the remaining
+  scheduling and VL rows are exhausted.
 - VL+MTP must use `BatchEngine.generate`/`Evaluate.generate` exclusive paths.
   `BatchEngine.submit` raw native-MTP scheduling is intentionally rejected until
   per-slot draft/verify/cache scheduling is implemented.
-- Strict VL+MTP currently passes 27B JANG_4M, 27B MXFP4, 27B MXFP8, and 35B
-  MXFP8. 35B JANG_2K and 35B MXFP4 fail because the cold image row exhausts the
-  token budget; that is not accepted as a pass.
-- Multi-turn reasoning with MTP D3 still has visible-answer failures in
-  thinking mode and must be fixed without forced close tags or sampling clamps.
+- Strict VL+MTP currently passes the MXFP production rows when given sufficient
+  budget, including the 35B MXFP4 red/blue image row. 35B JANG_2K remains a
+  blocked profile.
+- Bundle-default stochastic exact-p/q over hybrid SSM now resolves to
+  `verifierMode=sequential_repair`; forcing the fast chunk verifier through
+  non-greedy hybrid rows reproduced a real 35B MXFP4 growing-chat failure.
+  Greedy chunk commit remains an explicit diagnostic/speed path where proven.
 
 ## Current Boundary
 
@@ -179,6 +184,21 @@ If a caller explicitly requests MTP while `canAutoLaunchMTP=false`, Osaurus
 should return a clear unsupported/error response. It must not silently route
 through a fake guard, force a hidden sampler fallback, cap output length, or
 pretend speculative MTP ran.
+
+Swift now exposes a full-evidence settings bridge for this policy:
+
+- `VMLXServerRuntimeSettings.resolvedMTPLaunch(configData:jangConfig:status:)`
+  combines server settings, raw `config.json`, optional `jang_config.json`, and
+  `MTPBundleStatus`. It blocks profiles with generic `speculative_verified`
+  status but no supported native-MTP recommendation, such as Qwen3.6 JANG_2K.
+- `VMLXServerRuntimeSettings.resolvedMTPDraftStrategy(...)` returns
+  `.nativeMTP(depth:)` only when the full-evidence launch decision is
+  `.speculative`.
+- `mtp.draftTokenLimit` must be positive when set. If it is below the
+  recommended depth, the resolver caps the native-MTP depth and records
+  `server_draft_token_limit=<n>` in the recommendation evidence.
+- `effectiveMTPLaunchMode(for:)` remains status-only and should not be the
+  Osaurus auto-launch gate by itself.
 
 ## Explicit Swift Runtime Activation
 

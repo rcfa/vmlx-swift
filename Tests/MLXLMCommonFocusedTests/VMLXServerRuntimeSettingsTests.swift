@@ -77,25 +77,27 @@ struct VMLXServerRuntimeSettingsTests {
 
     @Test("bundle top-k reaches speculative sampler probabilities")
     func bundleTopKReachesSpeculativeSamplerProbabilities() {
-        let settings = VMLXServerRuntimeSettings()
-        let bundle = GenerationConfigFile(
-            temperature: 1.0,
-            topP: 1.0,
-            topK: 2,
-            minP: 0.0,
-            doSample: true)
-        let params = settings.resolvedGenerateParameters(generationConfig: bundle)
-        let sampler = SpeculativeSamplingController(parameters: params)
-        let logits =
-            MLXArray([0.0 as Float, 4.0 as Float, 3.0 as Float, 1.0 as Float])[.newAxis, .ellipsis]
+        FocusedMLXTestSupport.withLock {
+            let settings = VMLXServerRuntimeSettings()
+            let bundle = GenerationConfigFile(
+                temperature: 1.0,
+                topP: 1.0,
+                topK: 2,
+                minP: 0.0,
+                doSample: true)
+            let params = settings.resolvedGenerateParameters(generationConfig: bundle)
+            let sampler = SpeculativeSamplingController(parameters: params)
+            let logits =
+                MLXArray([0.0 as Float, 4.0 as Float, 3.0 as Float, 1.0 as Float])[.newAxis, .ellipsis]
 
-        let probabilities = sampler.probabilities(logits: logits)[0].asArray(Float.self)
+            let probabilities = sampler.probabilities(logits: logits)[0].asArray(Float.self)
 
-        #expect(abs(probabilities[0]) < 1e-6)
-        #expect(probabilities[1] > 0)
-        #expect(probabilities[2] > 0)
-        #expect(abs(probabilities[3]) < 1e-6)
-        #expect(abs(probabilities.reduce(0, +) - 1) < 1e-5)
+            #expect(abs(probabilities[0]) < 1e-6)
+            #expect(probabilities[1] > 0)
+            #expect(probabilities[2] > 0)
+            #expect(abs(probabilities[3]) < 1e-6)
+            #expect(abs(probabilities.reduce(0, +) - 1) < 1e-5)
+        }
     }
 
     @Test("nil server sampling fields do not add fake guards")
@@ -158,6 +160,84 @@ struct VMLXServerRuntimeSettingsTests {
         #expect(settings.validationIssues(mtpStatus: verified).isEmpty)
     }
 
+    @Test("MTP launch resolution uses config policy and draft limit")
+    func mtpLaunchResolutionUsesConfigPolicyAndDraftLimit() {
+        let config = """
+        {
+          "model_type": "qwen3_5_moe",
+          "text_config": { "model_type": "qwen3_5_moe_text", "mtp_num_hidden_layers": 1 },
+          "quantization": { "mode": "mxfp8", "bits": 8 }
+        }
+        """.data(using: .utf8)!
+        let verified = MTPBundleStatus(
+            bundleHasMTP: true,
+            configuredLayers: 1,
+            tensorCount: 31,
+            mode: .speculativeVerified)
+        var settings = VMLXServerRuntimeSettings()
+        settings.mtp.draftTokenLimit = 2
+
+        let launch = settings.resolvedMTPLaunch(
+            configData: config,
+            jangConfig: nil,
+            status: verified)
+
+        #expect(launch.launchMode == .speculative)
+        #expect(launch.recommendation?.depth == 2)
+        #expect(launch.recommendation?.verifierMode == "sequential_repair")
+        #expect(launch.recommendation?.evidence.contains("server_draft_token_limit=2") == true)
+        if case .nativeMTP(let depth)? = settings.resolvedMTPDraftStrategy(
+            configData: config,
+            jangConfig: nil,
+            status: verified)
+        {
+            #expect(depth == 2)
+        } else {
+            Issue.record("Resolved MTP draft strategy did not carry the capped native depth")
+        }
+    }
+
+    @Test("MTP launch resolution blocks unsupported verified profiles")
+    func mtpLaunchResolutionBlocksUnsupportedVerifiedProfiles() {
+        let config = """
+        {
+          "model_type": "qwen3_5_moe",
+          "text_config": { "model_type": "qwen3_5_moe_text", "mtp_num_hidden_layers": 1 },
+          "quantization": { "mode": "affine", "bits": 2 }
+        }
+        """.data(using: .utf8)!
+        let verified = MTPBundleStatus(
+            bundleHasMTP: true,
+            configuredLayers: 1,
+            tensorCount: 44,
+            mode: .speculativeVerified)
+        var settings = VMLXServerRuntimeSettings()
+        settings.mtp.mode = .forceOn
+
+        let launch = settings.resolvedMTPLaunch(
+            configData: config,
+            jangConfig: JangConfig(
+                quantization: JangQuantization(
+                    method: "jang",
+                    profile: "JANG_2K",
+                    targetBits: 2,
+                    actualBits: 2,
+                    bitWidthsUsed: [2, 3, 6, 8]),
+                sourceModel: JangSourceModel(architecture: "qwen3_5_moe"),
+                architecture: JangArchitecture(hasMoE: true)),
+            status: verified)
+
+        #expect(settings.effectiveMTPLaunchMode(for: verified) == .speculative)
+        #expect(launch.launchMode == .blocked)
+        #expect(launch.recommendation == nil)
+        if settings.resolvedMTPDraftStrategy(
+            configData: config,
+            jangConfig: nil,
+            status: verified) != nil {
+            Issue.record("Unsupported verified JANG_2K profile should not resolve a native-MTP draft strategy")
+        }
+    }
+
     @Test("invalid sampling and sleep values report issues instead of clamping")
     func invalidSamplingAndSleepValuesReportIssuesInsteadOfClamping() {
         var settings = VMLXServerRuntimeSettings()
@@ -166,12 +246,14 @@ struct VMLXServerRuntimeSettingsTests {
         settings.generation.temperature = -1
         settings.generation.topP = 1.5
         settings.generation.repetitionPenalty = 0
+        settings.mtp.draftTokenLimit = 0
 
         let fields = Set(settings.validationIssues().map(\.field))
         #expect(fields.contains("power.deepSleepAfterSeconds"))
         #expect(fields.contains("generation.temperature"))
         #expect(fields.contains("generation.topP"))
         #expect(fields.contains("generation.repetitionPenalty"))
+        #expect(fields.contains("mtp.draftTokenLimit"))
     }
 
     @Test("server cache settings build concrete coordinator config")
