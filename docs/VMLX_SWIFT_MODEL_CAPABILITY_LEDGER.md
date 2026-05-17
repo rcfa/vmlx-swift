@@ -85,6 +85,10 @@ Focused fix artifacts live under `docs/local/swift-release-gates/dsv4-fixes/`.
 | `JANGQ/MiniMax-M2.7-Small-JANGTQ` | `minimax_m2` / `MiniMaxJANGTQModel` | `PARTIAL` | Loads in 9.7s; 3-turn chat is coherent; no loop; TQ disk round-trip passes; decode around 30.6 tok/s; tracked mmap buffers about 37 GB. | Thinking-on probe produced 483 chars reasoning and no visible answer. Activity Monitor-style footprint reaches about 38.2 GB, so this is not a low-RAM active-streaming pass. |
 | `Osaurus/ZAYA1-VL-8B-MXFP4` | `zaya1_vl` / `Zaya1VL` | `PASS` | Release turnmatrix passes config/template, production defaults cache OFF/ON, BatchEngine rows, VL batch chat, structured chat cache, and media-salt isolation. Video is reported `N-A` because ZAYA1-VL processor does not implement video input. | None for implemented image/text/cache surfaces; video remains a family capability gap, not a failed row. |
 | `JANGQ/ZAYA1-VL-8B-JANGTQ_K` | `zaya1_vl` / `Zaya1VL` | `PARTIAL` | Config/template, batch single/chat/disk restore/per-slot/TurboQuant B=2, and media-salt rows pass. Focused decoder test preserves nested `mxtq_bits.routed_expert` widths as gate/up=2 and down=4, and kernel probes match CPU dequant on sampled layer/expert rows. | Real coherence blocker remains: math/top-k evidence ranks the wrong first token before decoding, `prod_defaults` fails `7+8-11`, and structured VL cache exhausts the 192-token budget. |
+| `dealign.ai/Ling-2.6-flash-MXFP4-CRACK` | `bailing_hybrid` / `BailingHybridModel` | `PASS` | Current release turnmatrix passes config/template/MTP metadata, production defaults cache OFF/ON, BatchEngine single/chat/disk restore/concurrent/per-slot/TurboQuant B=2. Bundle defaults apply with `rep=nil`; disk L2 and SSM companion hits are recorded. | Generic paged prefix hit is `N-A` by topology because Ling/Bailing uses disk-backed restore. |
+| `JANGQ/Hy3-preview-JANGTQ` | `hy_v3` / `Hy3Model` | `PASS` | Current release turnmatrix passes config/template/MTP metadata, production defaults cache OFF/ON, paged cache hit, disk restore, B=2 concurrent, per-slot sampler, and TurboQuant B=2. Bundle defaults apply as `temp=0.900 topP=1.000 topK=-1 minP=0.000 rep=nil`. | Cold first prompt is slow; JANGTQ_K is tracked separately because it needs active expert streaming. |
+| `JANGQ/Hy3-preview-JANGTQ_K` | `hy_v3` / `Hy3Model` | `PARTIAL` | Eager load was killed, but active expert streaming now passes the short production matrix without a process-global model-dir override after `loadWeights` binds the loaded model directory. It skips 91,008 per-expert tensors, indexes 79 layers x 192 experts, and passes 7/7 at about 6.2 GiB RSS. | Speed remains blocked at about 1.4 tok/s. This is correctness/low-footprint proof only; multi-model active streaming still needs a per-loaded-model store before Osaurus exposes simultaneous JANGTQ_K sessions. |
+| `dealign.ai/Gemma-4-26B-A4B-it-JANG_4M-CRACK` | `gemma4` / `Gemma4` | `PARTIAL` | Text release turnmatrix passes config/template, cache OFF/ON `BENCH_PROD` 7/7, BatchEngine single/chat/disk restore/concurrent/per-slot/TurboQuant B=2. Structured VL chat-cache row now passes: image A cold, same-image replay disk hit `308/308`, different-image miss, and text-only follow-up stays grounded. | Long-budget Harmony reasoning and live tool-call schema remain open; GPT-OSS is parser-contract only because no local GPT-OSS bundle is present. |
 
 ## Local Bundle Inventory
 
@@ -96,8 +100,8 @@ weights.
 | --- | ---: | --- | --- | --- | --- | --- |
 | `JANGQ/DeepSeek-V4-Flash-JANGTQ-K` | 80G | `deepseek_v4` | yes | fallback/native DSV4 | `PASS` - top-level tools, Osaurus-sized tools, thinking on/off, and max preface render | `PARTIAL` |
 | `JANGQ/DeepSeek-V4-Flash-JANGTQ2` | 74G | `deepseek_v4` | yes | fallback/native DSV4 | `PASS` - top-level tools, Osaurus-sized tools, thinking on/off, and max preface render | `PARTIAL` |
-| `JANGQ/Hy3-preview-JANGTQ` | 79G | `hy_v3` | yes | file | `PASS` | `TODO` |
-| `JANGQ/Hy3-preview-JANGTQ_K` | 102G | `hy_v3` | yes | file | `PASS` | `TODO` |
+| `JANGQ/Hy3-preview-JANGTQ` | 79G | `hy_v3` | yes | file | `PASS` | `PASS` |
+| `JANGQ/Hy3-preview-JANGTQ_K` | 102G | `hy_v3` | yes | file | `PASS` | `PARTIAL` |
 | `JANGQ/Kimi-K2.6-JANGTQ_K` | 328G | `kimi_k25` | yes | file | `PASS` - `tojson(separators=(',', ':'))` and `enable_thinking`/`thinking` alias render through tools and thinking-off rows | `TODO` |
 | `JANGQ/Kimi-K2.6-Small-JANGTQ` | 143G | `kimi_k25` | yes | file | `PASS` - `tojson(separators=(',', ':'))` and `enable_thinking`/`thinking` alias render through tools and thinking-off rows | `TODO` |
 | `JANGQ/Laguna-XS.2-JANGTQ` | 9.4G | `laguna` | yes | file | `PASS` | `PASS` |
@@ -111,7 +115,7 @@ weights.
 | `Tencent/Hy3-preview` | 557G | `hy_v3` | no | file | `PASS` | `TODO` |
 | `dealign.ai/Gemma-4-26B-A4B-it-JANG_4M-CRACK` | 15G | `gemma4` | no | file | `PASS` | `PARTIAL` |
 | `dealign.ai/Ling-2.6-flash-JANGTQ2-CRACK` | 29G | `bailing_hybrid` | yes | file | `PASS` | `PASS` |
-| `dealign.ai/Ling-2.6-flash-MXFP4-CRACK` | 63G | `bailing_hybrid` | no | file | `PASS` | `TODO` |
+| `dealign.ai/Ling-2.6-flash-MXFP4-CRACK` | 63G | `bailing_hybrid` | no | file | `PASS` | `PASS` |
 | `dealign.ai/MiniMax-M2.7-JANGTQ_K-CRACK` | 74G | `minimax_m2` | yes | file | `PASS` | `TODO` |
 | `dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK` | 12G | `nemotron_h` | yes | file | `PASS` | `TODO` |
 | `dealign.ai/Nemotron-Omni-Nano-JANGTQ4-CRACK` | 19G | `nemotron_h` | yes | file | `PASS` | `TODO` |
@@ -255,14 +259,17 @@ weights.
 - Template/reasoning/tools: template smoke passes; Bailing/Ling template context
   maps thinking controls; tool parser maps to GLM/deepseek-style format.
 - Current status: `docs/local/live-model-matrix/20260517T170008Z_release_turnmatrix_ling_jangtq2/REPORT.md`
-  passes all runnable rows for the JANGTQ2 CRACK bundle: config/template, MTP
-  metadata, production defaults cache OFF/ON, BatchEngine single/chat, disk
-  restore, B=2 concurrent, B=2 per-slot sampler, and TurboQuant-KV B=2. Bundle
-  defaults resolve to `temp=0.600`, `topP=1.000`, `topK=0`, `minP=0.000`,
-  `rep=nil`; release decode telemetry is about 37-39 tok/s. Cache ON records
-  disk L2 and SSM hits with `pagedIncompatible=true`; generic paged prefix hit
-  is `N-A`.
-- Boundary: `Ling-2.6-flash-MXFP4-CRACK` still needs its own live turnmatrix.
+  and `docs/local/live-model-matrix/20260517T180538Z_release_turnmatrix_ling_mxfp4_current/REPORT.md`
+  pass all runnable rows for the JANGTQ2 CRACK and MXFP4 CRACK bundles:
+  config/template, MTP metadata, production defaults cache OFF/ON, BatchEngine
+  single/chat, disk restore, B=2 concurrent, B=2 per-slot sampler, and
+  TurboQuant-KV B=2. Bundle defaults resolve to `temp=0.600`, `topP=1.000`,
+  `topK=0`, `minP=0.000`, `rep=nil`; JANGTQ2 release decode telemetry is about
+  37-39 tok/s and MXFP4 is about 9.7-10.1 tok/s. Cache ON records disk L2 and
+  SSM hits with `pagedIncompatible=true`; generic paged prefix hit is `N-A`.
+- Boundary: Ling/Bailing is current-text-matrix green for JANGTQ2 and MXFP4.
+  Native MTP remains fail-closed until a family-specific verified runtime
+  profile exists.
 
 ### Gemma 4
 
@@ -277,8 +284,12 @@ weights.
   `BENCH_PROD` 7/7, BatchEngine single/chat, disk restore, B=2 concurrent,
   B=2 per-slot sampler, and TurboQuant-KV B=2 isolation. Cache ON is
   `pagedIncompatible=true`, so paged counters remain zero by design while disk
-  L2 records a real hit/store row. Remaining open rows are long-budget harmony
-  reasoning, live tool-call schema, and any VL-specific proof.
+  L2 records a real hit/store row. The live structured VL cache row
+  `docs/local/live-model-matrix/20260517T210417Z_gemma4_vl_chat_cache/gemma4_vl_chat_cache.out`
+  passes with image A cold, same-image replay disk hit `308/308`, different
+  image miss, and a grounded text-only follow-up; peak footprint in that row is
+  about 30.6 GB. Remaining open rows are long-budget Harmony reasoning and live
+  tool-call schema.
 
 ### Nemotron Omni / Nemotron H
 
@@ -326,11 +337,22 @@ weights.
 
 - Local bundles: JANGTQ, JANGTQ_K, full Tencent BF16.
 - Swift dispatch: `hy_v3` through `Hy3Model`.
-- Cache topology: standard generation cache plus JANGTQ sidecar on JANGQ rows.
-  Needs live cache-family inspection.
+- Cache topology: standard generation cache plus JANGTQ sidecar on JANGQ rows;
+  JANGTQ is paged-compatible in the current row, while JANGTQ_K requires active
+  expert streaming to avoid full eager materialization.
 - Template/reasoning/tools: template smoke passes; reasoning/parser maps to Hy3
   / Hunyuan-style behavior.
-- Current status: no live row in this snapshot.
+- Current status: `docs/local/live-model-matrix/20260517T180931Z_release_turnmatrix_hy3_jangtq_current/REPORT.md`
+  passes all runnable rows for `Hy3-preview-JANGTQ`: config/template/MTP
+  metadata, production defaults cache OFF/ON, paged cache hit, disk restore,
+  B=2 concurrent, per-slot sampler, and TurboQuant-KV B=2 isolation. The
+  `Hy3-preview-JANGTQ_K` eager row under
+  `docs/local/live-model-matrix/20260517T182455Z_release_turnmatrix_hy3_jangtqk_current/`
+  was killed before load completion, but
+  `docs/local/live-model-matrix/20260517T184132Z_hy3_jangtqk_streaming_autodir_after_fix/`
+  passes 7/7 through active expert streaming at about 6.2 GiB RSS after
+  `loadWeights` binds the loaded model directory. JANGTQ_K remains speed-blocked
+  at about 1.4 tok/s.
 
 ### Laguna XS.2
 

@@ -847,8 +847,28 @@ turnmatrix:
   routed through the disk-backed paged-incompatible cache path.
 
 This clears the current Gemma 4 text multi-turn/cache/batching row. It does not
-yet close separate long-budget harmony reasoning, live tool-call schema, or VL
-rows.
+yet close separate long-budget harmony reasoning or live tool-call schema rows.
+The image/text VL cache row is now covered by the structured chat-cache artifact
+below.
+
+Fresh Gemma 4 VL structured chat-cache artifact:
+
+```text
+docs/local/live-model-matrix/20260517T210417Z_gemma4_vl_chat_cache/
+```
+
+`BENCH_VL_CHAT_CACHE=1` passes on the current release `RunBench` binary:
+
+- model loads as `Gemma4` with `Gemma4Processor`;
+- cache coordinator selects the disk-backed path-dependent restore topology;
+- image A cold turn generates grounded visible output:
+  "orange at the top to blue at the bottom";
+- same image replay hits the coordinator with `HIT disk 308/308` and TTFT drops
+  from `609ms` to `32ms`;
+- different image probe misses correctly;
+- text-only follow-up remains grounded in the earlier image colors and leaks no
+  raw `<think>`, `<image>`, or media markers;
+- `/usr/bin/time -l` records peak memory footprint `30617874576` bytes.
 
 Additional Harmony parser follow-up:
 
@@ -911,11 +931,11 @@ docs/local/production-readiness/20260517T_laguna_mistral_gemma4_active_contracts
   absent from `.chunk`, the output is coherent visible README guidance, and
   generation stops through the normal path.
 
-Boundary: the Gemma 4 live smoke did not elicit reasoning deltas on that prompt,
-and there is no local GPT-OSS bundle in `~/models` for a live GPT-OSS decode row.
-The GPT-OSS claim is therefore parser-contract proof only, not a model-runtime
-production pass. Long-budget Gemma 4 thinking, live Gemma 4 tool-call schema,
-and Gemma 4 VL remain separate rows.
+Boundary: the Gemma 4 live Harmony smoke did not elicit reasoning deltas on
+that prompt, and there is no local GPT-OSS bundle in `~/models` for a live
+GPT-OSS decode row. The GPT-OSS claim is therefore parser-contract proof only,
+not a model-runtime production pass. Long-budget Gemma 4 thinking and live
+Gemma 4 tool-call schema remain separate rows.
 
 ## Nemotron Omni JANGTQ Release Matrix - 2026-05-17
 
