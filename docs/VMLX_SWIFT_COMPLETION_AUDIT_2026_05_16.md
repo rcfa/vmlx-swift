@@ -17,9 +17,9 @@ Current pushed branch state:
   (`feat(runtime): add exact native mtp sampling`)
 - Current worktree is not clean because another agent is working on Flux-native
   Swift files. The dirty Flux files are excluded from this audit's commit scope.
-- Current non-MTP focus: DSV4 Flash, Nemotron Omni, ZAYA1-VL, cache/template
-  correctness, and live coherent multi-turn rows. Native MTP is parked for this
-  pass.
+- Current focus: DSV4 Flash, Nemotron Omni, ZAYA1-VL, cache/template
+  correctness, live coherent multi-turn rows, and explicit-only Qwen3.6 native
+  MTP readiness. Native MTP is not auto-launch eligible yet.
 
 ## Objective Restated as Deliverables
 
@@ -57,9 +57,9 @@ The package is complete only when all of these are true:
 | Local model inventory. | `docs/VMLX_LIVE_MODEL_MATRIX_2026_05_15.md`; local `find ~/models -maxdepth 4 -name config.json` shows DSV4, Hy3, Kimi, Laguna, MiniMax, ZAYA/ZAYA-VL, Qwen3.5/3.6, Gemma4, Ling, and Nemotron Omni families. | static-proven |
 | Live infer matrix for installed models. | `docs/local/live-model-matrix/20260515Tinfer-under20/REPORT.md` and `status.tsv`. Many under-20GB rows passed; several rows failed or were skipped. | partial |
 | MTP activation must use real tensor evidence, not names. | `9b1b254`; `docs/VMLX_SWIFT_MTP_OSAURUS_WIRING_2026_05_15.md`; local fail-closed artifact `docs/local/native-mtp-qwen36-20260515/jang4m-crack-native-mtp-denied-postrevert.log`. | live-proven |
-| MTP depth-3 production acceleration. | Current D3 rows prove recursive draft plus accepted-prefix cache commit, but remain below the 50 tok/s production target. Small-M verifier tuning is still open. | open |
+| MTP depth-3 production acceleration. | Current D3 rows prove recursive draft plus accepted-prefix cache commit, but remain below the current 45 tok/s acceptance threshold and older 50 tok/s target. Small-M verifier tuning is still open. | open |
 | Qwen3.6 MTP coherency and token/s. | D1 artifacts `jang4m-mtp-artifact-native-d1-postrevert-96.log` and `mx-mtp-artifact-native-d1-postrevert-96.log`: coherent, `30.2` and `34.0 tok/s` short rows. D3 prefix-commit artifacts under `docs/local/native-mtp-qwen36-20260516-d3-prefix-commit/`: coherent, `prefixCommit>0`, `rollbackRepair=0`, no loops. | live-proven for explicit MTP diagnostic rows |
-| Qwen3.6 50 tok/s target. | Not achieved. Current rows are below target and the rejected verifier argmax experiment was not committed. | open |
+| Qwen3.6 native-MTP speed target. | Not achieved. Current rows are below the current 45 tok/s acceptance threshold and older 50 tok/s target; the rejected verifier argmax experiment was not committed. | open |
 | DSV4 native encoder, CSA/HSA/SWA, long context, vector drift. | New non-MTP DSV4 JANGTQ-K rows under `docs/local/live-model-matrix/20260516Tdsv4-nonmtp/` prove config/template, three-turn recall, reasoning off/on/max with rep=1.0, a 5.5k-token semantic recall row, and DSV4 paged-incompatible salted disk-cache restore. A 16k-token long-context row currently fails with Metal OOM, and the ds4 official vector fixture is not present locally. | partial/failing |
 | Prefix cache OFF/ON and cache hit proof. | Existing matrix/harness describes rows; not complete for every topology and model family. | open |
 | Paged cache OFF/ON. | Existing focused tests and some model rows exist, but no package-wide matrix artifact proves all relevant architectures. | open |
@@ -371,6 +371,8 @@ Live-proven:
 - Qwen3.6 MTP proof targets are
   `/Users/eric/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP` and
   `/Users/eric/models/JANGQ/Qwen3.6-27B-MXFP4-MTP`.
+  The 35B MoE/VL follow-up target copied from `erics-m5-max2.local` is
+  `/Users/eric/models/JANGQ/Qwen3.6-35B-A3B-MXFP4-MTP`.
 - Qwen3.6 JANG_4M-MTP and MXFP4-MTP D1 smokes are coherent with telemetry.
 - Qwen3.6 D3 prefix-commit smokes are coherent on both proof targets:
   `docs/local/native-mtp-qwen36-20260516-d3-prefix-commit/jang4m-mtp-d3-prefix-commit-no-checkpoint-256.log`
@@ -383,7 +385,7 @@ Live-proven:
 - `BatchEngine.generate` now honors `DraftStrategy.nativeMTP(depth:)` through
   the exclusive solo native-MTP lane instead of silently falling through to
   ordinary AR batching. Focused test proof:
-  `MTPRuntimeFocusedTests` passes 14/14, including active native-MTP dispatch,
+  `MTPRuntimeFocusedTests` passes 15/15, including active native-MTP dispatch,
   missing-head fail-closed dispatch, and `BatchEngine.submit` rejection for raw
   batched native-MTP. Real bundle proof:
   `docs/local/live-model-matrix/20260516Tbatch-mtp-dispatch/Qwen3.6-27B-JANG_4M-MTP_batch_native_mtp_d3.out`
@@ -395,6 +397,38 @@ Live-proven:
   validation, text-only media-cache suffix policy, 2D/3D JANGTQ matmul inputs,
   3D/4D Hadamard shape preservation, and TurboQuant-KV Hadamard rank-four
   shape preservation.
+- Qwen3.6 VLM native-MTP verifier now routes through the same MRoPE
+  continuation-state resolver as normal Qwen3VL decode instead of using raw
+  text-only cache offsets after media prefill. This is a real position-ID fix,
+  not a sampler/template guard. Focused artifact:
+  `docs/local/live-model-matrix/20260516Tqwen35-vlm-mrope-mtp/mlxlmcommon_focused_after_qwen35_vlm_moe_sidecar.out`
+  passes 81/81 tests across 13 suites, including the new
+  `Qwen3.6 VLM native MTP verifier reuses MRoPE continuation state` and
+  `Qwen3.6 VLM native MTP decoder uses sparse MoE for MoE sidecars` rows plus
+  Hadamard/matmul/media-salt/cache-topology/no-hidden-guard rows. No-load
+  tensor-key evidence for the real proof targets is in
+  `docs/local/live-model-matrix/20260516Tqwen35-vlm-mrope-mtp/qwen36_mtp_vl_tensor_census.json`:
+  JANG_4M-MTP has 31 `mtp.*` entries and 333 `vision_tower.*` entries;
+  27B MXFP4-MTP has 23 MTP entries and 333 vision entries; 35B A3B MXFP4-MTP
+  has 42 MTP entries, 333 vision entries, `model_type=qwen3_5_moe`, and
+  `text_model_type=qwen3_5_moe_text`. The optional real-bundle inspector rows
+  also pass for all three paths in the same artifact directory.
+- Qwen3.6 35B A3B MXFP4-MTP was transferred from
+  `erics-m5-max2.local:/Volumes/eric/models/JANGQ/Qwen3.6-35B-A3B-MXFP4-MTP`
+  to `/Users/eric/models/JANGQ/Qwen3.6-35B-A3B-MXFP4-MTP`. A dry-run
+  `rsync --delete --itemize-changes` reported no differences after transfer.
+  The artifact has 37 local regular files, 22G on disk, and
+  `runtime.total_weight_bytes=23115460648`.
+- Native MTP activation now recognizes `qwen3_5_moe` and
+  `qwen3_5_moe_text`, but still requires `VMLINUX_NATIVE_MTP=1` and real MTP
+  tensor evidence. The VLM native-MTP decoder now instantiates
+  `SparseMoeBlock` for MoE MTP sidecars instead of a dense MLP, so the 35B
+  `mtp.layers.0.mlp.switch_mlp.*` / `shared_expert.*` layout matches the Swift
+  module tree. Focused artifact:
+  `docs/local/live-model-matrix/20260516Tqwen35-vlm-mrope-mtp/mlxlmcommon_focused_after_qwen35_vlm_moe_sidecar.out`
+  passes 81/81 tests across 13 suites. The 35B row is not a live load/generate
+  pass yet; it is a tensor-evidence, activation, and module-layout readiness
+  pass before the heavy live smoke.
 - The broader active focused target was rerun after the ZAYA template fix:
   `docs/local/live-model-matrix/20260516Tshape-template-audit/mlxlmcommon_focused_target_after_zaya_fix.out`
   passes 78/78 tests across 13 suites. Covered surfaces include CacheCoordinator
@@ -412,12 +446,14 @@ Live-proven:
 
 Not yet complete:
 
-- Production-speed depth-3 acceleration near the 50 tok/s target.
+- Production-speed depth-3 acceleration at or above the current 45 tok/s
+  threshold.
 - Compiled/tuned small-M verifier.
 - True multi-slot native-MTP scheduling with paged KV/block-L2/SSM companion
   cache. Current `BatchEngine.generate` native-MTP support is an exclusive solo
   lane; `BatchEngine.submit` intentionally fails closed.
 - MTP with VL multi-turn/media salt/cache proof.
+- 35B A3B MXFP4-MTP live load/generate/coherency/token-s proof.
 - Auto-launch eligibility for Osaurus.
 
 ## Immediate Next Gates

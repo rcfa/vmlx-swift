@@ -1122,7 +1122,7 @@ enum Qwen35Language {
         @ModuleInfo(key: "self_attn") var selfAttn: Attention
         @ModuleInfo(key: "input_layernorm") var inputLayerNorm: RMSNorm
         @ModuleInfo(key: "post_attention_layernorm") var postAttentionLayerNorm: RMSNorm
-        @ModuleInfo(key: "mlp") var mlp: MLP
+        @ModuleInfo(key: "mlp") var mlp: Module
 
         init(_ args: Qwen35Configuration.TextConfiguration) {
             _selfAttn.wrappedValue = Attention(args)
@@ -1130,9 +1130,13 @@ enum Qwen35Language {
                 dimensions: args.hiddenSize, eps: args.rmsNormEps)
             _postAttentionLayerNorm.wrappedValue = RMSNorm(
                 dimensions: args.hiddenSize, eps: args.rmsNormEps)
-            _mlp.wrappedValue = MLP(
-                dimensions: args.hiddenSize,
-                hiddenDimensions: args.intermediateSize)
+            if args.numExperts > 0 {
+                _mlp.wrappedValue = SparseMoeBlock(args)
+            } else {
+                _mlp.wrappedValue = MLP(
+                    dimensions: args.hiddenSize,
+                    hiddenDimensions: args.intermediateSize)
+            }
             super.init()
         }
 
@@ -1147,7 +1151,7 @@ enum Qwen35Language {
                 mask: attentionMask,
                 cache: cache,
                 positionIds: positionIds)
-            return h + mlp(postAttentionLayerNorm(h))
+            return h + (mlp as! UnaryLayer)(postAttentionLayerNorm(h))
         }
     }
 
@@ -1407,17 +1411,16 @@ enum Qwen35Language {
             ropeDeltas = nil
         }
 
-        func callAsFunction(
-            _ inputs: MLXArray,
-            inputsEmbeds: MLXArray? = nil,
-            cache: [KVCache?]? = nil,
-            mask: MLXArray? = nil,
-            positionIds providedPositionIds: MLXArray? = nil,
-            pixelValues: MLXArray? = nil,
-            imageGridTHW: [THW]? = nil,
-            videoGridTHW: [THW]? = nil
-        ) -> LMOutput {
-            if pixelValues != nil {
+        private func resolvedPositionIds(
+            inputs: MLXArray,
+            cache: [KVCache?]?,
+            mask: MLXArray?,
+            providedPositionIds: MLXArray?,
+            imageGridTHW: [THW]?,
+            videoGridTHW: [THW]?,
+            resetForMedia: Bool
+        ) -> MLXArray? {
+            if resetForMedia {
                 precomputedPositionIds = nil
                 ropeDeltas = nil
             }
@@ -1483,6 +1486,28 @@ enum Qwen35Language {
                 }
             }
 
+            return positionIds
+        }
+
+        func callAsFunction(
+            _ inputs: MLXArray,
+            inputsEmbeds: MLXArray? = nil,
+            cache: [KVCache?]? = nil,
+            mask: MLXArray? = nil,
+            positionIds providedPositionIds: MLXArray? = nil,
+            pixelValues: MLXArray? = nil,
+            imageGridTHW: [THW]? = nil,
+            videoGridTHW: [THW]? = nil
+        ) -> LMOutput {
+            let positionIds = resolvedPositionIds(
+                inputs: inputs,
+                cache: cache,
+                mask: mask,
+                providedPositionIds: providedPositionIds,
+                imageGridTHW: imageGridTHW,
+                videoGridTHW: videoGridTHW,
+                resetForMedia: pixelValues != nil)
+
             var out = model(
                 inputs,
                 inputsEmbeds: inputsEmbeds,
@@ -1540,9 +1565,22 @@ enum Qwen35Language {
             recordPrefixCommitStates: Bool = false
         ) -> NativeMTPForwardResult {
             let cacheOpt: [KVCache?]? = cache?.map { $0 as KVCache? }
+            // Native MTP enters this path after VLM `prepare` has already run
+            // media prefill through `callAsFunction`, which seeds Qwen3VL
+            // `ropeDeltas`. Reuse that state for verifier/bridge positions so
+            // image/video MRoPE continuation matches normal decode.
+            let positionIds = resolvedPositionIds(
+                inputs: inputs,
+                cache: cacheOpt,
+                mask: nil,
+                providedPositionIds: nil,
+                imageGridTHW: nil,
+                videoGridTHW: nil,
+                resetForMedia: false)
             let hidden = model.callAsFunctionPreNorm(
                 inputs,
                 cache: cacheOpt,
+                positionIds: positionIds,
                 recordPrefixCommitStates: recordPrefixCommitStates)
             let logits: MLXArray
             if let lmHead {

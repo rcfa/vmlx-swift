@@ -110,6 +110,35 @@ struct MTPRuntimeFocusedTests {
         #expect(textConfig["num_nextn_predict_layers"] as? Int == 3)
     }
 
+    @Test("native MTP activation supports Qwen3.5 MoE only with explicit tensor evidence")
+    func nativeMTPActivationSupportsQwen35MoEWithTensorEvidence() throws {
+        setenv("VMLINUX_NATIVE_MTP", "1", 1)
+        defer { unsetenv("VMLINUX_NATIVE_MTP") }
+
+        let config = """
+        {
+          "model_type": "qwen3_5_moe",
+          "text_config": {
+            "model_type": "qwen3_5_moe_text",
+            "mtp_num_hidden_layers": 1
+          }
+        }
+        """.data(using: .utf8)!
+        let status = MTPBundleStatus(
+            bundleHasMTP: true,
+            configuredLayers: 1,
+            tensorCount: 42,
+            visionTensorCount: 333,
+            mode: .preservedEnabled)
+
+        let shouldLoad = try NativeMTPActivation.shouldLoadNativeMTPWeights(
+            configData: config,
+            baseModelType: "qwen3_5_moe",
+            status: status)
+
+        #expect(shouldLoad)
+    }
+
     @Test("JANG MTP metadata without tensor evidence is not treated as an MTP bundle")
     func jangMTPMetadataWithoutTensorEvidenceIsMissingWeights() throws {
         let root = try makeTemporaryBundle(name: "named-mtp-but-no-mtp-tensors")

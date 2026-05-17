@@ -73,6 +73,25 @@ struct VLShapeGuardFocusedTests {
         #expect(source.contains("Need >= 3D. Falling back to fresh prefill."))
     }
 
+    @Test("Qwen3.6 VLM native MTP verifier reuses MRoPE continuation state")
+    func qwen35VLMNativeMTPVerifierUsesMRoPEContinuationState() throws {
+        let source = try Self.source("Libraries/MLXVLM/Models/Qwen35.swift")
+        #expect(source.contains("private func resolvedPositionIds("))
+        #expect(source.contains("ropeDeltas = deltas"))
+        #expect(source.contains("delta = delta + ropeDeltas.asType(.int32)"))
+        #expect(source.contains("let positionIds = resolvedPositionIds("))
+        #expect(source.contains("model.callAsFunctionPreNorm(\n                inputs,\n                cache: cacheOpt,\n                positionIds: positionIds,"))
+    }
+
+    @Test("Qwen3.6 VLM native MTP decoder uses sparse MoE for MoE sidecars")
+    func qwen35VLMNativeMTPDecoderUsesSparseMoEForMoESidecars() throws {
+        let source = try Self.source("Libraries/MLXVLM/Models/Qwen35.swift")
+        #expect(source.contains("final class MTPDecoderLayer"))
+        #expect(source.contains("@ModuleInfo(key: \"mlp\") var mlp: Module"))
+        #expect(source.contains("if args.numExperts > 0 {\n                _mlp.wrappedValue = SparseMoeBlock(args)"))
+        #expect(source.contains("return h + (mlp as! UnaryLayer)(postAttentionLayerNorm(h))"))
+    }
+
     @Test("ZAYA1-VL JANGTQ-K nested routed bits preserve gate-up and down widths")
     func zaya1VLNestedRoutedBitsDecode() throws {
         let config = try JSONDecoder.json5().decode(

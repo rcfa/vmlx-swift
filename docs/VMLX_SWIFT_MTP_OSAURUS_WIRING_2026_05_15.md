@@ -32,11 +32,13 @@ runtime work are:
 
 - `/Users/eric/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP`
 - `/Users/eric/models/JANGQ/Qwen3.6-27B-MXFP4-MTP`
+- `/Users/eric/models/JANGQ/Qwen3.6-35B-A3B-MXFP4-MTP`
 
-Use both as examples in probes and docs. JANG_4M proves the JANG affine/mixed
-format path, and MXFP4 proves the native MXFP4 path. Do not substitute CRACK
-artifacts when testing MTP; the CRACK variants intentionally do not carry MTP
-tensors.
+Use the 27B JANG_4M and 27B MXFP4 bundles as the first live probes: JANG_4M
+proves the JANG affine/mixed format path, and MXFP4 proves the native MXFP4
+path. Use the 35B A3B MXFP4 bundle for MoE/VL native-MTP module-layout work.
+Do not substitute CRACK artifacts when testing MTP; the CRACK variants
+intentionally do not carry MTP tensors.
 
 The verified JANG_4M MTP bundle has these properties:
 
@@ -50,6 +52,25 @@ The verified JANG_4M MTP bundle has these properties:
 - JANG Python probe loaded it with `Qwen3VLProcessor`.
 - Text probe answered `2 + 2` as `4`.
 - Image probe on a generated red square answered `red`.
+
+The copied 35B A3B MXFP4-MTP bundle has these properties:
+
+- local path: `/Users/eric/models/JANGQ/Qwen3.6-35B-A3B-MXFP4-MTP`
+- copied from:
+  `erics-m5-max2.local:/Volumes/eric/models/JANGQ/Qwen3.6-35B-A3B-MXFP4-MTP`
+- 37 local regular files, 22G on disk.
+- `model_type=qwen3_5_moe`
+- `text_config.model_type=qwen3_5_moe_text`
+- `text_config.num_hidden_layers=40`
+- `text_config.mtp_num_hidden_layers=1`
+- `runtime.total_weight_bytes=23115460648`
+- `runtime.total_weight_gb=21.53`
+- `runtime.mtp_mode=preserved_enabled`
+- 42 MTP tensor entries and 333 vision tensor entries.
+- MTP MoE tensors are already split under
+  `mtp.layers.0.mlp.switch_mlp.{gate,up,down}_proj.*` plus
+  `shared_expert.*`; the Swift VLM MTP module must instantiate a sparse MoE
+  MTP layer for this artifact, not a dense MLP.
 
 That proves the artifact preserves MTP and VL. Swift must still distinguish
 artifact preservation from runtime readiness:
@@ -143,7 +164,7 @@ The package has an opt-in Qwen3.6 native-MTP path behind
 not inferred from model names and is not inferred from `mtp_num_hidden_layers`
 alone. It requires:
 
-- supported Qwen3.5/Qwen3.6 text or VL model type;
+- supported Qwen3.5/Qwen3.6 text, VL, or Qwen3.5 MoE model type;
 - complete MTP tensor evidence from the index or safetensors headers;
 - an active Swift model exposing `NativeMTPModel`;
 - explicit runtime selection;
@@ -165,6 +186,14 @@ and trims rejected attention-KV suffixes, so rejected draft state is not kept in
 the backbone cache. This is real D3 prefix-commit semantics, but it is not yet a
 production speed path because the small-M verifier and prefix-state capture are
 still eager Swift/MLX work rather than a tuned compiled verifier kernel.
+
+Qwen3.6 35B A3B MXFP4-MTP is allowed through the explicit activation check only
+because its config reports `qwen3_5_moe` / `qwen3_5_moe_text` and its index has
+real MTP tensor evidence. This is not name-based activation. The VLM native-MTP
+decoder now uses `SparseMoeBlock` when `numExperts > 0`, which matches the
+35B sidecar's `switch_mlp` and `shared_expert` tensor layout. It has not yet
+been promoted to live production proof; load/generate/coherency/token-s and
+cache/VL multi-turn rows are still required.
 
 ## Clean-Room Runtime Comparison - 2026-05-16
 
@@ -248,7 +277,7 @@ Live 2026-05-16 BatchEngine dispatch artifacts under
 
 Focused test proof for the same dispatch contract:
 
-- `MTPRuntimeFocusedTests` passes 14/14.
+- `MTPRuntimeFocusedTests` passes 15/15.
 - `BatchEngine.generate` with active native MTP reaches the real
   `NativeMTPTokenIterator` and emits native-MTP telemetry.
 - `BatchEngine.generate` with a requested native-MTP strategy but no active MTP
@@ -257,12 +286,46 @@ Focused test proof for the same dispatch contract:
   ordinary batched decode. Raw multi-slot native-MTP scheduling is not
   implemented yet.
 
-The 50 tok/s Qwen3.6 27B target is not achieved by the current Swift path.
-The D3 path is correct enough to keep as an explicit diagnostic, including
-stochastic exact p/q acceptance, but it must not auto-launch as a production
-acceleration mode. The attempted verifier argmax vectorization was rejected
-after live rows were slower, so it is not part of the implementation. The next
-real speed work is:
+2026-05-16 Qwen3.6 VLM/MRoPE follow-up:
+
+- `Libraries/MLXVLM/Models/Qwen35.swift` now factors normal Qwen3VL position-ID
+  resolution into one helper and uses it from the native-MTP backbone verifier.
+  After image or video prefill, verifier and bridge forwards therefore use the
+  same `ropeDeltas`/precomputed-position continuation state as normal decode
+  instead of falling back to raw text-only cache offsets. This is required for
+  2D image and 3D video MRoPE correctness.
+- Focused proof:
+  `docs/local/live-model-matrix/20260516Tqwen35-vlm-mrope-mtp/mlxlmcommon_focused_after_qwen35_vlm_moe_sidecar.out`
+  passes 81/81 tests across 13 suites, including the new
+  `Qwen3.6 VLM native MTP verifier reuses MRoPE continuation state` and
+  `Qwen3.6 VLM native MTP decoder uses sparse MoE for MoE sidecars` rows plus
+  Hadamard 3D/4D, JANGTQ rank-2/rank-3 matmul, media salt, hybrid cache,
+  DSV4 cache topology, and no-hidden-guard rows.
+- No-load tensor-key census:
+  `docs/local/live-model-matrix/20260516Tqwen35-vlm-mrope-mtp/qwen36_mtp_vl_tensor_census.json`
+  records `/Users/eric/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP` with 31 MTP
+  tensor entries and 333 vision entries, and
+  `/Users/eric/models/JANGQ/Qwen3.6-27B-MXFP4-MTP` with 23 MTP entries and 333
+  vision entries, and
+  `/Users/eric/models/JANGQ/Qwen3.6-35B-A3B-MXFP4-MTP` with 42 MTP entries,
+  333 vision entries, `qwen3_5_moe`, and `qwen3_5_moe_text`. The optional
+  real-bundle inspector tests also pass for all three paths in the same
+  artifact directory.
+- 35B transfer proof: `du -sh` reports `22G`, the local folder has 37 regular
+  files, and dry-run `rsync --delete --itemize-changes` from
+  `erics-m5-max2.local` reported no remaining differences.
+- MoE/VL native-MTP readiness proof:
+  `docs/local/live-model-matrix/20260516Tqwen35-vlm-mrope-mtp/mlxlmcommon_focused_after_qwen35_vlm_moe_sidecar.out`
+  passes 81/81 tests across 13 suites after enabling `qwen3_5_moe` /
+  `qwen3_5_moe_text` in the explicit activation allowlist and changing the VLM
+  MTP decoder to instantiate `SparseMoeBlock` for MoE sidecars.
+
+The current 45 tok/s acceptance threshold, and the older 50 tok/s Qwen3.6 27B
+target, are not achieved by the current Swift path. The D3 path is correct
+enough to keep as an explicit diagnostic, including stochastic exact p/q
+acceptance, but it must not auto-launch as a production acceleration mode. The
+attempted verifier argmax vectorization was rejected after live rows were
+slower, so it is not part of the implementation. The next real speed work is:
 
 1. recursive MTP draft returns logits and hidden state for `d1`, `d2`, and
    `d3` without recomputing state traces;
@@ -311,19 +374,22 @@ backbone commit, variable `0...depth` accepted-prefix commit, and a compiled or
 tuned small-M verifier hot path before any speed claim is accepted.
 
 Current runtime state: D3 MLLM native-MTP has correct cache boundaries for the
-Qwen3.6 text path. `Evaluate.generate` and `BatchEngine.generate` both honor an
-explicit `.nativeMTP(depth:)` request. The BatchEngine path is deliberately an
-exclusive solo lane; it is not a multi-slot paged native-MTP scheduler.
-`BatchEngine.submit` rejects native MTP so a raw batched caller cannot get a
-fake AR pass while believing MTP ran.
+Qwen3.6 text path, the Qwen3VL native-MTP backbone verifier now shares the
+normal VLM MRoPE continuation-state resolver, and the VLM MTP decoder chooses
+sparse MoE layers for Qwen3.6 35B-style MoE sidecars. `Evaluate.generate` and
+`BatchEngine.generate` both honor an explicit `.nativeMTP(depth:)` request. The
+BatchEngine path is deliberately an exclusive solo lane; it is not a multi-slot
+paged native-MTP scheduler. `BatchEngine.submit` rejects native MTP so a raw
+batched caller cannot get a fake AR pass while believing MTP ran.
 
 Prefix, paged KV, and block-L2 disk remain prompt-boundary verified caches.
 Each D3 verify pass advances the live backbone cache through verified target
 positions only; rejected draft suffixes are not kept. The remaining production
 blockers are speed and composition: prefix commit now avoids full
 rollback+repair, but the verifier/prefix-state hot path is not tuned enough to
-beat the 50 tok/s target, and native MTP has not been proven with VL media
-salt, paged KV/block-L2, or hybrid SSM companion-cache rederive.
+beat the 45 tok/s threshold, and native MTP has not been live-proven with real
+image/video multi-turn media payloads, paged KV/block-L2, or hybrid SSM
+companion-cache rederive.
 
 Qwen-style bundles use top-level `mtp.fc.*` and `mtp.layers.0.*` tensors. Hy3
 and Bailing-style bundles may store the MTP layer at
@@ -418,7 +484,9 @@ VL+MTP bundles need both sides proven:
 
 The Qwen3.6 JANG_4M MTP reference bundle is a VL+MTP artifact. Swift support is
 not complete until Qwen3VL text, image, video, multi-turn cache, and MTP on/off
-rows all pass with coherent output.
+rows all pass with coherent output. The current Swift source path now preserves
+Qwen3VL MRoPE continuation state during native-MTP verifier forwards, but this
+is still only a prerequisite for the live VL+MTP gate, not the gate itself.
 
 ## Verification Gates Before Auto-Launch
 

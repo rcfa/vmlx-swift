@@ -262,6 +262,8 @@ public enum NativeMTPActivation {
         let normalized = value.lowercased().replacingOccurrences(of: "-", with: "_")
         return normalized == "qwen3_5"
             || normalized == "qwen3_5_text"
+            || normalized == "qwen3_5_moe"
+            || normalized == "qwen3_5_moe_text"
             || normalized == "qwen3_5_vl"
             || normalized == "qwen3_vl"
     }
