@@ -12,9 +12,11 @@ Current pushed branch state:
   in `docs/VMLX_QWEN36_MTP_MATRIX_2026_05_17.md`. It supersedes earlier
   optimistic MTP speed wording in this audit: current Swift D3 text rows are
   coherent for all six variants and cache repeat rows hit disk+SSM, but D3 is
-  slower than AR in this matrix, VL+MTP still fails 35B JANG_2K and 35B MXFP4
-  under strict no-length-cap criteria, and thinking-mode multi-turn rows still
-  have visible-answer failures.
+  slower than AR in that matrix and VL+MTP still fails 35B JANG_2K and 35B
+  MXFP4 under strict no-length-cap criteria. A later MXFP-only production
+  reverify with `BENCH_MAX_TOKENS=384` passes 27B/35B MXFP4/MXFP8 7/7, so the
+  earlier thinking-mode visible-answer failures were short-budget failures for
+  those rows.
 - Latest pushed runtime checkpoint for the Qwen text-SSM/private-MTP cache
   fix: `3146fac` (`fix(mtp): repair qwen ssm reject cache`)
 - Current local, not-yet-pushed MTP/cache work adds task-local load-time native
@@ -67,7 +69,7 @@ The package is complete only when all of these are true:
 | Local model inventory. | `docs/VMLX_LIVE_MODEL_MATRIX_2026_05_15.md`; local `find ~/models -maxdepth 4 -name config.json` shows DSV4, Hy3, Kimi, Laguna, MiniMax, ZAYA/ZAYA-VL, Qwen3.5/3.6, Gemma4, Ling, and Nemotron Omni families. | static-proven |
 | Live infer matrix for installed models. | `docs/local/live-model-matrix/20260515Tinfer-under20/REPORT.md` and `status.tsv`. Many under-20GB rows passed; several rows failed or were skipped. | partial |
 | MTP activation must use real tensor evidence, not names. | `9b1b254`; `docs/VMLX_SWIFT_MTP_OSAURUS_WIRING_2026_05_15.md`; local fail-closed artifact `docs/local/native-mtp-qwen36-20260515/jang4m-crack-native-mtp-denied-postrevert.log`. | live-proven |
-| MTP depth-3 production acceleration. | Current local Swift rows prove recursive D3 draft, accepted-prefix commit, coherent visible output, and no loop/leak for Qwen3.6 27B JANG_4M, 27B MXFP4, 27B MXFP8, and 35B MXFP8. Native MTP remains explicit/tensor-gated; auto-launch still needs Osaurus/server policy gates. | live-proven for explicit Qwen3.6 rows |
+| MTP depth-3 production acceleration. | Current local Swift rows prove recursive D3 draft, accepted-prefix commit, coherent visible output, and no loop/leak for Qwen3.6 27B JANG_4M, 27B MXFP4, 27B MXFP8, 35B MXFP4, and 35B MXFP8. The fresh MXFP production reverify passes 27B/35B MXFP4/MXFP8 7/7 with `BENCH_MAX_TOKENS=384`, explicit `chunk_commit`, bundle defaults, disk L2 hit, and SSM companion hit. Native MTP remains explicit/tensor-gated; auto-launch still needs Osaurus/server policy gates. | live-proven for explicit Qwen3.6 rows |
 | Qwen3.6 MTP coherency and token/s. | Current artifacts: `qwen36_27b_jang4m_mtp_d3_count_python_prompt_normfix_regression.log` (`47.7 tok/s`), `qwen36_27b_mxfp4_mtp_d3_count_python_prompt_normfix.log` (`50.5 tok/s`), `qwen36_27b_mxfp4_mtp_d3_count_python_prompt_postaudit_count.log` (`49.6 tok/s` after task-local activation), `qwen36_27b_mxfp8_mtp_d3_count_python_prompt_normfix.log` (`29.5 tok/s`), and `qwen36_35b_mxfp8_mtp_d3_count_python_prompt.log` (`130.6 tok/s`). All rows are coherent with `unclosedReasoning=NO`, `loop=NO`, `leaks=none`. | live-proven |
 | Qwen3.6 native-MTP speed target. | Achieved for 27B MXFP4 (`50.5 tok/s` pre-audit, `49.6 tok/s` post-audit task-local activation), 27B JANG_4M (`47.7 tok/s`, above the 45 tok/s acceptance line), and 35B MXFP8 (`130.6 tok/s`, close to Python reference). 27B MXFP8 is functionally fixed but still slower than the Python reference (`29.5 tok/s` vs ~35-37 tok/s), so it remains a speed-tuning row. | partial |
 | Qwen3.6 text hybrid-SSM accepted-prefix cache commit and private MTP-cache reject semantics. | 2026-05-17 fixes align the text Qwen3.5/Qwen3.6 `GatedDeltaNet` with the VLM path: regular SSM forwards now advance `MambaCache.offset`, recorded partial-prefix snapshots store `baseOffset + prefixLength`, and partial rejects recreate the private MTP draft cache instead of trimming stale rejected state. Focused proof: `docs/local/production-readiness/20260517Tqwen36-mtp-ssm-offset/mtp_runtime_focused_after_private_mtp_refresh.log` passes 17/17 `MTPRuntimeFocusedTests`. | unit-tested |

@@ -9,6 +9,7 @@ Local artifact roots:
 
 - `docs/local/qwen36-mtp-matrix/20260517T042923Z-six-variant-matrix/`
 - `docs/local/qwen36-mtp-matrix/20260517T043859Z-vl-mtp-strict-rerun/`
+- `docs/local/qwen36-mtp-current/*-prod-budget384/`
 
 `docs/local/` is gitignored; the artifact paths are local evidence references.
 
@@ -21,10 +22,12 @@ Local artifact roots:
   remains correct until Osaurus explicitly opts into native MTP for a row that
   has passed the relevant text/VL/cache gates.
 - Hybrid/Mamba/GatedDelta-style verifier cache state is not sliceable by
-  keeping an all-or-nothing verifier cache. For those caches, Swift now uses a
-  correctness-first sequential verifier path: advance the backbone through the
-  primary and accepted drafts one token at a time, stop before rejected draft
-  state, and only draft again from the committed state.
+  keeping an all-or-nothing verifier cache. The default correctness path is
+  sequential repair: advance the backbone through the primary and accepted
+  drafts one token at a time, stop before rejected draft state, and only draft
+  again from the committed state. The speed path is opt-in
+  `VMLINUX_NATIVE_MTP_HYBRID_VERIFY=chunk_commit` and must keep per-prefix cache
+  commit semantics explicit in every gate.
 - `BatchEngine.submit` intentionally rejects raw batched native MTP. VL+MTP proof
   must use `BatchEngine.generate` or `Evaluate.generate`, which route through the
   exclusive solo native-MTP iterator. Osaurus should wire native MTP as an
@@ -70,23 +73,28 @@ instead of sequential verification for hybrid caches.
 
 ## Multi-Turn Reasoning
 
-The MTP D3 production multi-turn/reasoning gate still fails on every bundle.
-The common failure mode is thinking-enabled prompts spending the answer inside
-reasoning and then hitting the short budget with no visible answer. This is not
-papered over by forcing a close tag or clamping sampling. It remains a real
-template/reasoning/runtime policy bug to fix before a production claim.
+The first MTP D3 production multi-turn/reasoning gate used a short budget and
+failed visible-answer checks when thinking-enabled prompts naturally spent the
+early output inside reasoning. That was not fixed with forced close tags,
+sampler clamps, or output movement.
 
-| Bundle | Result |
-|---|---|
-| 27B JANG_4M | 3 pass / 4 fail |
-| 27B MXFP4 | 4 pass / 3 fail |
-| 27B MXFP8 | 6 pass / 1 fail |
-| 35B JANG_2K | 4 pass / 3 fail |
-| 35B MXFP4 | 3 pass / 4 fail |
-| 35B MXFP8 | 5 pass / 2 fail |
+Fresh MXFP reruns with `BENCH_MAX_TOKENS=384` now pass the production gate:
 
-Each row still recorded disk L2 plus SSM companion cache hits, so the cache stack
-is being exercised even when the visible reasoning behavior fails.
+| Bundle | Result | Artifact |
+|---|---:|---|
+| 27B MXFP4 | 7/7 PASS | `docs/local/qwen36-mtp-current/20260517T124139Z-27b-mxfp4-prod-budget384/prod_mtp_d3_chunk_budget384.log` |
+| 27B MXFP8 | 7/7 PASS | `docs/local/qwen36-mtp-current/20260517T124237Z-27b-mxfp8-prod-budget384/prod_mtp_d3_chunk_budget384.log` |
+| 35B MXFP4 | 7/7 PASS | `docs/local/qwen36-mtp-current/20260517T124323Z-35b-mxfp4-prod-budget384/prod_mtp_d3_chunk_budget384.log` |
+| 35B MXFP8 | 7/7 PASS | `docs/local/qwen36-mtp-current/20260517T124351Z-35b-mxfp8-prod-budget384/prod_mtp_d3_chunk_budget384.log` |
+
+Each fresh row used bundle defaults
+`temp=1.000 topP=0.950 topK=20 minP=0.000 rep=nil`, D3 native MTP, explicit
+`chunk_commit`, L2 disk cache, and SSM companion state. Every row emitted
+visible answers, normal stops, no loop/leak, a disk hit, and an SSM hit.
+
+JANG_4M and JANG_2K were not rerun in this current MXFP-only pass. The earlier
+short-budget failures remain historical evidence only for those old settings,
+not proof that the current runtime needs fake reasoning guards.
 
 ## VL + MTP Matrix
 
@@ -109,16 +117,18 @@ That was a harness-path bug. The strict rerun is the current evidence.
 
 ## Still Open Before Production
 
-- Native MTP speed is coherent but slower than AR on the tested text rows. Do
-  not claim the 45-50 tok/s target is met for 27B, and do not claim a speedup
-  for 35B despite high absolute tok/s.
-- Reasoning-on mode must be fixed at the template/runtime boundary so answers
-  appear in visible content without forced closing tags or hidden output moves.
+- Native MTP speed in the initial six-variant D3 text matrix is coherent but
+  slower than AR. Separate optimized count-prompt speed rows reach the 45-50
+  tok/s target for 27B JANG_4M / 27B MXFP4 and higher absolute throughput for
+  35B MXFP4/MXFP8; do not use the initial matrix alone as a speedup claim.
+- Production gates must use enough max tokens for thinking-enabled prompts.
+  Short-budget visible-answer failures are not runtime failures by themselves;
+  they must be rerun with a sufficient budget before changing code.
 - 35B JANG2K and 35B MXFP4 VL+MTP need root-cause work. The strict bench now
   blocks their length-exhausted/looping outputs instead of accepting them.
 - Raw batched native-MTP scheduling is not implemented. Osaurus must route MTP
   as an exclusive generate path or keep MTP disabled for concurrent batched
   server mode until the scheduler owns draft/verify/cache state per slot.
-- The sequential hybrid verifier is the correctness path. The future speed path
-  needs a measured capture/commit implementation with per-accepted-prefix cache
-  commits, plus row-vs-step equivalence tests for MRoPE/VL and SSM state.
+- The sequential hybrid verifier remains the conservative correctness path.
+  The explicit `chunk_commit` path now has MXFP text-production evidence, but it
+  still needs broader VL/MRoPE and scheduler coverage before becoming a default.

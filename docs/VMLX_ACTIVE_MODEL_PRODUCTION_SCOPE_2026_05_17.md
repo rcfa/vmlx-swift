@@ -76,6 +76,28 @@ The latest sampler sweeps did not justify hidden overrides:
 - `top_k=20` from `generation_config.json` was better than forcing `top_k=0`
   on the 27B D3 rows.
 
+## Qwen3.6 MTP Production Reverify
+
+Fresh 2026-05-17 MXFP artifacts:
+
+```text
+docs/local/qwen36-mtp-current/20260517T124139Z-27b-mxfp4-prod-budget384/
+docs/local/qwen36-mtp-current/20260517T124237Z-27b-mxfp8-prod-budget384/
+docs/local/qwen36-mtp-current/20260517T124323Z-35b-mxfp4-prod-budget384/
+docs/local/qwen36-mtp-current/20260517T124351Z-35b-mxfp8-prod-budget384/
+```
+
+All four rows pass `BENCH_PROD=1` 7/7 with D3 native MTP,
+`VMLINUX_NATIVE_MTP_HYBRID_VERIFY=chunk_commit`, cache coordinator, hybrid SSM
+state, and `BENCH_MAX_TOKENS=384`. The gate uses bundle defaults
+`temp=1.000 topP=0.950 topK=20 minP=0.000 rep=nil`; there is no hidden
+temperature clamp, repetition penalty, or forced reasoning close.
+
+This resolves the earlier short-budget visible-answer failures for the MXFP
+variants. It does not change the default policy: native MTP stays explicit,
+tensor-gated, and non-batched until the remaining VL and server scheduling gates
+are proven.
+
 ## Active Non-Excluded Family Matrix
 
 | Family | Local bundles | Engine surfaces to prove | Current MTP policy |
