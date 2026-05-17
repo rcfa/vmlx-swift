@@ -234,6 +234,16 @@ public struct ReasoningParser: Sendable {
             }
 
             guard let (range, tag) = firstRange(of: openerTags, in: buffer) else {
+                let strayControlTags = holdTags.filter { $0 != gptStartControl }
+                if let (controlRange, _) = firstRange(of: strayControlTags, in: buffer) {
+                    let before = stripHarmonyControlText(String(buffer[..<controlRange.lowerBound]))
+                    if !before.isEmpty {
+                        out.append(.content(before))
+                    }
+                    buffer.removeSubrange(buffer.startIndex..<controlRange.upperBound)
+                    continue
+                }
+
                 if allowPartialTagAtEnd,
                     buffer.contains(gptStartControl)
                         || holdTags.contains(where: { hasPartialSuffix(of: $0, in: buffer) })
@@ -374,6 +384,10 @@ public struct ReasoningParser: Sendable {
             "<|start|>user",
             "<|start|>tool",
             "<|start|>",
+            "<|channel|>",
+            "<|message|>",
+            "<|channel>",
+            "<channel|>",
             "<|end|>",
             "<|return|>",
         ] {

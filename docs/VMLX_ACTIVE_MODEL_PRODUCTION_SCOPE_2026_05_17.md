@@ -54,6 +54,7 @@ docs/local/production-readiness/20260517T1335_server_settings_validation/
 docs/local/production-readiness/20260517T1348_cache_policy_salt_active/
 docs/local/production-readiness/20260517T1405_parser_fallback_matrix/
 docs/local/production-readiness/20260517T1415_qwen_vl_capability_aliases/
+docs/local/production-readiness/20260517T1435_harmony_fragment_leak/
 ```
 
 That inventory contains 28 non-excluded local bundles:
@@ -229,6 +230,14 @@ docs/local/production-readiness/20260517T174743Z_qwen_mtp_chunk_policy_finalize/
   9/9 in `DirectCapabilityParserAliasFocusedTests_green.log`, and the broader
   no-hidden/parser sweep passes 45/45 after routing those direct capability
   stamps to Qwen thinking and XML-function tools.
+- Fresh 14:35 PDT Harmony fragmentation/leak recheck has red/green artifacts
+  for Gemma4/GPT-OSS style channel parsing. The red log proved stray
+  `<|message|>` and `<|channel|>` control tokens could leak into visible free
+  text outside a well-formed Harmony channel. The first fix also caught a
+  start-role streaming regression (`assistant` leaking when `<|start|>` arrived
+  before the role suffix), so the final green run keeps `<|start|>assistant`
+  buffered until channel resolution or terminal scrub. `HarmonyParserFocusedTests`
+  passes 8/8 and the broader no-hidden/parser sweep passes 47/47.
 
 ## Qwen3.5 35B 4-bit Loader Repair - 2026-05-17
 
@@ -833,6 +842,10 @@ docs/local/production-readiness/20260517T_laguna_mistral_gemma4_active_contracts
 - Focused tests in `NoHiddenReasoningCloseBiasFocusedTests` prove Gemma 4
   reasoning/content separation, GPT-OSS analysis/final splitting, and Gemma 4
   reasoning followed by a structured tool call without leaking control markers.
+- The focused Harmony suite also now has red/green proof for one-character
+  stream fragmentation and stray control-token scrubbing: direct
+  `<|message|>`/`<|channel|>` markers are removed from visible free text, while
+  malformed non-marker text remains visible and no close tag is synthesized.
 - The same active focused suite also pins `gpt_oss*` model types to the Harmony
   parser and the GLM boundary: bare `glm4` remains non-reasoning while
   `glm4_moe*`/`glm5*` route through think-XML, and suffixed GLM/DeepSeek/Laguna

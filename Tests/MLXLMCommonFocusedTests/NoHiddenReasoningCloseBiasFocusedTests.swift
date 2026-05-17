@@ -181,6 +181,50 @@ struct HarmonyParserFocusedTests {
         #expect(!reasoning.contains("<|end|>"))
     }
 
+    @Test("Harmony parser survives one-character token fragmentation")
+    func harmonyParserSurvivesOneCharacterFragments() {
+        var parser = ReasoningParser.fromCapabilityName("harmony")
+        let stream =
+            "lead"
+            + "<|start|>assistant<|channel|>analysis<|message|>hidden<|end|>"
+            + "<|start|>assistant<|channel|>final<|message|>visible<|return|>"
+            + "<|channel>thought\nextra<channel|>tail"
+        var segments: [ReasoningSegment] = []
+        for scalar in stream {
+            segments.append(contentsOf: parser?.feed(String(scalar)) ?? [])
+        }
+        segments.append(contentsOf: parser?.flush() ?? [])
+
+        let (reasoning, content) = collect(segments)
+        #expect(reasoning == "hiddenthought\nextra")
+        #expect(content == "leadvisibletail")
+        for marker in [
+            "<|start|>", "<|channel|>", "<|message|>", "<|end|>", "<|return|>",
+            "<|channel>", "<channel|>",
+        ] {
+            #expect(!reasoning.contains(marker))
+            #expect(!content.contains(marker))
+        }
+    }
+
+    @Test("Harmony parser strips stray control tokens from visible free text")
+    func harmonyParserStripsStrayControlTokens() {
+        var parser = ReasoningParser.fromCapabilityName("harmony")
+        let stream = "visible<|message|>tail<|channel|>final"
+        var segments: [ReasoningSegment] = []
+        for scalar in stream {
+            segments.append(contentsOf: parser?.feed(String(scalar)) ?? [])
+        }
+        segments.append(contentsOf: parser?.flush() ?? [])
+
+        let (reasoning, content) = collect(segments)
+        #expect(reasoning.isEmpty)
+        #expect(content == "visibletailfinal")
+        for marker in ["<|channel|>", "<|message|>"] {
+            #expect(!content.contains(marker))
+        }
+    }
+
     @Test("Harmony prompt-tail parser preserves GPT-OSS channel stripping")
     func harmonyForPromptPreservesGPTOSSChannelStripping() {
         var parser = ReasoningParser.forPrompt(
