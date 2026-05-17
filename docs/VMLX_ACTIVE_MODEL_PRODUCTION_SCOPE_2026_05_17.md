@@ -72,6 +72,52 @@ That inventory contains 28 non-excluded local bundles:
 - 13 VL bundles
 - 3 Omni bundles
 
+Fresh Osaurus PR/pin lineage artifact:
+
+```text
+docs/VMLX_OSAURUS_PR_PIN_LINEAGE_2026_05_17.md
+```
+
+## Extended Family Status After PR/Pin Review
+
+This section is the current working status for the non-excluded families the
+user explicitly called out after Qwen MTP, Kimi, and DSV4 were de-scoped for
+this pass. A `PASS` row still does not mean package-wide production complete;
+it means the named surface has a current artifact. Rows marked `PARTIAL` or
+`OPEN` must not be hidden by sampler guards, repetition penalties, forced
+thinking closure, or name-based MTP activation.
+
+| Family | Current evidence | Status | Production concern |
+| --- | --- | --- | --- |
+| Ling / Bailing hybrid | `20260517T170008Z_release_turnmatrix_ling_jangtq2/` and `20260517T180538Z_release_turnmatrix_ling_mxfp4_current/` pass config/template, production cache off/on, BatchEngine single/chat/disk/B=2/per-slot/TurboQuant rows. Focused tests instantiate Bailing hybrid caches and parser aliases. | PASS for text JANGTQ2 and MXFP4 | Generic paged prefix hit is `N-A` by topology; disk-backed restore and SSM companion state are the real cache proof. The harness MTP metadata row is not native-MTP activation. |
+| Hy3 / Hunyuan | `20260517T180931Z_release_turnmatrix_hy3_jangtq_current/` passes JANGTQ release rows. `20260517T184132Z_hy3_jangtqk_streaming_autodir_after_fix/` passes short production rows through active expert streaming without a manual model-dir override. | PASS for JANGTQ; PARTIAL for JANGTQ_K | JANGTQ_K is correct and low footprint in the streaming row, but still about `1.4 tok/s`; multi-model active-expert store isolation remains a server concern. Preserved nextn layers stay excluded from base decode cache. |
+| Gemma 4 / Harmony | `20260517T160608Z_release_turnmatrix_gemma4_26b/` passes text rows. `20260517T210417Z_gemma4_vl_chat_cache/` proves image cache salt and grounded follow-up. `20260517T212204Z_gemma4_batch_toolcall_real_schema/` proves real `UserInput.tools` schema -> structured `get_weather` tool call. Harmony focused tests pass fragmented/no-leak parser cases. | PASS for text, VL image cache, and tool schema; PARTIAL for long-budget reasoning | Default heterogeneous SWA/full-attention cache is correctly uncompiled; explicit all-rotating bounded cache is compile-eligible. Long-budget Harmony reasoning still needs a live row that actually emits reasoning deltas. |
+| GPT-OSS / GLM5 / Mistral4 / Pixtral parsers | Focused parser tests cover GPT-OSS Harmony, GLM5 aliases, Mistral4/Pixtral aliases, and marker leak prevention. | UNIT ONLY / OPEN for runtime | No local GPT-OSS, GLM5, Mistral4, or Pixtral bundle has a live decode row in this pass. Parser coverage is not model production readiness. |
+| Laguna XS.2 | `20260517T_release_turnmatrix_laguna_xs_after_b2_fix/` passes release rows. Production decode is about `31 tok/s`, bundle defaults are `temp=0.700 topP=0.900 topK=0 rep=nil`, disk L2 hits, and TurboQuant B=2 isolation passes. | PASS for text | Paged prefix hit is `N-A` by topology; disk-backed restore is the accepted cache proof. |
+| ZAYA text | `20260517T_release_turnmatrix_zaya_scope/` passes JANGTQ4, JANGTQ_K, and MXFP4 text rows. `20260517T_zaya_speed_regression/` shows about `64-68 tok/s`, no loops/leaks, disk L2 plus SSM companion states. | PASS for text | Keep the 50+ tok/s watch active. Do not treat the ZAYA CCA path as generic paged cache; it is path-dependent and disk/SSM-backed. |
+| ZAYA1-VL | `20260517T_release_turnmatrix_zaya_scope/` and targeted rows prove MXFP4 and JANGTQ4 image/text/cache surfaces, media-salt isolation, and VL cache hits. | PASS for MXFP4 and JANGTQ4 implemented image/text/cache; PARTIAL for JANGTQ_K | `ZAYA1-VL-8B-JANGTQ_K` remains a real blocker: production math/top-k evidence is wrong before sampling policy, and cold structured VL cache can exhaust the 192-token row. Video is `N-A` because the processor does not implement video input. |
+| Nemotron Omni / Parakeet / RADIO | JANGTQ4 core artifacts under `20260517T170614Z_omni_live_voice_fresh_recheck/` and related Omni rows prove wrapper-token parity, pre-encoded Parakeet shape, raw PCM/pre-encoded paths, and 65-76 tok/s cache-off streaming rows without literal sound-marker leaks. | PASS for JANGTQ4 core; PARTIAL for repeated cache-on audio and sibling bundles | Independently encoded Parakeet chunks are not concat-safe. Live voice must retain PCM and submit full-snapshot pre-encoded audio or raw PCM at endpoint. JANGTQ and MXFP4 Omni siblings still need full coherency rows. |
+| MiniMax M2.7 | Small JANGTQ rows prove generation config (`temp=1.000 topP=0.950 topK=40 rep=nil`), greedy/no-guard behavior, coherent thinking on/off alternation, and no loops/leaks at 38-47 tok/s depending on row. | PARTIAL | CRACK models are not MTP models unless tensor evidence proves otherwise. Low-footprint active routed behavior is not proven for the larger CRACK bundles, and no hidden sampler guard is allowed to compensate for any failure. |
+| Qwen3.5 35B non-MTP | `20260517T164940Z_release_turnmatrix_qwen35_35b_4bit_after_compat_split/` passes config/template, production cache off/on, BatchEngine, TQ B=2 compatibility split, VL cache, media salt, and mixed text/image/video. | PASS with throughput watch | High-resolution video can be very slow; Qwen hybrid SSM cache restore must stay topology-specific. |
+
+## No-Fake-Guard Invariants For The Remaining Rows
+
+- `generation_config.json` values are the default source before any explicit
+  server/user override. Top-k must remain the bundle value when present
+  (`20`, `40`, `64`, or family-specific values), not a global hidden override.
+- `rep=nil` or the bundle value must stay visible in telemetry. Do not inject a
+  repetition penalty because a row loops; fix the runtime/cache/template cause.
+- `enable_thinking=false` can be a template/request input, but the runtime must
+  not fake-close a model's reasoning output. Parser rows are allowed to route
+  well-formed hidden reasoning away from visible text; they are not allowed to
+  make incoherent output look coherent.
+- Native MTP is tensor-evidence gated. Metadata rows and model names are not
+  sufficient; preserved-only or CRACK bundles must stay fail-closed unless the
+  real `mtp.*` tensors and runtime contract are present.
+- Generic paged/prefix cache hits are not accepted for path-dependent families.
+  ZAYA CCA, Ling/Bailing linear attention, Qwen hybrid SSM, Gemma4 SWA, Omni
+  media, and VL media salts require their family-specific cache proof.
+
 ## Native-MTP Speed Rows and Current Regression Watch
 
 These are prompt-specific Qwen3.6 count-prompt rows. They prove the native-MTP

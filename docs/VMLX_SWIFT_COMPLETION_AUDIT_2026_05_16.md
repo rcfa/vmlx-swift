@@ -152,6 +152,15 @@ Current pushed branch state:
   Gemma4 SWA/cache/VLM guards, MTP metadata/SSM cache contracts, Omni
   Parakeet/RADIO focused rows, JANGTQ/Hadamard/matmul rows, and server settings
   no-hidden-sampler-guard rows.
+- 2026-05-17 Osaurus PR/pin and extended-family audit update:
+  `docs/VMLX_OSAURUS_PR_PIN_LINEAGE_2026_05_17.md` records the resolver-truth
+  lineage for Osaurus PRs #1037, #1057, #1066, #1073, and open #1110. The active
+  scope doc now has a non-excluded family table for Ling/Bailing, Hy3, Gemma4
+  and Harmony, GPT-OSS/GLM5/Mistral4/Pixtral parser-only rows, Laguna, ZAYA
+  text/VL, Nemotron Omni/Parakeet/RADIO, MiniMax, and Qwen3.5. It explicitly
+  keeps Kimi and DSV4 excluded for this pass and restates the no-hidden-sampler,
+  no-fake-reasoning-close, tensor-evidence-only MTP, and topology-specific
+  cache invariants.
 - Latest pushed runtime checkpoint for the Qwen text-SSM/private-MTP cache
   fix: `3146fac` (`fix(mtp): repair qwen ssm reject cache`)
 - The MTP/cache work for task-local load-time native MTP activation, MXFP8
