@@ -952,6 +952,12 @@ docs/local/production-readiness/20260517T_laguna_mistral_gemma4_active_contracts
   `weight_format` stays on the vanilla `Mistral3TextModel` path.
 - The fresh aggregate active focused target passes 168 tests in 26 suites in
   `docs/local/production-readiness/20260517T1300_hy3_mixed_qkv_runtime_contracts/MLXLMCommonFocusedTests_after_hy3_mixed_qkv.log`.
+- A post-toolcall current-checkout recheck with
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test --filter MLXLMCommonFocusedTests`
+  passes 187 Swift Testing rows in 26 suites plus the selected XCTest focused
+  rows. This includes the new Gemma4 live-probe source guard and keeps the
+  Harmony, Ling/Bailing, Hy3, Gemma4 SWA/VLM, MTP metadata/SSM cache, Omni,
+  JANGTQ, and server-settings no-hidden-guard contracts green.
 - A post-fix live Gemma 4 `BENCH_HARMONY_CHECK` row passes: marker strings are
   absent from `.chunk`, the output is coherent visible README guidance, and
   generation stops through the normal path.
