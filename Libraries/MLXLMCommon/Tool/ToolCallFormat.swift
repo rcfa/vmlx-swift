@@ -255,6 +255,16 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
             return .mistral
         }
 
+        // Mistral 4 and Pixtral-family bundles share the Mistral tool
+        // protocol. Some converted bundles expose the inner text decoder as
+        // `mistral4` directly rather than through a `mistral3` VLM wrapper.
+        if type.hasPrefix("mistral4")
+            || type.hasPrefix("mistral_4")
+            || type.hasPrefix("pixtral")
+        {
+            return .mistral
+        }
+
         // Laguna (Poolside agentic-coding MoE). `laguna_glm_thinking_v5/
         // chat_template.jinja` uses GLM-family function-calling tags.
         // Matches the same parser as glm4_moe / glm5 / deepseek (V3
@@ -312,10 +322,20 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
     public static func fromCapabilityName(_ name: String?) -> ToolCallFormat? {
         guard let name, !name.isEmpty else { return nil }
         let n = name.lowercased()
+        let normalized = n.replacingOccurrences(of: "-", with: "_")
 
         // Direct rawValue match first (e.g. "xml_function", "minimax_m2").
         if let direct = ToolCallFormat(rawValue: n) {
             return direct
+        }
+
+        if normalized.hasPrefix("mistral4")
+            || normalized.hasPrefix("mistral_4")
+            || normalized.hasPrefix("mistral_small_4")
+            || normalized.hasPrefix("mistral_large_4")
+            || normalized.hasPrefix("pixtral")
+        {
+            return .mistral
         }
 
         // Family aliases with minor-version suffixes. Capability metadata is

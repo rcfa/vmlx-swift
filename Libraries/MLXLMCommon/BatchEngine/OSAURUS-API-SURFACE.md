@@ -75,7 +75,7 @@ on 2026-04-19. Every row is a live import in one of those branches.
 | `parser.feed(_: String) -> [ReasoningSegment]` | Per-chunk streaming. |
 | `parser.flush() -> [ReasoningSegment]` | End of stream. |
 | `public enum ReasoningSegment: Sendable, Equatable { .content(String), .reasoning(String) }` | Osaurus routes `.content` → visible answer, `.reasoning` → think pane. |
-| `static ReasoningParser.fromCapabilityName(_: String?) -> ReasoningParser?` | JANG-stamp → parser (or nil for `"none"`/`"mistral"`/`"gemma4"`). |
+| `static ReasoningParser.fromCapabilityName(_: String?) -> ReasoningParser?` | JANG-stamp → parser (or nil for `"none"`/`"mistral"`/`"gemma"`). Accepts canonical stamps plus suffixed direct capability aliases: `gemma4*` / `gpt_oss*` → Harmony, `glm4_moe*` / `glm5*` / `deepseek*` / `laguna*` → think XML, and explicit `mistral4*` → `[THINK]...[/THINK]`. |
 | `static ReasoningParser.split(_: String, startTag:, endTag:) -> (reasoning: String, content: String)` | Whole-string convenience for non-streaming reveal. |
 
 ## 6. JANG capability stamps

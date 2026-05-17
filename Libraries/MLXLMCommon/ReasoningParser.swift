@@ -518,7 +518,37 @@ extension ReasoningParser {
     ///   pipeline skips reasoning parsing entirely.
     public static func fromCapabilityName(_ name: String?) -> ReasoningParser? {
         guard let name, !name.isEmpty else { return nil }
-        switch name.lowercased() {
+        let n = name.lowercased()
+        let normalized = n.replacingOccurrences(of: "-", with: "_")
+
+        if normalized.hasPrefix("gemma4") || normalized.hasPrefix("gpt_oss") {
+            return ReasoningParser(
+                startTag: "<|channel>",
+                endTag: "<channel|>",
+                startInReasoning: false,
+                stripStrayTags: false)
+        }
+
+        if normalized.hasPrefix("glm4_moe")
+            || normalized.hasPrefix("glm5")
+            || normalized.hasPrefix("deepseek")
+            || normalized.hasPrefix("laguna")
+        {
+            return ReasoningParser(startInReasoning: true)
+        }
+
+        if normalized.hasPrefix("mistral4")
+            || normalized.hasPrefix("mistral_4")
+            || normalized.hasPrefix("mistral_small_4")
+            || normalized.hasPrefix("mistral_large_4")
+        {
+            return ReasoningParser(
+                startTag: "[THINK]",
+                endTag: "[/THINK]",
+                startInReasoning: false)
+        }
+
+        switch n {
         case "think_xml", "qwen3", "qwen3_5", "qwen35", "qwen3_6", "qwen36",
             "deepseek_r1", "deepseek-r1", "deepseek", "glm", "glm4", "glm5",
             "nemotron", "nemotron_h", "minimax", "minimax_m2",

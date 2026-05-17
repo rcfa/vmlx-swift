@@ -763,6 +763,13 @@ docs/local/live-model-matrix/20260517T_harmony_parser_fix_current/
   parser and the GLM boundary: bare `glm4` remains non-reasoning while
   `glm4_moe*`/`glm5*` route through think-XML, and suffixed GLM/DeepSeek/Laguna
   capability names route to the GLM tool parser.
+- A direct capability-alias follow-up closes the suffix leak path that model-type
+  heuristics did not cover: `gemma4_27b`, `gpt_oss_20b`, and `gpt_oss_120b`
+  route to Harmony; `glm4_moe_lite`, `glm5_air`, `deepseek_v4_flash`, and
+  `laguna_glm_thinking_v5` route to think-XML; explicit `mistral4*` reasoning
+  capability stamps route `[THINK]...[/THINK]` while the `mistral4` model-type
+  fallback remains no-reasoning unless a bundle stamps that parser. Mistral 4
+  and Pixtral tool aliases route to the Mistral tool parser.
 - A post-fix live Gemma 4 `BENCH_HARMONY_CHECK` row passes: marker strings are
   absent from `.chunk`, the output is coherent visible README guidance, and
   generation stops through the normal path.

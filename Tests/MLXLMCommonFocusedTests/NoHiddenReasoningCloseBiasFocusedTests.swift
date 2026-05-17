@@ -469,3 +469,110 @@ struct BailingThinkingTemplateFocusedTests {
         #expect(noToggle.count == messages.count)
     }
 }
+
+@Suite("Direct capability parser alias focused contracts")
+struct DirectCapabilityParserAliasFocusedTests {
+    @Test("direct Harmony capability aliases resolve without leaking control markers")
+    func harmonyCapabilityAliasesResolve() {
+        for stamp in ["gemma4_27b", "gpt_oss_20b", "gpt_oss_120b"] {
+            var parser = ReasoningParser.fromCapabilityName(stamp)
+            #expect(parser != nil, "\(stamp) should resolve to the Harmony parser")
+
+            let stream =
+                "<|start|>assistant<|channel|>analysis<|message|>hidden<|end|>"
+                + "<|start|>assistant<|channel|>final<|message|>visible<|return|>"
+            let (reasoning, content) = collectParser(&parser, stream)
+            #expect(reasoning == "hidden")
+            #expect(content == "visible")
+            #expect(!content.contains("<|channel|>"))
+            #expect(!content.contains("<|message|>"))
+            #expect(!content.contains("<|return|>"))
+        }
+    }
+
+    @Test("direct think-XML family aliases resolve to parser")
+    func thinkXmlCapabilityAliasesResolve() {
+        for stamp in [
+            "glm4_moe_lite", "glm5_air", "deepseek_v4_flash",
+            "laguna_glm_thinking_v5",
+        ] {
+            var parser = ReasoningParser.fromCapabilityName(stamp)
+            #expect(parser != nil, "\(stamp) should resolve to think_xml")
+            let (reasoning, content) = collectParser(
+                &parser,
+                "internal</think>visible")
+            #expect(reasoning == "internal")
+            #expect(content == "visible")
+            #expect(!content.contains("</think>"))
+        }
+    }
+
+    @Test("explicit Mistral-4 reasoning capability uses bracket THINK parser")
+    func explicitMistral4ReasoningCapabilityUsesBracketThinkParser() {
+        #expect(reasoningStampFromModelType("mistral4") == "none",
+            "model_type fallback remains no-reasoning unless the bundle explicitly stamps a parser")
+
+        var parser = ReasoningParser.fromCapabilityName("mistral4")
+        #expect(parser != nil)
+        let (reasoning, content) = collectParser(
+            &parser,
+            "[THINK]plan[/THINK]Visible answer.")
+
+        #expect(reasoning == "plan")
+        #expect(content == "Visible answer.")
+        #expect(!content.contains("[THINK]"))
+        #expect(!content.contains("[/THINK]"))
+    }
+
+    @Test("Mistral/Pixtral tool aliases route to Mistral parser")
+    func mistralPixtralToolAliasesResolve() {
+        #expect(ToolCallFormat.infer(from: "mistral4") == .mistral)
+        #expect(ToolCallFormat.infer(from: "pixtral") == .mistral)
+        for stamp in ["mistral4_large", "mistral_small_4", "pixtral_large"] {
+            #expect(ToolCallFormat.fromCapabilityName(stamp) == .mistral)
+        }
+    }
+
+    private func collectParser(
+        _ parser: inout ReasoningParser?,
+        _ text: String
+    ) -> (reasoning: String, content: String) {
+        var reasoning = ""
+        var content = ""
+        if var p = parser {
+            for chunk in chunked(text, by: 5) {
+                for segment in p.feed(chunk) {
+                    switch segment {
+                    case .reasoning(let text):
+                        reasoning += text
+                    case .content(let text):
+                        content += text
+                    }
+                }
+            }
+            for segment in p.flush() {
+                switch segment {
+                case .reasoning(let text):
+                    reasoning += text
+                case .content(let text):
+                    content += text
+                }
+            }
+            parser = p
+        } else {
+            content = text
+        }
+        return (reasoning, content)
+    }
+
+    private func chunked(_ text: String, by size: Int) -> [String] {
+        var chunks: [String] = []
+        var index = text.startIndex
+        while index < text.endIndex {
+            let end = text.index(index, offsetBy: size, limitedBy: text.endIndex) ?? text.endIndex
+            chunks.append(String(text[index..<end]))
+            index = end
+        }
+        return chunks
+    }
+}
