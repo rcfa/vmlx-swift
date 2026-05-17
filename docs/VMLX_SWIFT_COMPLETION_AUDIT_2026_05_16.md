@@ -259,6 +259,16 @@ Current pushed branch state:
   `PROD_CACHE_STATS`. This is not a production-clearance claim: the row still
   reports about 61.5 GiB peak RSS, `pagedIncompatible=true`, no generic paged
   hits, and open long-context/vector/speed/API gates.
+- 2026-05-17 ZAYA JANGTQ4 current non-Kimi turnmatrix:
+  `docs/local/live-model-matrix/20260517T_zaya_jangtq4_current_non_kimi_turnmatrix/`
+  passes all runnable rows for the current JANGTQ4 text bundle: config,
+  template, production defaults cache OFF/ON, BatchEngine single/chat, disk
+  restore, B=2 concurrent, B=2 per-slot sampler, and TurboQuant B=2. The generic
+  batch prefix-cache hit row is `N-A` because ZAYA CCA is path-dependent and
+  `pagedIncompatible=true`. Bundle defaults are visible as
+  `temp=0.600 topP=1.000 topK=0 rep=nil`, cache-on decode rows are about
+  64.7-66.3 tok/s, peak RSS is about 5.1 GiB, and `PROD_CACHE_STATS` records
+  disk L2 plus SSM companion state.
 - 2026-05-17 Gemma4 multi-turn reasoning follow-up:
   `docs/local/live-model-matrix/20260517T_reasoning_turn_matrix_harness/`
   adds `BENCH_REASONING_TURN_MATRIX=1` and passes Gemma4 through one loaded
