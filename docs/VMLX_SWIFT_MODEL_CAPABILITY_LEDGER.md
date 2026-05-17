@@ -262,8 +262,19 @@ weights.
   video, audio, and pre-encoded audio handling.
 - Template/reasoning/tools: template smoke passes; reasoning parser maps to
   Nemotron H; tool parser maps to Nemotron format.
-- Current status: no live row in this snapshot. Must run Omni text multi-turn,
-  image, video, audio, reasoning-off parity, and live/pre-encoded audio rows.
+- Current status: JANGTQ4 core Omni path is live-proven in
+  `docs/local/live-model-matrix/20260517T163112Z_omni_live_voice_reverify_current/`.
+  Focused pre-encoded audio tests pass 8/8; release `BENCH_OMNI=1`
+  `BENCH_OMNI_BATCH=1` passes 18/18 at 48 tokens; raw PCM and pre-encoded
+  Parakeet stream through BatchEngine and TokenIterator with bundle defaults.
+  Chunked Parakeet embeddings are not concat-safe, so live voice must retain
+  PCM and submit a full-snapshot pre-encode or raw PCM at endpoint.
+- Open: repeated audio with disk cache ON still has an output-quality edge
+  (sampled marker leak/weak rows). Cache OFF repeated rows are clean, and the
+  integrated Omni matrix passes, but cache-on live audio stays PARTIAL until a
+  focused root-cause gate is added. The JANGTQ and MXFP4 sibling bundles have
+  only short streaming smoke rows in the latest artifact, not production
+  coherency proof.
 
 ### Kimi K2.6
 

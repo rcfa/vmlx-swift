@@ -51,6 +51,19 @@ Fresh live evidence:
   This is a visible runtime/termination boundary; do not hide it with sampler
   clamps or forced stop guards.
 
+2026-05-17 09:31 PDT recheck under
+`docs/local/live-model-matrix/20260517T163112Z_omni_live_voice_reverify_current/`:
+the focused 8-test Omni/Parakeet suite passed, the latency and chunk-stability
+benches rebuilt in release mode, and JANGTQ4 passed the integrated 18/18
+`BENCH_OMNI=1 BENCH_OMNI_BATCH=1` matrix at 48 tokens. The cleanest live voice
+path is currently cache OFF or fresh prompt-boundary reuse: repeated cache-off
+raw/pre-encoded BatchEngine and TokenIterator rows were grounded with no marker
+leak. Repeated disk-cache ON audio remains partial because one sampled
+pre-encoded TokenIterator cache-reuse row emitted sound marker text and a few
+sampled rows were weak. Keep this as a cache-hit output-quality/root-cause item,
+not a reason to add hidden sampler clamps, forced stop tokens, or post-hoc text
+cleanup.
+
 ## Implemented
 
 - `UserInput.Audio.preEncoded(samples:sampleRate:embedding:)` exists for live

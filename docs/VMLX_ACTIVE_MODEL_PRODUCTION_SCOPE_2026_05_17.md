@@ -692,6 +692,51 @@ docs/local/live-model-matrix/20260517T155603Z_omni_live_voice_current_verify/
   image+audio, media-salt isolation, hybrid SSM warm-pass, and BatchEngine
   text/image/audio rows.
 
+Fresh current-checkout live voice recheck at 2026-05-17 09:31 PDT:
+
+```text
+docs/local/live-model-matrix/20260517T163112Z_omni_live_voice_reverify_current/
+```
+
+- Xcode-backed `NemotronHOmniPreEncodedAudioTests` compiled and passed 8/8:
+  retained live audio buffer snapshots, caller-supplied Parakeet embedding
+  preservation, EVS placeholder count, RADIO pixel shuffle, Parakeet relative
+  shift, projector remaps, source weight transposes, and bundle-default
+  sampling plumbing.
+- `OmniAudioLatencyBench` and `OmniAudioChunkStabilityBench` rebuilt in
+  release mode from this checkout.
+- JANGTQ4 live audio at 32 tokens loaded in 3.06 s, decoded the 5.04 s fixture,
+  applied bundle defaults (`temp=0.600 topP=0.950 topK=0 minP=0.000
+  rep=1.000`), and pre-encoded Parakeet to `63 x 2688` in 59.8 ms. Raw PCM and
+  pre-encoded audio both streamed through BatchEngine and TokenIterator.
+  First-delta / tok/s rows:
+  - BatchEngine raw: 221.4 ms, 64.2 tok/s;
+  - BatchEngine pre-encoded: 178.7 ms, 72.0 tok/s;
+  - TokenIterator raw: 182.2 ms, 71.1 tok/s;
+  - TokenIterator pre-encoded: 153.1 ms, 75.9 tok/s.
+- Repeated JANGTQ4 audio turns with cache OFF were clean across 12/12
+  raw/pre-encoded BatchEngine/TokenIterator rows: grounded audio text, no media
+  marker leak, and 66.0-75.7 tok/s. Repeated turns with disk cache ON mostly
+  remained grounded but exposed a real output-quality edge: one sampled
+  TokenIterator pre-encoded cache-reuse row emitted sound marker text and a
+  few sampled rows were weak/non-grounded. Treat cache-on repeated live audio as
+  PARTIAL until the cache-hit quality gate is tightened and the root cause is
+  isolated. Do not hide this with sampler clamps, forced stop tokens, or
+  post-hoc text cleanup.
+- `omni_audio_chunk_stability_jangtq4.log`: 10/10 prefix comparisons remain
+  not concat-safe at default tolerance. The live voice contract is still
+  retained PCM plus full-snapshot pre-encode, or raw PCM at endpoint.
+- `omni_runbench_jangtq4_48.log`: integrated `BENCH_OMNI=1`
+  `BENCH_OMNI_BATCH=1` passed 18/18 at `maxTokens=48`. Load was 1.76 s, direct
+  decode rows were 95.2-113.6 tok/s, and BatchEngine rows were 45.2-71.0
+  tok/s. This proves the core JANGTQ4 Omni path across text, image, video,
+  audio, mixed media, media salt, hybrid SSM warm-pass, and BatchEngine rows.
+- Short 16-token raw/pre-encoded smoke rows for the sibling JANGTQ and MXFP4
+  bundles loaded and streamed all four path/mode combinations, but the visible
+  answers were too weak to count as coherency proof. Use JANGTQ4 as the current
+  live-voice production candidate; do not promote JANGTQ or MXFP4 live-audio
+  rows without longer grounded repeat gates.
+
 ## Required Proof Per Active Bundle
 
 For each non-excluded bundle, the production row must include:
