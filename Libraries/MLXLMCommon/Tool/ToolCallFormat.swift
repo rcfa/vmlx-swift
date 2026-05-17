@@ -318,6 +318,20 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
             return direct
         }
 
+        // Family aliases with minor-version suffixes. Capability metadata is
+        // often stamped at the family level (`glm5_air`, `glm4_moe_lite`,
+        // `deepseek_v3`, `laguna_glm_thinking_v5`) rather than the exact enum
+        // raw value, and all of these use the GLM/DeepSeek arg_key/arg_value
+        // parser.
+        if n.hasPrefix("glm4_")
+            || n.hasPrefix("glm5")
+            || n.hasPrefix("glm47")
+            || n.hasPrefix("deepseek")
+            || n.hasPrefix("laguna")
+        {
+            return .glm4
+        }
+
         switch n {
         // Qwen 3.5 / 3.6 family — XML-style <tool_call>…</tool_call>
         // (vLLM ecosystem name `qwen3_coder` aliased here).

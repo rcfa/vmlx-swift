@@ -759,6 +759,10 @@ docs/local/live-model-matrix/20260517T_harmony_parser_fix_current/
 - Focused tests in `NoHiddenReasoningCloseBiasFocusedTests` prove Gemma 4
   reasoning/content separation, GPT-OSS analysis/final splitting, and Gemma 4
   reasoning followed by a structured tool call without leaking control markers.
+- The same active focused suite also pins `gpt_oss*` model types to the Harmony
+  parser and the GLM boundary: bare `glm4` remains non-reasoning while
+  `glm4_moe*`/`glm5*` route through think-XML, and suffixed GLM/DeepSeek/Laguna
+  capability names route to the GLM tool parser.
 - A post-fix live Gemma 4 `BENCH_HARMONY_CHECK` row passes: marker strings are
   absent from `.chunk`, the output is coherent visible README guidance, and
   generation stops through the normal path.

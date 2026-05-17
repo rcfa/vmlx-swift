@@ -178,6 +178,26 @@ struct HarmonyParserFocusedTests {
         #expect(!reasoning.contains("<|end|>"))
     }
 
+    @Test("GPT-OSS model types resolve to Harmony, not think XML")
+    func gptOSSModelTypesResolveToHarmony() {
+        for modelType in ["gpt_oss", "gpt_oss_20b", "gpt_oss_120b", "GPT_OSS"] {
+            #expect(reasoningStampFromModelType(modelType) == "harmony")
+            #expect(ReasoningParser.fromCapabilityName(reasoningStampFromModelType(modelType)) != nil)
+        }
+    }
+
+    @Test("GLM reasoning boundary stays explicit")
+    func glmReasoningBoundary() {
+        #expect(reasoningStampFromModelType("glm4") == "none")
+        #expect(ToolCallFormat.fromCapabilityName("glm4") == .glm4)
+
+        for modelType in ["glm4_moe", "glm4_moe_lite", "glm5", "glm5_air"] {
+            #expect(reasoningStampFromModelType(modelType) == "think_xml")
+            #expect(ReasoningParser.fromCapabilityName(reasoningStampFromModelType(modelType)) != nil)
+            #expect(ToolCallFormat.fromCapabilityName(modelType) == .glm4)
+        }
+    }
+
     @Test("Gemma4 harmony reasoning followed by tool call does not leak markers")
     func gemma4HarmonyThenToolCallDoesNotLeak() {
         var parser = ReasoningParser.fromCapabilityName("gemma4")
