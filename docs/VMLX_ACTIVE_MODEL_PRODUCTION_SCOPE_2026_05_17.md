@@ -181,6 +181,12 @@ Remaining non-false-positive blocker:
   and the structured VL cache row exhausted the 192-token budget on the cold
   image turn. Do not hide this with sampling clamps or looser validators; this
   needs runtime/bundle root-cause work before that artifact is green.
+- Follow-up top-k evidence shows the math failure is present before decoding
+  policy: on the exact chat-rendered math prompt, `ZAYA1-VL-8B-JANGTQ4` ranks
+  token `4` first, while `ZAYA1-VL-8B-JANGTQ_K` ranks `6`, `7`, `8`, then `4`.
+  The JANGTQ_K layer-1 actual tensor kernel probe passed for experts 0/7/15
+  with tiny max diffs, so the next investigation is broader artifact/runtime
+  parity across layers or conversion, not a sampling fallback.
 
 ## Required Proof Per Active Bundle
 
