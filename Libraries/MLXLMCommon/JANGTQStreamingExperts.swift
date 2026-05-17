@@ -12,9 +12,10 @@ import MLXNN
 public enum JANGTQStreamingExperts {
     public static var isEnabled: Bool {
         let env = ProcessInfo.processInfo.environment
-        guard let raw = env["MLXPRESS_STREAMING_EXPERTS"]?.lowercased() else {
-            return false
-        }
+        let raw =
+            env["MLXPRESS_STREAMING_EXPERTS"]?.lowercased()
+            ?? env["JANGPRESS_STREAMING_EXPERTS"]?.lowercased()
+            ?? "0"
         return raw == "1" || raw == "true" || raw == "yes" || raw == "on"
     }
 
@@ -30,6 +31,18 @@ public enum JANGTQStreamingExperts {
 
     public static var usesActiveExpertModule: Bool {
         isEnabled || residentExpertsEnabled
+    }
+
+    public static func configureModelDirectory(_ modelDirectory: URL) {
+        JANGTQStreamingExpertStore.shared.configureModelDirectory(modelDirectory)
+    }
+
+    public static func clearConfiguredModelDirectory() {
+        JANGTQStreamingExpertStore.shared.clearConfiguredModelDirectory()
+    }
+
+    public static func configuredModelDirectoryForDiagnostics() -> URL? {
+        JANGTQStreamingExpertStore.shared.configuredModelDirectoryForDiagnostics()
     }
 
     public static func resetResidentTensors() {
@@ -2158,6 +2171,7 @@ public final class StreamingTurboQuantSwitchReLUSquaredMLP: Module {
 private final class JANGTQStreamingExpertStore: @unchecked Sendable {
     static let shared = JANGTQStreamingExpertStore()
     private let lock = NSLock()
+    private var configuredModelDirectory: URL?
     private var cachedIndex: JANGTQStreamingExpertIndex?
     private let tensorCacheBudgetBytes = mlXPressStreamingExpertCacheBudgetBytes()
     private let bankCacheBudgetBytes = mlXPressStreamingBankCacheBudgetBytes()
@@ -2230,19 +2244,78 @@ private final class JANGTQStreamingExpertStore: @unchecked Sendable {
         private var cachedFileDescriptors: [String: Int32] = [:]
     #endif
 
+    func configureModelDirectory(_ modelDirectory: URL) {
+        let resolved = modelDirectory.resolvingSymlinksInPath()
+        var changed = false
+        lock.lock()
+        if configuredModelDirectory != resolved {
+            configuredModelDirectory = resolved
+            clearModelScopedCachesLocked()
+            changed = true
+        }
+        lock.unlock()
+        if changed {
+            machCache.removeAll()
+        }
+    }
+
+    func clearConfiguredModelDirectory() {
+        lock.lock()
+        configuredModelDirectory = nil
+        clearModelScopedCachesLocked()
+        lock.unlock()
+        machCache.removeAll()
+    }
+
+    func configuredModelDirectoryForDiagnostics() -> URL? {
+        lock.lock()
+        let directory = configuredModelDirectory
+        lock.unlock()
+        return directory
+    }
+
+    private func clearModelScopedCachesLocked() {
+        cachedIndex = nil
+        tensorCache.removeAll(keepingCapacity: false)
+        tensorCacheBytes = 0
+        activeBankCache.removeAll(keepingCapacity: false)
+        activeBankCacheBytes = 0
+        offsetSpanCache.removeAll(keepingCapacity: false)
+        offsetSpanCacheBytes = 0
+        residentTensors.removeAll(keepingCapacity: false)
+        residentTensorBytes = 0
+        machRegisteredTensors.removeAll(keepingCapacity: false)
+        machRegisteredTensorBytes = 0
+        machOffsetSpanRegisteredBytes = 0
+        directStackedTensorCache.removeAll(keepingCapacity: false)
+        directStackedShardCache.removeAll(keepingCapacity: false)
+        sliceCache.removeAll(keepingCapacity: false)
+        sliceCacheBytes = 0
+        readPolicyLogged = false
+        didPrewarmFullOffsetSpans = false
+    }
+
     func index() -> JANGTQStreamingExpertIndex? {
         lock.lock()
         if let cachedIndex {
             lock.unlock()
             return cachedIndex
         }
+        let configuredModelDirectory = configuredModelDirectory
         lock.unlock()
 
-        guard let path = ProcessInfo.processInfo.environment["MLXPRESS_MODEL_DIR"],
+        let modelDirectory: URL
+        if let configuredModelDirectory {
+            modelDirectory = configuredModelDirectory
+        } else if let path =
+            ProcessInfo.processInfo.environment["MLXPRESS_MODEL_DIR"]
+            ?? ProcessInfo.processInfo.environment["JANGPRESS_MODEL_DIR"],
             !path.isEmpty
-        else { return nil }
-
-        let modelDirectory = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+        {
+            modelDirectory = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+        } else {
+            return nil
+        }
         guard let built = try? JANGTQStreamingExpertIndex.build(modelDirectory: modelDirectory)
         else {
             return nil

@@ -348,7 +348,7 @@ Open boundary:
 | ZAYA text/VL JANGTQ/MXFP | JANGQ and Osaurus ZAYA1 text/VL | Zaya CCA cache, JANGTQ/MXFP decode, VL adapters, media salt, Hadamard/matmul shape coverage, multi-turn cache hit | No native MTP. |
 | MiniMax M2.7 JANG/JANGTQ | Small JANGTQ and CRACK JANG/JANGTQ_K | MiniMax template, reasoning on/off, JANGTQ streaming experts, low-footprint active routed decode, prefix/paged/disk/TurboQuant KV, multi-turn coherence | Local MiniMax CRACK rows are non-MTP unless real MTP tensor evidence appears. |
 | Ling/Bailing hybrid | Ling JANGTQ2 and MXFP4 CRACK | Bailing thinking template, hybrid cache/SSM rederive, nextn metadata handling, JANGTQ/MXFP decode, multi-turn coherence | Extra nextn-layer evidence exists, but Swift native-MTP auto-launch remains off. |
-| Hy3 | HYV3 JANGTQ/JANGTQ_K | Hy3 template kwargs, native runtime registration, compiled decode guard, nextn metadata handling, routed/JANGTQ decode, cache topology | Extra nextn-layer evidence exists, but Swift native-MTP auto-launch remains off. |
+| Hy3 | HYV3 JANGTQ/JANGTQ_K | Hy3 template kwargs, native runtime registration, compiled decode guard, nextn metadata handling, routed/JANGTQ decode, cache topology | Extra nextn-layer evidence exists, but Swift native-MTP auto-launch remains off. JANGTQ is live-proven; JANGTQ_K is correctness/low-footprint proven only through active streaming and still speed-blocked. |
 | Gemma 4 | Gemma-4 JANG_4M CRACK | Gemma4 template fallback/tools, sliding-window cache topology, RMSNorm no-scale parity, reasoning parser, multi-turn coherence | No native MTP. |
 | Nemotron Omni | JANGTQ/JANGTQ4/MXFP4 Omni Nano | Parakeet audio encoder, RADIO vision, Omni text/image/audio/video ingest, BatchEngine stress, cache/media state, text output coherence | No native MTP. |
 | Laguna | Laguna XS JANGTQ | Laguna/Mistral-style template and RoPE params, JANGTQ decode, prefix/paged/disk cache, multi-turn coherence | No native MTP. |
@@ -606,8 +606,97 @@ docs/local/live-model-matrix/20260517T170008Z_release_turnmatrix_ling_jangtq2/
   The TurboQuant B=2 row preserves the plain slot exactly against the B=2
   plain/plain reference and records `compatibilitySplits=9`.
 
-Boundary: this is the JANGTQ2 CRACK bundle. The larger MXFP4 Ling bundle still
-needs its own live turnmatrix before it is promoted.
+The larger `Ling-2.6-flash-MXFP4-CRACK` bundle now also has a current release
+turnmatrix:
+
+```text
+docs/local/live-model-matrix/20260517T180538Z_release_turnmatrix_ling_mxfp4_current/
+```
+
+MXFP4 Ling status:
+
+- config/template/MTP metadata rows: PASS, with `modelType=bailing_hybrid`,
+  `dispatch=bailing_hybrid`, 32 layers, `weightFormat=mxfp4`, and tokenizer
+  BOS/EOS coverage;
+- `BENCH_PROD` cache OFF and cache ON: 7/7 each, visible coherent answers,
+  normal stops, no loop/leak, no active thinking rail, and no hidden sampler
+  guard;
+- bundle/default fallback sampling resolved to `temp=0.600`, `topP=1.000`,
+  `topK=0`, `minP=0.000`, `rep=nil`, `seed=0`;
+- release decode telemetry is about 9.7-10.1 tok/s on the short production
+  rows, with cache OFF peak RSS `46690MiB` and cache ON peak RSS `46384MiB`;
+- cache ON records the expected hybrid topology:
+  `hybrid=true`, `pagedIncompatible=true`, disk L2 `hits=1`, `stores=21`,
+  `maxBytes=4294967296`, and SSM companion `hits=1`, `reDerives=0`;
+- BatchEngine single/chat/disk-restore/B=2/per-slot/TurboQuant B=2 all pass,
+  and the TurboQuant B=2 row preserves the plain slot exactly against the B=2
+  plain/plain reference with `compatibilitySplits=9`.
+
+Boundary: Ling/Bailing is now live-proven for the current text turnmatrix on
+both JANGTQ2 and MXFP4. Native MTP stays fail-closed unless the family gets a
+separate verified runtime profile; the current rows do not auto-activate
+`nextn`/MTP metadata by name.
+
+## Hy3 JANGTQ Release Matrix - 2026-05-17
+
+Fresh release artifact:
+
+```text
+docs/local/live-model-matrix/20260517T180931Z_release_turnmatrix_hy3_jangtq_current/
+```
+
+`Hy3-preview-JANGTQ` is green for the current text turnmatrix:
+
+- config/template/MTP metadata rows: PASS, with `modelType=hy_v3`,
+  `dispatch=hy_v3`, 80 layers, `weightFormat=mxtq`, JANGTQ sidecar tensors,
+  routed expert bits `2`, and tokenizer BOS/EOS coverage;
+- `BENCH_PROD` cache OFF and cache ON: 7/7 each, visible coherent output,
+  normal stops, no active thinking rail, and no hidden sampler guard;
+- generation config is applied as declared for this bundle:
+  `temp=0.900`, `topP=1.000`, `topK=-1`, `minP=0.000`, `rep=nil`, `seed=0`.
+  The negative top-k is recorded as the bundle value reaching the runtime, not
+  silently rewritten in the live row;
+- release decode telemetry is about 23-24 tok/s after load; cold first prompt
+  time is high, but same-prompt cache falls to hundreds of milliseconds;
+- cache ON is non-hybrid/paged-compatible for this row and records paged
+  `hits=1`, disk L2 `stores=21`, and `maxBytes=4294967296`;
+- disk restore, B=2 concurrent, per-slot sampler, and TurboQuant-KV B=2 all
+  pass. The TurboQuant B=2 row preserves the plain slot exactly against the B=2
+  plain/plain reference with `compatibilitySplits=10`.
+
+Hy3 JANGTQ_K is not a fast production row yet, but the current failure mode is
+now narrowed and documented:
+
+```text
+docs/local/live-model-matrix/20260517T182455Z_release_turnmatrix_hy3_jangtqk_current/
+docs/local/live-model-matrix/20260517T183024Z_hy3_jangtqk_streaming_probe/
+docs/local/live-model-matrix/20260517T183237Z_hy3_jangtqk_streaming_modeldir_probe/
+docs/local/live-model-matrix/20260517T184132Z_hy3_jangtqk_streaming_autodir_after_fix/
+```
+
+- The eager JANGTQ_K production row was killed before load completion. The
+  model is 102GB on disk and uses nested routed expert bits
+  `gate_proj=2`, `up_proj=2`, `down_proj=4`; this is a real low-RAM loading
+  problem, not a sampling problem.
+- With active expert streaming enabled but no model directory bound, load
+  skipped `91008` per-expert tensors and then failed at runtime with
+  `missing active JANGTQ gate/up tensors for layer 1`.
+- Binding the real model directory proved the active-streaming correctness path:
+  load completed in `6.03s`, peak RSS was `6383MiB`, active expert tensors were
+  indexed as `layers=79 experts=192 stackedLayers=0`, and the production
+  content matrix passed 7/7 with bundle sampling unchanged.
+- The engine now binds the loaded model directory inside `loadWeights` when
+  active streaming is enabled, so the same row passes without requiring a
+  process-global `MLXPRESS_MODEL_DIR`: load `3.84s`, peak RSS `6168MiB`, same
+  active expert index, and 7/7 coherent content rows.
+
+Boundary: Hy3 JANGTQ_K is correctness/low-footprint proven through active
+expert streaming, but it is still speed-blocked at about 1.4 tok/s on the
+short production row. The remaining work is active expert residency/stacked
+bank speed, not a fake repetition penalty, temperature floor, or template
+guard. Also, the active-expert store remains process-global; true simultaneous
+multi-model streaming needs a per-loaded-model store or module-captured index
+before Osaurus should expose multiple active JANGTQ_K streaming models.
 
 ## Gemma 4 Text Release Matrix - 2026-05-17
 

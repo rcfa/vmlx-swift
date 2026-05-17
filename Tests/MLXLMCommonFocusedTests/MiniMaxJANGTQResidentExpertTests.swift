@@ -3,10 +3,35 @@
 
 import Foundation
 import MLX
+@testable import MLXLMCommon
 @testable import MLXLLM
 import XCTest
 
 final class MiniMaxJANGTQResidentExpertTests: XCTestCase {
+    func testStreamingFlagAcceptsJangPressAlias() {
+        withFocusedEnvironment("MLXPRESS_STREAMING_EXPERTS", value: nil) {
+            withFocusedEnvironment("JANGPRESS_STREAMING_EXPERTS", value: "1") {
+                XCTAssertTrue(JANGTQStreamingExperts.isEnabled)
+            }
+        }
+    }
+
+    func testConfiguredModelDirectoryDoesNotDependOnProcessEnvironment() {
+        let envDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vmlx-env-\(UUID().uuidString)")
+        let configuredDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vmlx-configured-\(UUID().uuidString)")
+
+        withFocusedEnvironment("MLXPRESS_MODEL_DIR", value: envDirectory.path) {
+            JANGTQStreamingExperts.configureModelDirectory(configuredDirectory)
+            defer { JANGTQStreamingExperts.clearConfiguredModelDirectory() }
+
+            XCTAssertEqual(
+                JANGTQStreamingExperts.configuredModelDirectoryForDiagnostics(),
+                configuredDirectory.resolvingSymlinksInPath())
+        }
+    }
+
     func testResidentExpertModeDoesNotMaterializeSwitchMLPBanks() throws {
         let config = try decodeMiniMaxConfig(
             hiddenLayers: 1,
@@ -70,11 +95,15 @@ final class MiniMaxJANGTQResidentExpertTests: XCTestCase {
 
 private func withFocusedEnvironment<T>(
     _ key: String,
-    value: String,
+    value: String?,
     body: () throws -> T
 ) rethrows -> T {
     let oldValue = getenv(key).map { String(cString: $0) }
-    setenv(key, value, 1)
+    if let value {
+        setenv(key, value, 1)
+    } else {
+        unsetenv(key)
+    }
     defer {
         if let oldValue {
             setenv(key, oldValue, 1)

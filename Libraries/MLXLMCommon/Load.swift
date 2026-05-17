@@ -195,6 +195,9 @@ public func loadWeights(
         var skippedPreservedMTPTensors = 0
         var skippedPreservedMTPShards = 0
         let streamingRoutedExperts = JANGTQStreamingExperts.isEnabled
+        if streamingRoutedExperts {
+            JANGTQStreamingExperts.configureModelDirectory(modelDirectory)
+        }
         for url in allShardURLs {
             if !loadPreservedMTP,
                 let headerNames = try? loadSafetensorsHeaderNamesForBaseLoad(url),

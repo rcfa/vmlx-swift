@@ -315,6 +315,9 @@ struct MLXPressLowRamPolicySourceTests {
             streamingExperts.contains(
                 "let expertOffset = ref.offset + UInt64(expertIdx * expertByteCount)"))
         #expect(streamingExperts.contains("isStreamableRoutedTensorKey"))
+        #expect(streamingExperts.contains("JANGPRESS_STREAMING_EXPERTS"))
+        #expect(streamingExperts.contains("configureModelDirectory"))
+        #expect(streamingExperts.contains("configuredModelDirectory"))
         #expect(
             streamingExperts.contains(
                 #"switch_mlp\.(gate_proj|up_proj|down_proj)\.(tq_packed|tq_norms)"#))
@@ -393,6 +396,7 @@ struct MLXPressLowRamPolicySourceTests {
         #expect(streamingExperts.contains(#""tensor.stacked_bank_read_range""#))
         #expect(streamingExperts.contains("materializeBeforeRouterReadback"))
         #expect(load.contains("declaresJANGTQNative"))
+        #expect(load.contains("JANGTQStreamingExperts.configureModelDirectory(modelDirectory)"))
         #expect(load.contains("JANGTQStreamingExperts.isStreamableRoutedTensorKey(key)"))
         #expect(load.contains("generating deterministic signs/codebooks on demand"))
         #expect(minimaxJANGTQ.contains("JANGTQStreamingExperts.residentExpertsEnabled"))
