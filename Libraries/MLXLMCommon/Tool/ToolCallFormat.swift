@@ -216,6 +216,13 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
             return .glm4
         }
 
+        // Ling/Bailing hybrid bundles stamp `tool_parser = "deepseek"` in
+        // JANG metadata, but non-JANG/config-only fallbacks still need the
+        // same GLM-style arg_key/arg_value parser instead of default JSON.
+        if type.hasPrefix("bailing") {
+            return .glm4
+        }
+
         // Gemma family
         if type.hasPrefix("gemma4") {
             return .gemma4
@@ -236,6 +243,13 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
 
         // Qwen3.5 family (qwen3_5, qwen3_5_moe, etc.)
         if type.hasPrefix("qwen3_5") {
+            return .xmlFunction
+        }
+
+        // Qwen3.6 / Qwen3-VL use the same XML-function tool envelope as the
+        // Qwen3.5 runtime family. Keep this as a model_type fallback for
+        // source/config-only bundles; JANG stamps still take precedence.
+        if type.hasPrefix("qwen3_6") || type.hasPrefix("qwen3_vl") {
             return .xmlFunction
         }
 

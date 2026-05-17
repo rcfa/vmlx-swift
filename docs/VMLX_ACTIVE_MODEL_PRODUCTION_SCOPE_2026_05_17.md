@@ -52,6 +52,7 @@ docs/local/production-readiness/20260517T1320_no_hidden_reasoning_regression/
 docs/local/production-readiness/20260517T1325_gemma4_swa_compile_policy/
 docs/local/production-readiness/20260517T1335_server_settings_validation/
 docs/local/production-readiness/20260517T1348_cache_policy_salt_active/
+docs/local/production-readiness/20260517T1405_parser_fallback_matrix/
 ```
 
 That inventory contains 28 non-excluded local bundles:
@@ -211,6 +212,14 @@ docs/local/production-readiness/20260517T174743Z_qwen_mtp_chunk_policy_finalize/
   scope, reasoning effort, KV codec, and max-KV policy change the coordinator
   cache key instead of sharing paged/disk/SSM state across incompatible modes.
   This is focused cache-key proof, not a live multi-turn substitute.
+- Fresh 14:05 PDT parser-fallback recheck has red/green artifacts for the
+  active direct parser alias suite. The red log proves `bailing_hybrid`,
+  `bailing_moe*`, `qwen3_6*`, and `qwen3_vl` model-type fallbacks previously
+  returned nil tool formats. The green log passes 8/8 after routing
+  Ling/Bailing to the GLM/deepseek arg-key parser and Qwen3.6/Qwen3-VL to the
+  XML-function parser. JANG capability stamps still remain the highest-priority
+  source when present. The broader no-hidden/parser sweep also passes 44/44 in
+  `NoHiddenReasoningCloseBiasFocusedTests_green.log`.
 
 ## Qwen3.5 35B 4-bit Loader Repair - 2026-05-17
 

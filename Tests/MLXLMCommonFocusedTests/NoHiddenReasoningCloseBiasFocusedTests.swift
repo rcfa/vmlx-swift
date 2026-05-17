@@ -710,6 +710,22 @@ struct DirectCapabilityParserAliasFocusedTests {
         }
     }
 
+    @Test("Ling/Bailing model-type fallback routes tools to GLM parser")
+    func bailingModelTypeFallbackRoutesToolsToGLMParser() {
+        for modelType in ["bailing_hybrid", "bailing_moe", "bailing_moe_v2_5"] {
+            #expect(ToolCallFormat.infer(from: modelType) == .glm4)
+            #expect(ToolCallFormat.infer(from: modelType.uppercased()) == .glm4)
+        }
+    }
+
+    @Test("Qwen3.6 and Qwen3-VL model-type fallbacks route to XML tools")
+    func qwen36AndQwen3VLModelTypeFallbacksRouteToolsToXML() {
+        for modelType in ["qwen3_6", "qwen3_6_moe", "qwen3_vl", "qwen3_5_vl"] {
+            #expect(ToolCallFormat.infer(from: modelType) == .xmlFunction)
+            #expect(ToolCallFormat.infer(from: modelType.uppercased()) == .xmlFunction)
+        }
+    }
+
     private func collectParser(
         _ parser: inout ReasoningParser?,
         _ text: String
