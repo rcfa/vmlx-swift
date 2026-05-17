@@ -100,7 +100,7 @@ weights.
 | `JANGQ/Hy3-preview-JANGTQ_K` | 102G | `hy_v3` | yes | file | `PASS` | `TODO` |
 | `JANGQ/Kimi-K2.6-JANGTQ_K` | 328G | `kimi_k25` | yes | file | `PASS` - `tojson(separators=(',', ':'))` and `enable_thinking`/`thinking` alias render through tools and thinking-off rows | `TODO` |
 | `JANGQ/Kimi-K2.6-Small-JANGTQ` | 143G | `kimi_k25` | yes | file | `PASS` - `tojson(separators=(',', ':'))` and `enable_thinking`/`thinking` alias render through tools and thinking-off rows | `TODO` |
-| `JANGQ/Laguna-XS.2-JANGTQ` | 9.4G | `laguna` | yes | file | `PASS` | `TODO` |
+| `JANGQ/Laguna-XS.2-JANGTQ` | 9.4G | `laguna` | yes | file | `PASS` | `PASS` |
 | `JANGQ/MiniMax-M2.7-Small-JANGTQ` | 37G | `minimax_m2` | yes | file | `PASS` | `PARTIAL` |
 | `JANGQ/ZAYA1-8B-JANGTQ4` | 4.6G | `zaya` | yes | file | `PASS` | `TODO` |
 | `JANGQ/ZAYA1-8B-JANGTQ_K` | 3.4G | `zaya` | yes | file | `PASS` | `PARTIAL` |
@@ -324,8 +324,13 @@ weights.
   switch layers.
 - Template/reasoning/tools: template smoke passes; tool parser maps to GLM-style
   parser; reasoning parser maps to Laguna.
-- Current status: no live row in this snapshot. Must run Laguna loop probe
-  before calling it usable.
+- Current status: `docs/local/live-model-matrix/20260517T_release_turnmatrix_laguna_xs_after_b2_fix/REPORT.md`
+  passes the text release turnmatrix: config/template, production defaults with
+  cache OFF/ON, BatchEngine single/chat, disk restore, B=2 concurrent, B=2
+  per-slot sampler, and TurboQuant-KV B=2 isolation. Bundle defaults apply
+  (`temp=0.700`, `topP=0.900`, `topK=0`, `rep=nil`) and decode telemetry is
+  about 31 tok/s on production rows. Generic paged prefix hit is `N-A` because
+  Laguna is paged-incompatible and uses disk-backed restore.
 
 ## Immediate Engine Gaps Found
 
