@@ -791,12 +791,15 @@ docs/local/production-readiness/20260517T_laguna_mistral_gemma4_active_contracts
   use the Mistral tool parser, Laguna template/RoPE contracts are active, and
   Gemma4 VLM source guards reject unsupported `LMInput.audio` explicitly while
   resolving `<|image|>` through `convertTokenToId` instead of `encode().last`.
-  These are parser/source contracts, not a live Gemma4 VL production row.
+  Additional VL focused contracts now pin Gemma4 VLM `rmsNormNoScale` parity and
+  dtype preservation, plus Gemma3/Gemma4 `maskedScatter` recoverable
+  `VLMError.processing` paths instead of process-aborting `fatalError`.
+  These are parser/source/math contracts, not a live Gemma4 VL production row.
 - Mistral3/Ministral factory-dispatch is now active too: a tiny synthetic config
   proves `weight_format=mxtq` and `MXTQ` route to `Mistral3TextJANGTQModel`,
   `mxtq_bits=4` changes the packed dense width, and `mxfp4` or missing
   `weight_format` stays on the vanilla `Mistral3TextModel` path.
-- The aggregate active focused target passes 156 tests in 24 suites in
+- The aggregate active focused target passes 160 tests in 24 suites in
   `MLXLMCommonFocusedTests_all.log`.
 - A post-fix live Gemma 4 `BENCH_HARMONY_CHECK` row passes: marker strings are
   absent from `.chunk`, the output is coherent visible README guidance, and

@@ -3,6 +3,7 @@
 
 import CoreGraphics
 import Foundation
+import MLX
 @testable import MLXVLM
 import Testing
 
@@ -105,12 +106,73 @@ struct VLShapeGuardFocusedTests {
         #expect(text.mxtqSeed == 123)
     }
 
+    @Test("Gemma4 VLM rmsNormNoScale matches fp32 reference")
+    func gemma4VLMRmsNormNoScaleMatchesReference() {
+        FocusedMLXTestSupport.withLock {
+            let x = MLXArray.linspace(Float(-2), Float(2), count: 2 * 8 * 64)
+                .reshaped(2, 8, 64)
+            let actual = rmsNormNoScale(x).asArray(Float.self)
+            let expected = Self.referenceRmsNormNoScale(x).asArray(Float.self)
+
+            #expect(actual.count == expected.count)
+            var maxAbs: Float = 0
+            for index in actual.indices {
+                maxAbs = max(maxAbs, abs(actual[index] - expected[index]))
+            }
+            #expect(maxAbs < 1e-4, "fp32 max abs diff = \(maxAbs)")
+        }
+    }
+
+    @Test("Gemma4 VLM rmsNormNoScale preserves bf16 dtype")
+    func gemma4VLMRmsNormNoScalePreservesDType() {
+        FocusedMLXTestSupport.withLock {
+            let x = MLXArray.ones([2, 4, 16], dtype: .bfloat16)
+            let result = rmsNormNoScale(x)
+            #expect(result.dtype == .bfloat16)
+        }
+    }
+
+    @Test("Gemma4 maskedScatter throws VLMError instead of fatalError")
+    func gemma4MaskedScatterThrowsInsteadOfFatalError() throws {
+        let source = try Self.source("Libraries/MLXVLM/Models/Gemma4.swift")
+
+        #expect(source.contains(
+            "private func maskedScatter(input: MLXArray, mask: MLXArray, source: MLXArray) throws -> MLXArray"))
+        #expect(source.contains("throw VLMError.processing("))
+        #expect(source.contains("Gemma4 maskedScatter: size mismatch"))
+        #expect(!source.contains(#"fatalError("#) || !source.contains("Gemma4 maskedScatter: size mismatch"))
+        #expect(source.contains("try maskedScatter(input: emb, mask: imgMaskExp, source: imgFeatures)"))
+    }
+
+    @Test("Gemma3 maskedScatter error cascades through prepare")
+    func gemma3MaskedScatterErrorCascadesThroughPrepare() throws {
+        let source = try Self.source("Libraries/MLXVLM/Models/Gemma3.swift")
+
+        #expect(source.contains("private func maskedScatter("))
+        #expect(source.contains("scaledImageFeatures: MLXArray\n) throws -> MLXArray"))
+        #expect(source.contains("throw VLMError.processing("))
+        #expect(source.contains("Gemma3 maskedScatter: size mismatch"))
+        #expect(!source.contains("Critical error in maskedScatter"))
+        #expect(source.contains("private func prepareInputsForMultimodal("))
+        #expect(source.contains("attentionMask: MLXArray?\n    ) throws -> (MLXArray, MLXArray?)"))
+        #expect(source.contains("private func getInputEmbeddings("))
+        #expect(source.contains("mask: MLXArray? = nil\n    ) throws -> (MLXArray, MLXArray?)"))
+        #expect(source.contains("let (inputEmbeddings, _) = try getInputEmbeddings("))
+        #expect(source.contains("let (finalEmbedding, finalAttentionMask4d) = try prepareInputsForMultimodal("))
+        #expect(source.contains("finalEmbedding = try maskedScatter("))
+    }
+
     private static func source(_ relativePath: String) throws -> String {
         let repo = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         return try String(contentsOf: repo.appendingPathComponent(relativePath), encoding: .utf8)
+    }
+
+    private static func referenceRmsNormNoScale(_ x: MLXArray, eps: Float = 1e-6) -> MLXArray {
+        let variance = (x * x).mean(axis: -1, keepDims: true)
+        return x * rsqrt(variance + eps)
     }
 
     private static let minimalZaya1VLJANGTQKConfig = #"""
