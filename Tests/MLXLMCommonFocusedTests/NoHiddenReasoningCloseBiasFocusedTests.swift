@@ -694,6 +694,36 @@ struct DirectCapabilityParserAliasFocusedTests {
         }
     }
 
+    @Test("versioned Gemma4, GLM5.1, and GPT-OSS aliases keep reasoning and tools aligned")
+    func versionedHarmonyAndGLMAliasesResolve() {
+        for stamp in ["gemma4_27b", "gemma_4_27b", "gemma-4-27b"] {
+            #expect(ReasoningParser.fromCapabilityName(stamp) != nil)
+            #expect(ToolCallFormat.fromCapabilityName(stamp) == .gemma4)
+        }
+        for modelType in ["gemma4_text", "gemma_4_text", "gemma-4-text"] {
+            #expect(reasoningStampFromModelType(modelType) == "harmony")
+            #expect(ToolCallFormat.infer(from: modelType) == .gemma4)
+        }
+
+        for stamp in ["glm5_1_flash", "glm_5_1_flash", "glm-5.1-flash"] {
+            #expect(ReasoningParser.fromCapabilityName(stamp) != nil)
+            #expect(ToolCallFormat.fromCapabilityName(stamp) == .glm4)
+        }
+        for modelType in ["glm5_1_flash", "glm_5_1_flash", "glm-5.1-flash"] {
+            #expect(reasoningStampFromModelType(modelType) == "think_xml")
+            #expect(ToolCallFormat.infer(from: modelType) == .glm4)
+        }
+
+        for stamp in ["gpt_oss_20b", "gpt-oss-20b", "gptoss_20b"] {
+            #expect(ReasoningParser.fromCapabilityName(stamp) != nil)
+            #expect(ToolCallFormat.fromCapabilityName(stamp) == .glm4)
+        }
+        for modelType in ["gpt_oss_20b", "gpt-oss-20b", "gptoss_20b"] {
+            #expect(reasoningStampFromModelType(modelType) == "harmony")
+            #expect(ToolCallFormat.infer(from: modelType) == .glm4)
+        }
+    }
+
     @Test("direct think-XML family aliases resolve to parser")
     func thinkXmlCapabilityAliasesResolve() {
         for stamp in [

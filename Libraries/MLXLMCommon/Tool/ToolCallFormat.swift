@@ -179,10 +179,12 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
     /// - Returns: The appropriate `ToolCallFormat`, or `nil` to use the default format
     public static func infer(from modelType: String, configData: Data? = nil) -> ToolCallFormat? {
         let type = modelType.lowercased()
+        let normalized = normalizedAlias(type)
+        let compact = compactAlias(type)
 
         // Llama family (need secondary signal for Llama 3 vs 1/2).
         // Kept byte-compatible with upstream ml-explore/mlx-swift-lm.
-        if type == "llama" {
+        if compact == "llama" {
             guard let data = configData,
                 let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { return nil }
@@ -204,14 +206,15 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         }
 
         // LFM2 family (lfm2, lfm2_moe, lfm2_5, lfm25, etc.)
-        if type.hasPrefix("lfm2") {
+        if compact.hasPrefix("lfm2") {
             return .lfm2
         }
 
-        // GLM/GLM-style families (glm4, glm4_moe, glm5, glm47, etc.).
-        if type.hasPrefix("glm4")
-            || type.hasPrefix("glm5")
-            || type.hasPrefix("glm47")
+        // GLM/GLM-style families (glm4, glm4_moe, glm5, glm47, GPT-OSS).
+        if compact.hasPrefix("glm4")
+            || compact.hasPrefix("glm5")
+            || compact.hasPrefix("glm47")
+            || compact.hasPrefix("gptoss")
         {
             return .glm4
         }
@@ -219,47 +222,51 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         // Ling/Bailing hybrid bundles stamp `tool_parser = "deepseek"` in
         // JANG metadata, but non-JANG/config-only fallbacks still need the
         // same GLM-style arg_key/arg_value parser instead of default JSON.
-        if type.hasPrefix("bailing") || type == "ling" || type.hasPrefix("ling_") {
+        if normalized.hasPrefix("bailing") || normalized == "ling" || normalized.hasPrefix("ling_") {
             return .glm4
         }
 
         // Gemma family
-        if type.hasPrefix("gemma4") {
+        if compact.hasPrefix("gemma4") {
             return .gemma4
         }
-        if type.hasPrefix("gemma3") || type == "gemma" {
+        if compact.hasPrefix("gemma3") || compact == "gemma" {
             return .gemma
         }
 
         // MiniMax family (minimax, minimax_m2)
-        if type.hasPrefix("minimax") {
+        if compact.hasPrefix("minimax") {
             return .minimaxM2
         }
 
         // Nemotron family (nemotron_h, etc.)
-        if type.hasPrefix("nemotron") {
+        if compact.hasPrefix("nemotron") {
             return .xmlFunction
         }
 
         // Qwen3.5 family (qwen3_5, qwen3_5_moe, etc.)
-        if type.hasPrefix("qwen3_5") {
+        if normalized.hasPrefix("qwen3_5") || compact.hasPrefix("qwen35") {
             return .xmlFunction
         }
 
         // Qwen3.6 / Qwen3-VL use the same XML-function tool envelope as the
         // Qwen3.5 runtime family. Keep this as a model_type fallback for
         // source/config-only bundles; JANG stamps still take precedence.
-        if type.hasPrefix("qwen3_6") || type.hasPrefix("qwen3_vl") {
+        if normalized.hasPrefix("qwen3_6")
+            || compact.hasPrefix("qwen36")
+            || normalized.hasPrefix("qwen3_vl")
+            || compact.hasPrefix("qwen3vl")
+        {
             return .xmlFunction
         }
 
         // Qwen3-Next family (qwen3_next, etc.)
-        if type.hasPrefix("qwen3_next") {
+        if normalized.hasPrefix("qwen3_next") || compact.hasPrefix("qwen3next") {
             return .xmlFunction
         }
 
         // Mistral3 family (mistral3, mistral3_text, etc.)
-        if type.hasPrefix("mistral3") {
+        if compact.hasPrefix("mistral3") {
             return .mistral
         }
 
@@ -268,16 +275,15 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         // possible for text-only Ministral3 LLM bundles), match it
         // here so tool calling routes correctly. The outer `mistral3`
         // wrapper case is already handled above.
-        if type.hasPrefix("ministral3") {
+        if compact.hasPrefix("ministral3") {
             return .mistral
         }
 
         // Mistral 4 and Pixtral-family bundles share the Mistral tool
         // protocol. Some converted bundles expose the inner text decoder as
         // `mistral4` directly rather than through a `mistral3` VLM wrapper.
-        if type.hasPrefix("mistral4")
-            || type.hasPrefix("mistral_4")
-            || type.hasPrefix("pixtral")
+        if compact.hasPrefix("mistral4")
+            || compact.hasPrefix("pixtral")
         {
             return .mistral
         }
@@ -286,14 +292,14 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         // chat_template.jinja` uses GLM-family function-calling tags.
         // Matches the same parser as glm4_moe / glm5 / deepseek (V3
         // family) which all share the GLM-style tool format.
-        if type.hasPrefix("laguna") {
+        if compact.hasPrefix("laguna") {
             return .glm4
         }
 
         // Kimi family (kimi_k2, kimi_k15, etc.). JANG converters stamp
         // `capabilities.toolParser = "kimi_k2"`; non-JANG bundles fall
         // through to this model_type sniff.
-        if type.hasPrefix("kimi") {
+        if compact.hasPrefix("kimi") {
             return .kimiK2
         }
 
@@ -306,19 +312,19 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         // NOTE: intentionally narrower than `"deepseek"` prefix —
         // DSV3 / DSV3.2 / Kimi K2.x use the Kimi/GLM4-style tool
         // format, not DSML. We only trigger DSML on explicit `_v4`.
-        if type.hasPrefix("deepseek_v4") {
+        if normalized.hasPrefix("deepseek_v4") || compact.hasPrefix("deepseekv4") {
             return .dsml
         }
 
         // ZAYA uses Qwen-style XML function bodies with Zyphra-specific
         // wrapper tags. JANG stamps this as `zaya_xml`; this fallback covers
         // plain/non-JANG ZAYA configs.
-        if type.hasPrefix("zaya") || type.hasPrefix("zyphra") {
+        if compact.hasPrefix("zaya") || compact.hasPrefix("zyphra") {
             return .zayaXml
         }
 
         // Tencent Hunyuan v3 / Hy3 uses its own XML-like tool wrapper.
-        if type == "hy_v3" || type == "hy-v3" || type.hasPrefix("hy3") {
+        if normalized == "hy_v3" || compact == "hyv3" || compact.hasPrefix("hy3") {
             return .hunyuan
         }
 
@@ -339,18 +345,28 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
     public static func fromCapabilityName(_ name: String?) -> ToolCallFormat? {
         guard let name, !name.isEmpty else { return nil }
         let n = name.lowercased()
-        let normalized = n.replacingOccurrences(of: "-", with: "_")
+        let normalized = normalizedAlias(n)
+        let compact = compactAlias(n)
 
         // Direct rawValue match first (e.g. "xml_function", "minimax_m2").
-        if let direct = ToolCallFormat(rawValue: n) {
+        if let direct = ToolCallFormat(rawValue: n)
+            ?? ToolCallFormat(rawValue: normalized)
+        {
             return direct
         }
 
-        if normalized.hasPrefix("mistral4")
-            || normalized.hasPrefix("mistral_4")
-            || normalized.hasPrefix("mistral_small_4")
-            || normalized.hasPrefix("mistral_large_4")
-            || normalized.hasPrefix("pixtral")
+        if compact.hasPrefix("gemma4") {
+            return .gemma4
+        }
+
+        if compact.hasPrefix("gptoss") {
+            return .glm4
+        }
+
+        if compact.hasPrefix("mistral4")
+            || compact.hasPrefix("mistralsmall4")
+            || compact.hasPrefix("mistrallarge4")
+            || compact.hasPrefix("pixtral")
         {
             return .mistral
         }
@@ -359,7 +375,7 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         // V3-style DeepSeek aliases use the GLM arg_key/arg_value format, but
         // V4 Flash/Pro uses DSML.
         if normalized.hasPrefix("deepseek_v4")
-            || normalized.hasPrefix("deepseekv4")
+            || compact.hasPrefix("deepseekv4")
         {
             return .dsml
         }
@@ -370,11 +386,11 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         // raw value, and all of these non-DSV4 aliases use the
         // GLM/DeepSeek arg_key/arg_value
         // parser.
-        if n.hasPrefix("glm4_")
-            || n.hasPrefix("glm5")
-            || n.hasPrefix("glm47")
-            || n.hasPrefix("deepseek")
-            || n.hasPrefix("laguna")
+        if compact.hasPrefix("glm4")
+            || compact.hasPrefix("glm5")
+            || compact.hasPrefix("glm47")
+            || compact.hasPrefix("deepseek")
+            || compact.hasPrefix("laguna")
         {
             return .glm4
         }
@@ -452,5 +468,18 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         default:
             return nil
         }
+    }
+
+    private static func normalizedAlias(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: ".", with: "_")
+    }
+
+    private static func compactAlias(_ value: String) -> String {
+        normalizedAlias(value)
+            .replacingOccurrences(of: "_", with: "")
     }
 }

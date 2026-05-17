@@ -533,9 +533,10 @@ extension ReasoningParser {
     public static func fromCapabilityName(_ name: String?) -> ReasoningParser? {
         guard let name, !name.isEmpty else { return nil }
         let n = name.lowercased()
-        let normalized = n.replacingOccurrences(of: "-", with: "_")
+        let normalized = normalizedReasoningAlias(n)
+        let compact = compactReasoningAlias(n)
 
-        if normalized.hasPrefix("gemma4") || normalized.hasPrefix("gpt_oss") {
+        if compact.hasPrefix("gemma4") || compact.hasPrefix("gptoss") {
             return ReasoningParser(
                 startTag: "<|channel>",
                 endTag: "<channel|>",
@@ -545,6 +546,8 @@ extension ReasoningParser {
 
         if normalized.hasPrefix("glm4_moe")
             || normalized.hasPrefix("glm5")
+            || normalized.hasPrefix("glm_5")
+            || compact.hasPrefix("glm5")
             || normalized.hasPrefix("deepseek")
             || normalized.hasPrefix("laguna")
         {
@@ -615,6 +618,19 @@ extension ReasoningParser {
         default:
             return nil
         }
+    }
+
+    private static func normalizedReasoningAlias(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: ".", with: "_")
+    }
+
+    private static func compactReasoningAlias(_ value: String) -> String {
+        normalizedReasoningAlias(value)
+            .replacingOccurrences(of: "_", with: "")
     }
 
     /// Build a parser that accounts for the actual prompt state.
@@ -755,10 +771,15 @@ extension ReasoningParser {
 public func reasoningStampFromModelType(_ modelType: String?) -> String {
     guard let modelType, !modelType.isEmpty else { return "none" }
     let t = modelType.lowercased()
+    let normalized = t
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .replacingOccurrences(of: "-", with: "_")
+        .replacingOccurrences(of: ".", with: "_")
+    let compact = normalized.replacingOccurrences(of: "_", with: "")
 
     // Gemma-4 harmony channel envelope: `<|channel>thought\n…<channel|>`.
     // Distinct from `<think>` XML.
-    if t.hasPrefix("gemma4") {
+    if compact.hasPrefix("gemma4") {
         return "harmony"
     }
 
@@ -768,7 +789,7 @@ public func reasoningStampFromModelType(_ modelType: String?) -> String {
     // default parser treats them as content. Documented in
     // docs/OSAURUS-PRODUCTION-HANDOFF-2026-05-04.md as the gpt_oss
     // Harmony marker leak.
-    if t.hasPrefix("gpt_oss") {
+    if compact.hasPrefix("gptoss") {
         return "harmony"
     }
 
@@ -783,11 +804,11 @@ public func reasoningStampFromModelType(_ modelType: String?) -> String {
     let thinkXmlPrefixes = [
         "qwen3",        // qwen3, qwen3_5, qwen3_6, qwen3_moe, qwen3_next
         "deepseek",     // deepseek_v3, deepseek_v4, deepseek_r1
-        "glm4_moe",     // glm4_moe, glm4_moe_lite
+        "glm4moe",      // glm4_moe, glm4_moe_lite
         "glm5",         // glm5 family
         "minimax",      // minimax, minimax_m2, minimax_m3
         "kimi",         // kimi_k2, kimi_k25
-        "nemotron_h",   // NemotronH / Cascade series
+        "nemotronh",    // NemotronH / Cascade series
         "holo",         // Holo3 variants
         "bailing",      // bailing_hybrid / bailing_moe_v2_5 (Ling-2.6-flash) —
                         // chat template emits `<think>...</think>` envelope
@@ -809,10 +830,10 @@ public func reasoningStampFromModelType(_ modelType: String?) -> String {
                         // fallback must still route pre-`</think>` bytes to
                         // `.reasoning` instead of `.chunk`.
         "hy3",          // Tencent Hunyuan v3 aliases. Real JANG bundles stamp
-        "hy_v3",        // `capabilities.reasoning_parser = "qwen3"`, but
-        "hy-v3",        // non-JANG/fallback paths should still pick think_xml.
+        "hyv3",         // `capabilities.reasoning_parser = "qwen3"`, but
+                        // non-JANG/fallback paths should still pick think_xml.
     ]
-    if thinkXmlPrefixes.contains(where: t.hasPrefix) {
+    if thinkXmlPrefixes.contains(where: compact.hasPrefix) {
         return "think_xml"
     }
 
