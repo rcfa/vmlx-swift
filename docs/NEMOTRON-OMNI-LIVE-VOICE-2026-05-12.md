@@ -12,28 +12,29 @@ here now live in this package as `OmniAudioLatencyBench` and
 kept as historical evidence; current `vmlx-swift` release-built evidence is
 tracked in `docs/VMLX_ACTIVE_MODEL_PRODUCTION_SCOPE_2026_05_17.md`.
 
-2026-05-17 08:10 PDT recheck: release builds and live audio probes were rerun
+2026-05-17 08:56 PDT current-checkout recheck: release builds and live audio probes were rerun
 from this `vmlx-swift` checkout under
-`docs/local/live-model-matrix/20260517T_omni_live_voice_recheck_now/`.
+`docs/local/live-model-matrix/20260517T155603Z_omni_live_voice_current_verify/`.
 `OmniAudioLatencyBench`, `OmniAudioChunkStabilityBench`, and `RunBench` all
-rebuilt in release mode. `swift test --filter NemotronHOmniPreEncodedAudioTests`
-is blocked in this local toolchain before the Omni tests run because the Swift
-`Testing` module is unavailable; this is recorded as a test-runner/toolchain
-blocker, not as an Omni runtime pass.
+rebuilt in release mode. The Xcode-backed focused test command passed 8/8; a
+plain CLI `swift test` invocation can still fail to locate the Swift `Testing`
+module on this machine, so use the documented `DEVELOPER_DIR=... xcrun swift
+test ... -Xswiftc -F .../Frameworks` form for current proof.
 
 Fresh live evidence:
 
 - `Nemotron-Omni-Nano-JANGTQ4-CRACK` full Omni `RunBench` at 48 tokens passed
   18/18 rows with bundle generation defaults, including text, image, video,
   audio, mixed image+audio, media-salt isolation, hybrid SSM warm-pass, and
-  BatchEngine audio/image rows.
+  BatchEngine text/image/audio rows. Load was 1.79 s; direct decode rows were
+  88.4-110.3 tok/s and BatchEngine rows were 37.6-70.8 tok/s.
 - The JANGTQ4 live audio bench used `temperature=0.600`, `top_p=0.950`,
   `top_k=0`, `min_p=0.000`, `repetition_penalty=1.000` from
   `generation_config.json`; it pre-encoded Parakeet audio to `63 x 2688`
-  embeddings in 46.2 ms. Raw PCM and pre-encoded audio both streamed through
-  BatchEngine and TokenIterator. First deltas were about 211-227 ms for raw
-  BatchEngine, 178-179 ms for pre-encoded BatchEngine, 192 ms for raw
-  TokenIterator, and 160-162 ms for pre-encoded TokenIterator.
+  embeddings in 50.1 ms. Raw PCM and pre-encoded audio both streamed through
+  BatchEngine and TokenIterator. First deltas were 203.5-219.3 ms for raw
+  BatchEngine, 176.0-188.7 ms for pre-encoded BatchEngine, 184.6-188.5 ms for
+  raw TokenIterator, and 157.1-157.7 ms for pre-encoded TokenIterator.
 - The JANGTQ and MXFP4 Omni bundles also loaded and streamed the same fixture
   through raw/pre-encoded BatchEngine and TokenIterator paths at 32 tokens.
   JANGTQ pre-encode was 43.9 ms; MXFP4 pre-encode was 48.1 ms.

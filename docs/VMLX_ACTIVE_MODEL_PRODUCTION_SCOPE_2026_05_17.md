@@ -284,6 +284,7 @@ Fresh 2026-05-17 artifacts:
 ```text
 docs/local/live-model-matrix/20260517T_omni_reverify/
 docs/local/live-model-matrix/20260517T_omni_current_recheck/
+docs/local/live-model-matrix/20260517T155603Z_omni_live_voice_current_verify/
 ```
 
 Current result on `Nemotron-Omni-Nano-JANGTQ4-CRACK`:
@@ -325,6 +326,31 @@ Current result on `Nemotron-Omni-Nano-JANGTQ4-CRACK`:
   - `omni_runbench_jangtq4_48_current.log`: integrated current `BENCH_OMNI=1`
     passes 14/14 at `maxTokens=48`, with load 1.95 s and decode rows
     90.4-109.9 tok/s.
+- Fresh 08:56 PDT current-verify recheck:
+  - `NemotronHOmniPreEncodedAudioTests.log`: Xcode-backed focused test command
+    passes 8/8, including retained live audio snapshots, pre-encoded Parakeet
+    preservation, RADIO pixel shuffle, Parakeet relative shift, EVS placeholder
+    count, projector remaps, source weight transposes, and generation-default
+    plumbing.
+  - `build_omni_audio_latency.log`, `build_omni_audio_chunk_stability.log`,
+    and `build_runbench.log`: all three release products rebuilt.
+  - `omni_audio_latency_jangtq4_both_paths_32.log`: JANGTQ4 loads, uses bundle
+    defaults (`temp=0.600 topP=0.950 topK=0 minP=0.000 rep=1.000`), pre-encodes
+    Parakeet to 63 x 2688 in 50.1 ms, and streams raw PCM plus pre-encoded
+    audio through both BatchEngine and TokenIterator. First deltas are
+    203.5-219.3 ms raw BatchEngine, 176.0-188.7 ms pre-encoded BatchEngine,
+    184.6-188.5 ms raw TokenIterator, and 157.1-157.7 ms pre-encoded
+    TokenIterator. Decode rates are 62.3-73.1 tok/s.
+  - `cache_artifacts_listing.txt`: the audio bench wrote `cache_index.db`,
+    safetensors block entries, and `ssm_companion` state under the raw and
+    pre-encoded cache dirs.
+  - `omni_audio_chunk_stability_jangtq4.log`: 10/10 prefix comparisons remain
+    not concat-safe, so retained PCM plus full-snapshot pre-encode remains the
+    required live voice contract.
+  - `omni_runbench_jangtq4_48.log`: integrated `BENCH_OMNI=1`
+    `BENCH_OMNI_BATCH=1` passes 18/18 at `maxTokens=48`. Load is 1.79 s,
+    direct decode rows are 88.4-110.3 tok/s, and BatchEngine rows are
+    37.6-70.8 tok/s.
 
 ## ZAYA Harness and VL Follow-Up - 2026-05-17
 
@@ -571,6 +597,33 @@ docs/local/live-model-matrix/20260517T_omni_live_voice_recheck_now/
   but some 48-token rows repeat concise sentences or continue to the token cap.
   This is an honest runtime/termination boundary, not a reason to add hidden
   sampling or forced-stop guards.
+
+Fresh current-verify live voice recheck at 2026-05-17 08:56 PDT:
+
+```text
+docs/local/live-model-matrix/20260517T155603Z_omni_live_voice_current_verify/
+```
+
+- Xcode-backed `NemotronHOmniPreEncodedAudioTests` passed 8/8. The plain CLI
+  `swift test` toolchain issue remains a command-selection problem; the current
+  passing command includes the Xcode framework search path.
+- Release builds passed for `OmniAudioLatencyBench`,
+  `OmniAudioChunkStabilityBench`, and `RunBench`.
+- JANGTQ4 live audio streamed raw PCM and pre-encoded Parakeet embeddings
+  through BatchEngine and TokenIterator using bundle defaults. Parakeet
+  pre-encode was 50.1 ms for 63 x 2688 embeddings. First-delta latency was
+  203.5-219.3 ms raw BatchEngine, 176.0-188.7 ms pre-encoded BatchEngine,
+  184.6-188.5 ms raw TokenIterator, and 157.1-157.7 ms pre-encoded
+  TokenIterator.
+- Cache proof exists for the audio bench: emitted cache dirs contain
+  `cache_index.db`, safetensors block entries, and `ssm_companion` artifacts.
+- Chunk stability remains intentionally negative: 10/10 prefix comparisons were
+  unstable at default tolerance, so concatenating independently encoded
+  Parakeet chunks remains invalid.
+- Integrated `BENCH_OMNI=1` + `BENCH_OMNI_BATCH=1` passed 18/18 at
+  `maxTokens=48`, covering text, image, video, audio, reasoning on/off, mixed
+  image+audio, media-salt isolation, hybrid SSM warm-pass, and BatchEngine
+  text/image/audio rows.
 
 ## Required Proof Per Active Bundle
 
