@@ -269,6 +269,18 @@ Current pushed branch state:
   `temp=0.600 topP=1.000 topK=0 rep=nil`, cache-on decode rows are about
   64.7-66.3 tok/s, peak RSS is about 5.1 GiB, and `PROD_CACHE_STATS` records
   disk L2 plus SSM companion state.
+- 2026-05-17 ZAYA-VL JANGTQ4 current non-Kimi turnmatrix:
+  `docs/local/live-model-matrix/20260517T_zaya_vl_jangtq4_current_non_kimi_turnmatrix/`
+  passes all implemented rows for the current JANGTQ4 VL bundle: config,
+  template, production defaults cache OFF/ON, BatchEngine text rows, disk
+  restore, B=2 concurrent, B=2 per-slot sampler, TurboQuant B=2, VL batch chat,
+  structured VL chat cache, and media-salt isolation. The generic batch
+  prefix-cache hit row remains `N-A` because the topology is path-dependent and
+  `pagedIncompatible=true`. Same-media VL cache probes hit disk restore
+  `97/97`, different-media probes miss correctly, compile OFF/ON VL chat grounds
+  the image and answers the follow-up color as `blue`, bundle defaults are
+  `temp=0.600 topP=1.000 topK=0 rep=nil`, peak RSS is about 6.8 GiB, and video
+  remains explicit `N-A` because this processor does not implement video input.
 - 2026-05-17 Gemma4 multi-turn reasoning follow-up:
   `docs/local/live-model-matrix/20260517T_reasoning_turn_matrix_harness/`
   adds `BENCH_REASONING_TURN_MATRIX=1` and passes Gemma4 through one loaded

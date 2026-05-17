@@ -91,6 +91,7 @@ Focused fix artifacts live under `docs/local/swift-release-gates/dsv4-fixes/`.
 | `JANGQ/ZAYA1-8B-JANGTQ_K` | `zaya` / `ZayaModel` | `PASS / NEEDS CURRENT RE-RUN` | Historical K evidence: release turnmatrix passes config/template, production defaults cache OFF/ON, BatchEngine single/chat/disk restore/concurrent/per-slot/TurboQuant B=2. Bundle defaults apply, reasoning ON/OFF flips produce visible answers, disk L2 and SSM hits are recorded, and release decode is about 64-66 tok/s. | Needs a current all-non-Kimi matrix re-run before Osaurus promotion. Generic paged prefix hit remains `N-A` by topology. |
 | `dealign.ai/Qwen3.6-27B-MXFP4-CRACK` | `qwen3_5` / `Qwen35` | `PARTIAL` | Loads in 1.7s; 3-turn chat is coherent; no loop; SSM warm second-turn row recorded; avg prompt around 360 tok/s; decode around 21.7 tok/s. | Thinking-on probe produced 377 chars of reasoning and no visible answer within budget. Footprint rises to about 16.2 GB, expected for MXFP4 but not a low-footprint routed row. |
 | `JANGQ/MiniMax-M2.7-Small-JANGTQ` | `minimax_m2` / `MiniMaxJANGTQModel` | `PARTIAL` | Loads in 9.7s; 3-turn chat is coherent; no loop; TQ disk round-trip passes; decode around 30.6 tok/s; tracked mmap buffers about 37 GB. | Thinking-on probe produced 483 chars reasoning and no visible answer. Activity Monitor-style footprint reaches about 38.2 GB, so this is not a low-RAM active-streaming pass. |
+| `JANGQ/ZAYA1-VL-8B-JANGTQ4` | `zaya1_vl` / `Zaya1VL` | `PASS` | Fresh current turnmatrix passes config/template, production defaults cache OFF/ON, BatchEngine text rows, disk restore, B=2 concurrent/per-slot/TurboQuant B=2, VL batch chat, structured VL chat cache, and media-salt isolation. Bundle defaults apply as `temp=0.600 topP=1.000 topK=0 rep=nil`; cache-on speed is about `59.4-63.6 tok/s` on short turns, peak RSS is about `6.8 GiB`, same-media disk restore hits `97/97`, different-media probe misses correctly, and compile OFF/ON VL two-turn chat both ground the image and answer the color follow-up as `blue`. | Generic paged prefix hit is `N-A` by topology. Video remains `N-A` because `ZAYA1-VL video input is not implemented`; this is a family capability gap, not a failed implemented row. |
 | `Osaurus/ZAYA1-VL-8B-MXFP4` | `zaya1_vl` / `Zaya1VL` | `PASS` | Release turnmatrix passes config/template, production defaults cache OFF/ON, BatchEngine rows, VL batch chat, structured chat cache, and media-salt isolation. Video is reported `N-A` because ZAYA1-VL processor does not implement video input. | None for implemented image/text/cache surfaces; video remains a family capability gap, not a failed row. |
 | `JANGQ/ZAYA1-VL-8B-JANGTQ_K` | `zaya1_vl` / `Zaya1VL` | `PARTIAL / NEEDS CURRENT RE-RUN` | Config/template, batch single/chat/disk restore/per-slot/TurboQuant B=2, and media-salt rows pass. Focused decoder test preserves nested `mxtq_bits.routed_expert` widths as gate/up=2 and down=4, and kernel probes match CPU dequant on sampled layer/expert rows. | Needs a current all-non-Kimi matrix re-run before Osaurus promotion. Historical math/top-k evidence ranks the wrong first token before decoding, `prod_defaults` fails `7+8-11`, and structured VL cache exhausts the 192-token budget. |
 | `dealign.ai/Ling-2.6-flash-MXFP4-CRACK` | `bailing_hybrid` / `BailingHybridModel` | `PASS` | Current release turnmatrix passes config/template/MTP metadata, production defaults cache OFF/ON, BatchEngine single/chat/disk restore/concurrent/per-slot/TurboQuant B=2. Bundle defaults apply with `rep=nil`; disk L2 and SSM companion hits are recorded. | Generic paged prefix hit is `N-A` by topology because Ling/Bailing uses disk-backed restore. |
@@ -274,10 +275,18 @@ weights.
   `tokenizer_config.json`, `chat_template.json`, and `chat_template.jinja` in the
   tokenizer shim because `swift-transformers` otherwise prefers the original
   sidecar and silently drops tools.
-- Live proof: `docs/local/live-model-matrix/20260517T_release_turnmatrix_zaya_scope/`
+- Live proof:
+  `docs/local/live-model-matrix/20260517T_zaya_vl_jangtq4_current_non_kimi_turnmatrix/`
+  freshly passes the current JANGTQ4 VL turnmatrix under the current non-Kimi
+  scope: config/template, production defaults cache OFF/ON, BatchEngine text
+  rows, disk restore, B=2 concurrent/per-slot/TurboQuant B=2, VL batch chat,
+  structured VL chat cache, and media-salt isolation. The VL chat row grounds
+  the image with compile OFF and ON, answers the follow-up color as `blue`,
+  hits disk restore for the same media (`97/97`), and correctly misses when the
+  image changes. `docs/local/live-model-matrix/20260517T_release_turnmatrix_zaya_scope/`
   plus targeted reruns under
   `docs/local/live-model-matrix/20260517T_release_targeted_rerun_after_harness_fixes/`
-  pass the implemented ZAYA-VL image/text/cache surfaces for JANGTQ4 and MXFP4:
+  also pass the implemented ZAYA-VL image/text/cache surfaces for JANGTQ4 and MXFP4:
   production defaults cache OFF/ON, BatchEngine rows, VL batch chat, structured
   cache, and media-salt isolation. Video rows are explicitly `N-A` because this
   processor throws `ZAYA1-VL video input is not implemented`.
