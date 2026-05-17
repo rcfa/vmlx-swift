@@ -39,6 +39,12 @@ No-load config/template metadata artifact:
 docs/local/live-model-matrix/20260517T_scope_exclude_kimi_dsv4_metadata/
 ```
 
+Fresh focused MTP/settings artifact:
+
+```text
+docs/local/production-readiness/20260517T160343Z_qwen_mtp_settings_current/
+```
+
 That inventory contains 28 non-excluded local bundles:
 
 - 12 text bundles
@@ -111,6 +117,35 @@ and
 prove all four MXFP variants now run bundle-default D3 exact-pq with
 `verifierMode=sequential_repair`, coherent two-turn output, disk-prefix hits,
 and SSM hits. Greedy rows still use `chunk_commit` where proven.
+
+Current focused gate at 2026-05-17 09:03 PDT:
+
+```text
+docs/local/production-readiness/20260517T160343Z_qwen_mtp_settings_current/
+```
+
+- `MTPRuntimeFocusedTests.log`: 40/40 pass. Coverage includes cached verifier
+  masks carrying cache offsets, preserved-only MTP detection without
+  auto-enable, metadata-only bundles without tensor evidence, explicit
+  tensor-gated Qwen3.5 MoE activation, task-local activation and env override
+  behavior, JANG metadata parsing, tensor/runtime-evidence-gated auto policy,
+  recursive D3 hidden-state draft/verify contract, Qwen3.5 SSM accepted-prefix
+  offsets, partial-reject lazy repair, private draft-cache refresh, greedy
+  chunk verifier telemetry, BatchEngine native-MTP exclusive lane, and rejection
+  of native MTP through batched `submit`.
+- The same focused run also pins shape-walk quantization for MXFP4,
+  JANG_2K, stock MLX affine embeddings, Qwen3.6 linear attention value dim,
+  ZAYA CCA output width, JANG shared-expert gate width, Qwen3.5 norm convention
+  propagation, and the rule that MTP sidecar tensors do not force backbone norm
+  shifts.
+- `VMLINUXServerRuntimeSettingsTests.log`: 12/12 pass. Coverage includes
+  bundle generation config before server overrides, nil server sampling fields
+  preserving engine/bundle defaults, top-k reaching speculative sampler
+  probabilities, no hidden sampler guards, invalid sampling/sleep values
+  reported instead of clamped, concrete prefix/paged/L2/SSM cache coordinator
+  settings, paged-vs-legacy disk conflict rejection, TurboQuant KV bit-width
+  validation, preserved-only MTP auto-launch denial, force-on requiring verified
+  accept/reject runtime, and policy/draft-limit launch resolution.
 
 ## Qwen3.5 35B 4-bit Loader Repair - 2026-05-17
 
