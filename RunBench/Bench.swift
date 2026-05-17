@@ -2795,6 +2795,57 @@ func runBatchEngineTurboQuantB2(modelPath: String, maxNew: Int) async throws {
         label: "TQ reference plain solo",
         text: tokenizer.decode(tokenIds: refTokens))
 
+    // Reference run: same B=2 scheduler shape as the heterogeneous probe, but
+    // both slots use plain KV. This is the isolation baseline. Some quantized
+    // families have legitimate B=1-vs-B=2 numeric tie breaks deep in an open
+    // generation; a TurboQuant neighbour should still match this B=2 plain
+    // reference exactly for the plain slot.
+    print("\n[Reference] slot 0 plain KV beside slot 1 plain KV (B=2)")
+    let engineRefB2 = BatchEngine(context: ctx, maxBatchSize: 2)
+    var refB2Inputs: [LMInput] = []
+    for p in prompts {
+        refB2Inputs.append(try await context.processor.prepare(input: UserInput(prompt: p)))
+    }
+    nonisolated(unsafe) let inRefB20 = refB2Inputs[0]
+    nonisolated(unsafe) let inRefB21 = refB2Inputs[1]
+    let (_, streamRefB20) = await engineRefB2.submit(input: inRefB20, parameters: plainParams)
+    let (_, streamRefB21) = await engineRefB2.submit(input: inRefB21, parameters: plainParams)
+    await requireActiveSlotOverlap(engineRefB2, atLeast: 2, label: "TQ B=2 plain/plain reference")
+    let refB2Results = await withTaskGroup(of: (Int, [Int]).self) { group in
+        group.addTask {
+            var ids: [Int] = []
+            for await e in streamRefB20 {
+                if case .token(let id) = e { ids.append(id) }
+                if ids.count >= maxNew { break }
+            }
+            return (0, ids)
+        }
+        group.addTask {
+            var ids: [Int] = []
+            for await e in streamRefB21 {
+                if case .token(let id) = e { ids.append(id) }
+                if ids.count >= maxNew { break }
+            }
+            return (1, ids)
+        }
+        var collected: [(Int, [Int])] = []
+        for await r in group { collected.append(r) }
+        return collected.sorted { $0.0 < $1.0 }
+    }
+    await engineRefB2.shutdown()
+    let refB2Slot0 = refB2Results[0].1
+    for (slot, ids) in refB2Results {
+        let text = tokenizer.decode(tokenIds: ids)
+        print(String(format: "  Plain/plain slot %d: %d tokens, first 8: %@",
+            slot, ids.count, "\(Array(ids.prefix(8)))"))
+        printDecodedOutput(label: "TQ reference B2 plain slot \(slot)", text: text)
+        if ids.isEmpty {
+            fputs("[TQ B=2] FAIL: B=2 plain/plain reference slot \(slot) produced zero tokens.\n",
+                  stderr)
+            exit(1)
+        }
+    }
+
     // --- Pass A: plain KV  +  TurboQuant  (heterogeneous) ----------------
     print("\n[Pass A] slot 0 = plain KV, slot 1 = TurboQuant(4,4)")
     let engineA = BatchEngine(context: ctx, maxBatchSize: 2)
@@ -2888,20 +2939,26 @@ func runBatchEngineTurboQuantB2(modelPath: String, maxNew: Int) async throws {
     //
     // Pass A slot 0 (plain KV) ran concurrently with Pass A slot 1
     // (TurboQuant). If cross-slot corruption existed, slot 0's output
-    // would differ from the solo reference run. We EXPECT byte-identical
+    // would differ from the shape-matched B=2 plain/plain reference. We EXPECT byte-identical
     // equality because both plain-KV decodes are deterministic at temp=0
     // and each slot's cache should be fully isolated from its neighbour.
     let a0 = resultsA[0].1
-    let isolationOk = a0 == refTokens
+    let soloOk = a0 == refTokens
+    if !soloOk {
+        let firstSoloDiff = firstDiffIndex(a0, refTokens) ?? -1
+        print("  Diagnostic: B=2 plain slot differs from B=1 solo at index \(firstSoloDiff); " +
+              "using B=2 plain/plain as the isolation baseline.")
+    }
+    let isolationOk = a0 == refB2Slot0
     print(String(format:
-        "\n  Slot 0 plain with TQ neighbour vs plain-solo reference: %@ (%d vs %d tokens)",
+        "\n  Slot 0 plain with TQ neighbour vs B=2 plain/plain reference: %@ (%d vs %d tokens)",
         isolationOk ? "IDENTICAL ✓" : "DIVERGED ✗",
-        a0.count, refTokens.count))
+        a0.count, refB2Slot0.count))
     if !isolationOk {
-        fputs("[TQ B=2] FAIL: slot 0 plain output drifted from the solo reference " +
+        fputs("[TQ B=2] FAIL: slot 0 plain output drifted from the B=2 plain/plain reference " +
               "when slot 1 ran TurboQuant concurrently. Cross-slot corruption.\n",
               stderr)
-        let firstDiff = firstDiffIndex(a0, refTokens) ?? -1
+        let firstDiff = firstDiffIndex(a0, refB2Slot0) ?? -1
         fputs("  first divergence index = \(firstDiff)\n", stderr)
         exit(1)
     }

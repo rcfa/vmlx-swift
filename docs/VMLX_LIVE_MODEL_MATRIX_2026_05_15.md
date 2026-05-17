@@ -12,10 +12,15 @@ scripts/vmlx-live-model-matrix.sh --profile inventory
 scripts/vmlx-live-model-matrix.sh --profile infer --max-size-gb 20
 scripts/vmlx-live-model-matrix.sh --profile all --max-size-gb 20
 scripts/vmlx-live-model-matrix.sh --profile turnmatrix --max-size-gb 6
+scripts/vmlx-live-model-matrix.sh --profile turnmatrix --release --max-size-gb 6
 scripts/vmlx-live-model-matrix.sh --profile batch --model ~/models/<bundle>
 scripts/vmlx-live-model-matrix.sh --profile all --allow-huge
 scripts/vmlx-live-model-matrix.sh --profile inventory --exclude-regex 'Kimi|DeepSeek-V4|DSV4'
 ```
+
+Use `--release` for any row where token/s is part of the gate. Debug builds are
+still useful for crash/cache diagnosis, but they are not production speed
+evidence.
 
 Artifacts are written under:
 
@@ -107,11 +112,15 @@ A model is not production-ready unless the artifact proves:
 - single-batch and multi-batch rows prove actual active slot overlap, not
   serialized reads from a fake concurrent harness;
 - TurboQuant KV rows prove B=2 mixed plain/TQ and all-TQ slots complete
-  coherently without cross-slot drift;
+  coherently without cross-slot drift; the plain-slot isolation baseline must
+  be shape-matched B=2 plain/plain, not a B=1 solo decode that can legitimately
+  diverge from batched numeric tie breaks;
 - new-session cache rows prove disk L2 restore with a fresh coordinator;
 - VL/video/audio rows use real media payloads and media-salt behavior;
 - VL models pass both text-only turns and media turns; text-only is the VL-off
   payload row, not a separate fake model mode;
+- video rows that hit a processor-level "video input is not implemented" error
+  are recorded as N-A for that family, not collapsed into either pass or fail;
 - MTP rows prove preserved metadata and keep speculative decode disabled until
   accept/reject runtime exists;
 - physical footprint is low for JANGTQ/active-routed models.

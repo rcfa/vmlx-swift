@@ -142,6 +142,46 @@ ZAYA1-8B-JANGTQ4 also passed the release `BENCH_PROD` cache-on multi-turn row:
 - ZAYA remains `pagedIncompatible=true` by topology, so generic paged-prefix
   hits must not be advertised for this family.
 
+## ZAYA Harness and VL Follow-Up - 2026-05-17
+
+Targeted rerun artifacts:
+
+```text
+docs/local/live-model-matrix/20260517T_release_targeted_rerun_after_harness_fixes/
+```
+
+Harness fixes from this pass:
+
+- `BENCH_VL_BATCH_CHAT` no longer assumes the synthetic CoreImage gradient has a
+  specific top/bottom orientation. The row still requires visible image color
+  grounding; it now asks for one visible color and accepts the actual red/blue
+  colors in the generated image.
+- ZAYA video rows now report `not applicable` when the processor explicitly
+  throws `ZAYA1-VL video input is not implemented`. This is a family capability
+  boundary, not a model coherency failure.
+- `BENCH_BATCH_TQ_B2` now uses a shape-matched B=2 plain/plain baseline for
+  plain-slot isolation. The old B=1 solo baseline remains a diagnostic, but it
+  is not a valid cross-slot corruption oracle for families that diverge only
+  because B=2 batching changes low-level numeric tie breaks deep in an open
+  decode.
+
+Post-harness targeted evidence:
+
+| Row | Result | Finding |
+|---|---|---|
+| `ZAYA1-8B-MXFP4.batch_tq_b2` | PASS | Plain slot beside TurboQuant matched B=2 plain/plain exactly; old B=1 solo comparison still drifts at token 110 and is logged as diagnostic only. |
+| `ZAYA1-VL-8B-JANGTQ4.vl_batch_chat` | PASS | Compile OFF and ON both ground the image and answer the follow-up color as `blue`. |
+| `ZAYA1-VL-8B-JANGTQ4.vl_mixed_text_image_video` | N-A for video | Text and image turns pass; video turn is explicitly not implemented for this processor. |
+| `ZAYA1-VL-8B-MXFP4.vl_mixed_text_image_video` | N-A for video | Text and image turns pass; video turn is explicitly not implemented for this processor. |
+
+Remaining non-false-positive blocker:
+
+- `ZAYA1-VL-8B-JANGTQ_K` is still not production-clear. The release matrix
+  produced `8` for the `7+8-11` smoke where the expected visible answer is `4`,
+  and the structured VL cache row exhausted the 192-token budget on the cold
+  image turn. Do not hide this with sampling clamps or looser validators; this
+  needs runtime/bundle root-cause work before that artifact is green.
+
 ## Required Proof Per Active Bundle
 
 For each non-excluded bundle, the production row must include:

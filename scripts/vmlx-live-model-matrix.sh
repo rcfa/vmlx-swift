@@ -18,7 +18,8 @@ Options:
   --allow-huge            Permit live loads above --max-size-gb.
   --exclude-regex REGEX   Skip discovered/model paths matching REGEX. Repeatable
                           patterns are ORed. Example: 'Kimi|DeepSeek-V4|DSV4'.
-  --no-build              Reuse existing .build/debug/RunBench.
+  --release               Build/run .build/release/RunBench. Required for speed gates.
+  --no-build              Reuse existing RunBench for the selected configuration.
   --dry-run               Write planned commands but do not execute live loads.
   -h, --help              Show this help.
 
@@ -51,6 +52,7 @@ BUILD=1
 DRY_RUN=0
 MODELS=()
 EXCLUDE_REGEX=""
+BUILD_CONFIGURATION="debug"
 SWIFT_DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 
 while [[ $# -gt 0 ]]; do
@@ -80,6 +82,8 @@ while [[ $# -gt 0 ]]; do
         EXCLUDE_REGEX="${EXCLUDE_REGEX}|${2}"
       fi
       shift 2 ;;
+    --release)
+      BUILD_CONFIGURATION="release"; shift ;;
     --no-build)
       BUILD=0; shift ;;
     --dry-run)
@@ -298,7 +302,7 @@ mark_status() {
 
 run_runbench() {
   local name="$1"; shift
-  run_logged "$name" env "$@" .build/debug/RunBench
+  run_logged "$name" env "$@" ".build/${BUILD_CONFIGURATION}/RunBench"
 }
 
 matrix_max_tokens() {
@@ -436,8 +440,13 @@ safe_name() {
 
 maybe_build() {
   [[ "$BUILD" -eq 0 || "$PROFILE" == "inventory" ]] && return 0
+  local config_args=()
+  if [[ "$BUILD_CONFIGURATION" == "release" ]]; then
+    config_args=(-c release)
+  fi
   run_logged build_runbench env DEVELOPER_DIR="$SWIFT_DEVELOPER_DIR" \
-    swift build --jobs "${VMLINUX_SWIFT_BUILD_JOBS:-2}" --product RunBench
+    swift build "${config_args[@]}" --jobs "${VMLINUX_SWIFT_BUILD_JOBS:-2}" \
+      --product RunBench
 }
 
 write_inventory
@@ -448,6 +457,7 @@ if [[ "$PROFILE" == "inventory" ]]; then
     printf "# vMLX Live Model Matrix\n\n"
     printf -- "- run dir: %s\n" "$RUN_DIR"
     printf -- "- profile: inventory\n"
+    printf -- "- build configuration: %s\n" "$BUILD_CONFIGURATION"
     printf -- "- exclude regex: %s\n" "${EXCLUDE_REGEX:-none}"
     printf -- "- inventory: models.tsv\n"
   } >"${RUN_DIR}/REPORT.md"
@@ -524,6 +534,7 @@ done <"${RUN_DIR}/models.tsv"
   printf "# vMLX Live Model Matrix\n\n"
   printf -- "- run dir: %s\n" "$RUN_DIR"
   printf -- "- profile: %s\n" "$PROFILE"
+  printf -- "- build configuration: %s\n" "$BUILD_CONFIGURATION"
   printf -- "- exclude regex: %s\n" "${EXCLUDE_REGEX:-none}"
   printf -- "- max size GB: %s\n" "$MAX_SIZE_GB"
   printf -- "- prod max tokens: %s\n" "$(matrix_prod_max_tokens)"

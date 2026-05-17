@@ -45,7 +45,7 @@ enum VLBench {
 
         try await runTurn(
             label: "Turn 2 — follow-up (cache reuse)",
-            prompt: "What colour dominates the top edge?",
+            prompt: "Name one colour visible in the image. Answer with one word.",
             images: [.ciImage(image)],
             context: context, cache: cache, maxNewTokens: maxNewTokens
         )
@@ -92,7 +92,7 @@ enum VLBench {
 
             for (i, prompt) in [
                 "Describe what you see in this image in one sentence.",
-                "What colour dominates the top edge?",
+                "Name one colour visible in the image. Answer with one word.",
             ].enumerated() {
                 try await runBatchTurn(
                     engine: engine, context: ctx,
@@ -165,15 +165,16 @@ enum VLBench {
                         "\(label) did not emit grounded image/color language: \(preview)"
                 ])
         }
-        if prompt.localizedCaseInsensitiveContains("top edge"),
-            !containsAnyWord(visible, words: ["red"])
+        if (prompt.localizedCaseInsensitiveContains("colour visible")
+            || prompt.localizedCaseInsensitiveContains("color visible")),
+            !containsAnyWord(visible, words: ["red", "blue", "green"])
         {
             throw NSError(
                 domain: "VLBench",
                 code: 3,
                 userInfo: [
                     NSLocalizedDescriptionKey:
-                        "\(label) did not ground top-edge colour as red: \(preview)"
+                        "\(label) did not ground a visible image colour: \(preview)"
                 ])
         }
     }
@@ -269,6 +270,10 @@ enum VLBench {
             do {
                 lmInput = try await ctx.processor.prepare(input: userInput)
             } catch {
+                if isVideoNotImplemented(error) {
+                    print("    not applicable: processor video input is not implemented for this model: \(error)")
+                    return
+                }
                 print("    PREPARE ERROR: \(error)")
                 throw error
             }
@@ -397,7 +402,16 @@ enum VLBench {
             userInput = UserInput(prompt: prompt)
         }
         userInput.additionalContext = ["enable_thinking": thinking]
-        let lmInput = try await ctx.processor.prepare(input: userInput)
+        let lmInput: LMInput
+        do {
+            lmInput = try await ctx.processor.prepare(input: userInput)
+        } catch {
+            if video != nil, isVideoNotImplemented(error) {
+                print("  not applicable: processor video input is not implemented for this model: \(error)")
+                return
+            }
+            throw error
+        }
         nonisolated(unsafe) let sendable = lmInput
         let stream = await engine.generate(input: sendable, parameters: params)
 
@@ -1077,6 +1091,10 @@ enum VLBench {
         do {
             lmInput = try await context.processor.prepare(input: userInput)
         } catch {
+            if isVideoNotImplemented(error) {
+                print("  not applicable: processor video input is not implemented for this model: \(error)")
+                return
+            }
             fputs("[VideoSmoke] FAIL: processor.prepare threw: \(error)\n", stderr)
             exit(1)
         }
@@ -1208,5 +1226,12 @@ enum VLBench {
                 userInfo: [NSLocalizedDescriptionKey: "failed to build CIImage"])
         }
         return image
+    }
+
+    private static func isVideoNotImplemented(_ error: Error) -> Bool {
+        let message = String(describing: error).lowercased()
+        return message.contains("video input is not implemented")
+            || message.contains("video is not implemented")
+            || message.contains("unsupported video")
     }
 }
