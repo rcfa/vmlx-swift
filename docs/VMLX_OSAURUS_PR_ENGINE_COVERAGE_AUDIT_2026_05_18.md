@@ -171,6 +171,36 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   parsing, native-MTP support, and served-name preservation for
   `ResolvedModelConfiguration`.
 
+2026-05-17 21:12 PDT live PR/comment refresh:
+
+- Current recent Osaurus PR state:
+  #1146, #1145, #1144, #1141, #1140, #1139, #1138, #1137, #1136, #1135,
+  #1134, #1132, #1131, #1130, #1128, #1127, #1126, #1125, #1124, #1123,
+  #1122, #1120, #1119, #1117, #1116, and #1115 are merged. #1133 remains
+  open draft/behind, #1118 remains open/behind, and #1110 remains open/dirty.
+- #1132 adds the multimodal plugin IO-lane spec. #1133's comments still make
+  the follow-up explicit: keep the multimodal contract spec-first until the
+  support matrix says which model/provider families accept image/audio/video,
+  which unsupported-modality errors plugins see, and where redaction/logging
+  boundaries sit. The `vmlx-swift` package switch must therefore expose
+  capability/status JSON rather than letting Osaurus infer modality from model
+  names.
+- #1120 shrinks first-turn prompt tool surface and has a direct reviewer concern
+  about KV-cache invalidation if contexts are modified. Engine-side contract:
+  vmlx hashes the already-rendered token stream plus model/media/cache-policy
+  salts, so tool-schema prompt edits can only reuse the shared prefix and must
+  re-prefill the modified suffix. Fresh focused coverage added:
+  `promptToolSurfaceEditsNeverReturnFullPromptHit` in
+  `CacheCoordinatorTopologyFocusedTests`; the focused suite now passes 26/26.
+- #1119 adds Osaurus model idle residency policy. `vmlx-swift` already exposes
+  server runtime power settings and cache coordinator release/disable surfaces,
+  but the switch PR still needs a live deep-sleep/wake proof against the actual
+  Osaurus server process before claiming production lifecycle readiness.
+- #1118 is PocketTTS language selection and remains open/behind. It is mostly
+  output-speech UI/config work, not a vmlx inference-engine dependency, but it
+  touches resolver pins; the switch PR must re-run pin-integrity checks after
+  rebasing any open voice/runtime PRs.
+
 ## Current Switch Verdict
 
 Not ready to say "single `vmlx-swift` dependency is production-clear for all
@@ -223,6 +253,11 @@ row below has current `vmlx-swift` live proof.
 | #1066 `pin DSV4 vmlx update` | merged | DSV4 tokenizer/cache/runtime pin, local tokenizer fallback. | DSV4 separator fix and template kwargs rows pass; DSV4 live cache OFF/ON chat is coherent. | DSV4 remains partial until long-context/vector/API/speed/low-footprint gates pass. |
 | #1073 `Nemotron Omni live voice input path` | merged | Live voice, Parakeet/RADIO, media-cache token-aware restore, DSV4 pool/compressor fixes. | Omni JANGTQ/JANGTQ4/MXFP4 core matrices pass; current docs track Parakeet chunk concat caveat. Focused 2026-05-18 repeat-audio gate now proves block-L2 and `ssm_companion` writes for BatchEngine and manual TokenIterator paths after the bench store fix. DSV4 pool/compressor lineage is recorded. | Repeated cache-on audio semantic quality/termination and package-wide HTTP route proof remain open. |
 | #1110 `Harden DSV4 reasoning gates and runtime proof` | open, dirty | Native DSV4 chat encoder/tokenizer bridge, live DSV4 proof, runtime pin check. Current Osaurus head pins `vmlx-swift-lm 2cc64dd`. | `vmlx-swift` has DSV4 prompt-boundary fix and partial live proof, but it does not yet close the full #1110 bar. | Do not treat #1110 as merged release state; switch PR must resolve dirty state and rerun DSV4 release gates. |
+| #1118 `Add PocketTTS language selection` | open, behind | TTS language UI/config and resolver-pin churn. | No direct vmlx inference-engine change; keep Omni/Parakeet input-audio evidence separate from output TTS. | Re-run pin-integrity checks after any rebase/merge before the package switch. |
+| #1119 `Add model idle residency policy` | merged | Server idle residency, unload/sleep policy, runtime lifecycle hooks. | `VMLXServerRuntimeSettings.power` documents light/deep sleep settings and cache release/disable APIs exist. | Needs live Osaurus server deep-sleep/wake proof with loaded models before lifecycle readiness is claimed. |
+| #1120 `Shrink first-turn prompt tool surface` | merged | Prompt/tool-surface TTFT shrink, prefix-hash/eval concern, tool schema prompt composition. | vmlx cache tiers are rendered-token keyed and salted by model/media/KV policy/reasoning scope. Fresh focused test `promptToolSurfaceEditsNeverReturnFullPromptHit` passes as part of 26/26 `CacheCoordinatorTopologyFocusedTests`. | Osaurus should pass the rendered prompt/token stream through vmlx; do not add app-layer cache reuse based on logical conversation IDs. |
+| #1132 `Specify multimodal plugin IO lanes` | merged | Spec for plugin image/audio/video IO lanes. | `ModelRuntimeCapabilitySnapshot` and explicit media support booleans expose the engine-side support matrix Osaurus needs. | Complete live per-family capability matrix and unsupported-modality error shape before exposing broad plugin multimodal routing. |
+| #1133 `Pin plugin host multimodal request contracts` | open draft, behind | Contract tests for plugin-host multimodal requests; comments say spec-first/not ready. | vmlx now exports per-model support JSON, native-MTP status, parser stamps, generation defaults, and cache type for Osaurus to consume. | Keep draft until the model/provider support matrix, fallback/error shape, and redaction/logging boundaries are settled. |
 
 ## Pinned Dependency Window
 

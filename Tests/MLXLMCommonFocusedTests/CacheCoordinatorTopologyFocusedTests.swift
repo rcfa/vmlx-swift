@@ -63,6 +63,41 @@ struct CacheCoordinatorTopologyFocusedTests {
         }
     }
 
+    @Test("prompt tool-surface edits never return a full cached prompt hit")
+    func promptToolSurfaceEditsNeverReturnFullPromptHit() {
+        FocusedMLXTestSupport.withLock {
+        let tmp = makeTempDir("tool-surface-edit")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let coordinator = makeCoordinator(
+            usePagedCache: true,
+            enableDiskCache: true,
+            diskCacheDir: tmp,
+            modelKey: "tool-surface-focused",
+            blockSize: 1)
+
+        // These stand in for the already-rendered chat-template token stream:
+        // common system prefix, tool-schema token, then user prompt token. If
+        // Osaurus shrinks/expands the tool surface, vmlx must reuse only the
+        // shared prefix and re-prefill the modified schema/user suffix.
+        let original = [101, 201, 301]
+        let modifiedToolSchema = [101, 202, 301]
+
+        coordinator.storeAfterGeneration(
+            promptTokens: original,
+            perLayerData: fakeLayerData(tokenCount: original.count),
+            ssmStates: nil)
+
+        switch coordinator.fetch(tokens: modifiedToolSchema) {
+        case .hit(let matchedTokens, let remainingTokens, _, let blocks, _, _):
+            #expect(matchedTokens < original.count)
+            #expect(remainingTokens == Array(modifiedToolSchema.dropFirst(matchedTokens)))
+            coordinator.release(blocks: blocks)
+        case .miss:
+            break
+        }
+        }
+    }
+
     @Test("hybrid paged hit requires matching companion state")
     func hybridPagedHitRequiresSSMCompanion() {
         FocusedMLXTestSupport.withLock {
