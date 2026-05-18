@@ -105,7 +105,12 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
         in text: String, tools: [[String: any Sendable]]?
     ) -> [ToolCall] {
         let invokeOpen = "\(Self.dsmlPrefix)invoke name="
-        let invokeClose = "\(Self.dsmlPrefixClose)invoke>"
+        let invokeCloseTags = [
+            "\(Self.dsmlPrefixClose)invoke>",
+            // Live DSV4-Flash sometimes abbreviates the closing invoke tag
+            // while keeping the outer DSML envelope and parameters valid.
+            "\(Self.dsmlPrefixClose)inv>",
+        ]
 
         var results: [ToolCall] = []
         var cursor = text.startIndex
@@ -126,9 +131,8 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
             }
 
             // Find </｜DSML｜invoke>
-            guard
-                let close = text.range(
-                    of: invokeClose, range: closeAngle.upperBound ..< text.endIndex)
+            guard let close = firstRange(
+                of: invokeCloseTags, in: text, range: closeAngle.upperBound ..< text.endIndex)
             else { break }
 
             let body = String(text[closeAngle.upperBound ..< close.lowerBound])
@@ -139,6 +143,14 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
             cursor = close.upperBound
         }
         return results
+    }
+
+    private func firstRange(
+        of needles: [String], in text: String, range: Range<String.Index>
+    ) -> Range<String.Index>? {
+        needles
+            .compactMap { text.range(of: $0, range: range) }
+            .min { $0.lowerBound < $1.lowerBound }
     }
 
     /// Enumerate every `<｜DSML｜parameter name="NAME" string="BOOL">VALUE</｜DSML｜parameter>`

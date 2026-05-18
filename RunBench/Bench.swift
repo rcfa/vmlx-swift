@@ -159,11 +159,10 @@ struct Bench {
         //   - `.chunk(String)` text MUST NOT contain raw `<think>` /
         //     `</think>` markers — if it does, the reasoning parser
         //     never engaged.
-        //   - Model output is nondeterministic at temperature 0 (same
-        //     model, same prompt → different families emit tool calls
-        //     at different rates), so we do NOT require a `.toolCall`
-        //     event. We only require that IF the model emits raw
-        //     markers, they get stripped/extracted.
+        //   - a `.toolCall` event MUST be emitted for this strict
+        //     tool-only prompt. Set BENCH_BATCH_TOOLCALL_RAW=1 to dump
+        //     raw token IDs/decoded text when a family-specific parser
+        //     needs diagnosis.
         if (env["BENCH_BATCH_TOOLCALL"] ?? "0") == "1" {
             try await runBatchEngineToolCall(modelPath: modelPath, maxNew: maxNew)
             return
@@ -1188,6 +1187,32 @@ func runBatchEngineToolCall(modelPath: String, maxNew: Int) async throws {
         prompt: prompt,
         tools: [weatherTool],
         additionalContext: ["enable_thinking": false]))
+
+    if (ProcessInfo.processInfo.environment["BENCH_BATCH_TOOLCALL_RAW"] ?? "0") == "1" {
+        nonisolated(unsafe) let rawInput = input
+        let (_, rawStream) = await engine.submit(input: rawInput, parameters: params)
+        var tokenIds = [Int]()
+        var info: GenerateCompletionInfo?
+        for await event in rawStream {
+            switch event {
+            case .token(let id):
+                tokenIds.append(id)
+            case .info(let i):
+                info = i
+            }
+        }
+        let decoded = ctx.tokenizer.decode(tokenIds: tokenIds, skipSpecialTokens: false)
+        print("  raw token ids: \(tokenIds)")
+        print("  raw decoded BEGIN")
+        print(decoded)
+        print("  raw decoded END")
+        if let info {
+            print("  raw stop=\(info.stopReason) genTokens=\(info.generationTokenCount)")
+        }
+        await engine.shutdown()
+        return
+    }
+
     nonisolated(unsafe) let sendable = input
     let stream = await engine.generate(input: sendable, parameters: params)
 

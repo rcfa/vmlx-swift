@@ -37,6 +37,24 @@ struct DSMLToolCallParserFocusedTests {
         )
     }
 
+    @Test("DSML parser accepts DSV4 abbreviated invoke close observed in live decode")
+    func parserAcceptsAbbreviatedInvokeClose() {
+        let dsml = DeepseekV4Tokens.dsml
+        let output = """
+            <\(dsml)tool_calls>
+            <\(dsml)invoke name="get_weather">
+            <\(dsml)parameter name="location" string="true">Tokyo</\(dsml)parameter>
+            </\(dsml)inv>
+            </\(dsml)tool_calls>
+            """
+
+        let calls = DSMLToolCallParser().parseEOS(output, tools: nil)
+
+        #expect(calls.count == 1)
+        #expect(calls.first?.function.name == "get_weather")
+        #expect(calls.first?.function.arguments["location"] == .string("Tokyo"))
+    }
+
     @Test("DSV4 instruct prompt routes DSML output to tool calls without reasoning leakage")
     func instructPromptRoutesDSMLWithoutReasoningLeakage() {
         let prompt = DeepseekV4ChatEncoder().encode(
