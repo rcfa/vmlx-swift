@@ -270,6 +270,22 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   scripts/pr1147_http_route_probe.py scripts/pr1147_collect_bundle_census.py`,
   `git diff --check`, and focused `RuntimePolicySourceTests` 28/28.
 
+2026-05-18 14:14 PDT Osaurus PR #1147 Keychain-safe launch gate:
+
+- Osaurus PR #1147 head `e3b047d7` adds
+  `docs/internal/live-gates/20260518T_pr1147_keychain_safe_launch.md`.
+  The live route probe attempt showed that direct binary launch with a fake
+  `HOME` is invalid for app-level gates because Osaurus needs the real macOS
+  Keychain context for the database encryption key.
+- The PR now records that live app/API gates must use a Keychain-safe launch:
+  normal LaunchServices with the real user keychain context, or an explicitly
+  created/unlocked temporary test keychain with the original keychain search
+  list restored afterward.
+- Route probe artifacts from a broken fake-HOME launch must not count as
+  startup, settings, cache, model, or UI proof.
+- Verification for the checkpoint: focused `RuntimePolicySourceTests` 28/28
+  after pinning the launch note.
+
 2026-05-17 20:25 PDT live refresh:
 
 - `gh pr list --repo osaurus-ai/osaurus --state all --limit 20` shows the
