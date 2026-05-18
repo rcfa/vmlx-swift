@@ -56,9 +56,12 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   defaults and MTP off. The JANG loader diagnostic now distinguishes expected
   explicit mixed-bit per-layer metadata from real config drift, so this bundle
   no longer reports a false `config-metadata mismatch patched in-memory`.
-  The raw token-prefix `batch_cache_hit` diagnostic still fails by prompt
-  shape and remains non-promotable for MiniMax; the chat-template growing-cache
-  row is the production proof.
+  Focused current proof
+  `20260518T_minimax_jangk_growing_chat_after_harness_fix/` re-runs the
+  chat-template growing-cache row with bundle defaults, MTP off, disk hit
+  `47/83`, and stop-bounded `vmlx-cache-green` recall. The live matrix now
+  marks the raw token-prefix `batch_cache_hit` row as N-A for MiniMax because
+  it is a structural raw-prompt diagnostic, not production chat proof.
 - VLM JANG weight loading now matches the LLM factory and passes the real
   `quantizationContainer?.quantization` value into `loadWeights` instead of the
   deprecated `baseConfig.quantization` alias. This keeps MXFP4/MXFP8 group-size

@@ -171,19 +171,26 @@ sampler, and TurboQuant-KV B=2 rows. Bundle defaults remain
 the growing-chat row hits the canonical history boundary (`47/83`) and returns
 `vmlx-cache-green` with `finish=stop`.
 
+Focused current cache proof
+`docs/local/live-model-matrix/20260518T_minimax_jangk_growing_chat_after_harness_fix/`
+re-runs that production-shaped chat-template row after the live-matrix harness
+update. It records bundle defaults (`temp=1.000 topP=0.950 topK=40 rep=nil`),
+MTP `off`, disk hit `47/83`, prompt-time reduction `8.634s -> 0.192s`, and a
+stop-bounded `vmlx-cache-green` response on turn 2.
+
 The JANG loader diagnostic was corrected in this pass: explicit per-layer
 2/4/6/8 affine quantization in `config.json` is now treated as declared
 metadata, so the row no longer emits the misleading
 `config-metadata mismatch patched in-memory` warning. It still prints the
 shape-authoritative override count, which is expected for mixed-bit JANG.
 
-The raw token-prefix `batch_cache_hit` diagnostic remains a failed diagnostic
-for MiniMax. A 512-token rerun shows the raw Q/A prompt continues the pattern
-until max tokens; this is prompt-shape, not a cache-store miss. Production chat
-cache proof comes from the growing-chat and disk-restore rows. Do not hide this
-with repetition penalty, top-k, temperature, forced stop, or looser validators;
-replace the raw diagnostic with a MiniMax chat-template cache probe before
-full promotion.
+The raw token-prefix `batch_cache_hit` diagnostic remains available for direct
+structural debugging, but the live production matrix now marks it N-A for
+MiniMax (`n-a:raw-prefix-diagnostic-not-production-chat-template`). A 512-token
+rerun showed the raw Q/A prompt continues the pattern until max tokens; this is
+prompt-shape, not a cache-store miss. Production chat cache proof comes from
+the growing-chat and disk-restore rows. Do not hide this with repetition
+penalty, top-k, temperature, forced stop, or looser validators.
 
 ## No-Fake-Guard Invariants For The Remaining Rows
 

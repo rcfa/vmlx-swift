@@ -387,6 +387,24 @@ run_runbench() {
   run_logged "$name" env "$@" ".build/${BUILD_CONFIGURATION}/RunBench"
 }
 
+raw_prefix_cache_probe_applicable() {
+  local dir="$1" model_type arch lowered
+  model_type="$(json_value "$dir/config.json" '.model_type // .text_config.model_type' unknown)"
+  arch="$(json_value "$dir/config.json" '.architectures?[0]' unknown)"
+  lowered="$(printf "%s %s" "$model_type" "$arch" | tr '[:upper:]' '[:lower:]')"
+
+  # `BENCH_BATCH_CACHE_HIT` is a structural raw-token prefix-extension
+  # diagnostic. MiniMax chat behavior is only production-valid through its chat
+  # template; the raw Q/A prompt can coherently continue the pattern until the
+  # max-token cap. Keep the structural bench available for direct diagnostics,
+  # but do not count it as a production matrix row for MiniMax. The production
+  # cache proof for these bundles is `BENCH_GROWING_CHAT_CACHE`.
+  case "$lowered" in
+    *minimax*) return 1 ;;
+  esac
+  return 0
+}
+
 matrix_max_tokens() {
   printf "%s" "${VMLX_MATRIX_MAX_TOKENS:-${VMLINUX_MATRIX_MAX_TOKENS:-192}}"
 }
@@ -463,9 +481,14 @@ run_batch_stack() {
   run_runbench "${name}.batch_chat" \
     BENCH_MODEL="$dir" BENCH_BATCH_CHAT=1 \
     BENCH_MAX_TOKENS="$max_tokens" || true
-  run_runbench "${name}.batch_cache_hit" \
-    BENCH_MODEL="$dir" BENCH_BATCH_CACHE_HIT=1 \
-    BENCH_MAX_TOKENS="$max_tokens" || true
+  if raw_prefix_cache_probe_applicable "$dir"; then
+    run_runbench "${name}.batch_cache_hit" \
+      BENCH_MODEL="$dir" BENCH_BATCH_CACHE_HIT=1 \
+      BENCH_MAX_TOKENS="$max_tokens" || true
+  else
+    mark_status "${name}.batch_cache_hit" \
+      "n-a:raw-prefix-diagnostic-not-production-chat-template"
+  fi
   run_runbench "${name}.batch_growing_chat_cache" \
     BENCH_MODEL="$dir" BENCH_GROWING_CHAT_CACHE=1 BENCH_GROWING_BUNDLE_DEFAULTS=1 \
     BENCH_GROWING_SEED="$(matrix_prod_seed)" \
