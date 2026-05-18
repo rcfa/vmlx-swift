@@ -179,7 +179,7 @@ private class M4Attention: Module {
         kPe = repeated(kPe, count: numHeads, axis: 1)
 
         var keys = concatenated([kNope, kPe], axis: -1)
-        var queries = concatenated([qNope, qPe], axis: -1)
+        let queries = concatenated([qNope, qPe], axis: -1)
 
         if let cache {
             let (ck, cv) = cache.update(keys: keys, values: values)

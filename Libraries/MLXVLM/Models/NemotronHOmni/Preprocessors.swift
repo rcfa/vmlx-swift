@@ -8,8 +8,30 @@ import Foundation
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import Accelerate
-import AVFoundation
+@preconcurrency import AVFoundation
 import MLX
+
+private final class AudioConverterInputProvider: @unchecked Sendable {
+    private let lock = NSLock()
+    private let buffer: AVAudioPCMBuffer
+    private var consumed = false
+
+    init(buffer: AVAudioPCMBuffer) {
+        self.buffer = buffer
+    }
+
+    func next(_ outStatus: UnsafeMutablePointer<AVAudioConverterInputStatus>) -> AVAudioBuffer? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !consumed else {
+            outStatus.pointee = .endOfStream
+            return nil
+        }
+        consumed = true
+        outStatus.pointee = .haveData
+        return buffer
+    }
+}
 
 // MARK: - Image preprocessing (NVLM 1-D dynamic tile)
 
@@ -331,7 +353,6 @@ private func stftRFFT(
 
     var realIn = [Float](repeating: 0, count: nFFT / 2)
     var imagIn = [Float](repeating: 0, count: nFFT / 2)
-    var split = DSPSplitComplex(realp: &realIn, imagp: &imagIn)
 
     var frame = [Float](repeating: 0, count: nFFT)
     for f in 0 ..< nFrames {
@@ -516,16 +537,10 @@ public func nemotronOmniLoadAudioFile(
             userInfo: [NSLocalizedDescriptionKey: "Failed to alloc output buffer"])
     }
 
-    var consumed = false
+    let inputProvider = AudioConverterInputProvider(buffer: inBuffer)
     var error: NSError?
     let status = converter.convert(to: outBuffer, error: &error) { _, outStatus in
-        if consumed {
-            outStatus.pointee = .endOfStream
-            return nil
-        }
-        consumed = true
-        outStatus.pointee = .haveData
-        return inBuffer
+        inputProvider.next(outStatus)
     }
 
     if status == .error {
