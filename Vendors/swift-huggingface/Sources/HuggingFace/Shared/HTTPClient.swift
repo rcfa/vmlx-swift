@@ -1,5 +1,5 @@
 import Foundation
-import EventSource
+import VMLXEventSource
 
 #if canImport(FoundationNetworking)
     import FoundationNetworking

@@ -6,8 +6,8 @@
 //
 
 import Foundation
-import Hub
-import Jinja
+import VMLXHub
+import VMLXJinja
 
 /// A type alias for chat messages, represented as key-value pairs.
 public typealias Message = [String: any Sendable]
@@ -803,7 +803,7 @@ public class PreTrainedTokenizer: @unchecked Sendable, Tokenizer {
         }
 
         let template = try compiledTemplate(for: selectedChatTemplate)
-        var context: [String: Jinja.Value] = try [
+        var context: [String: VMLXJinja.Value] = try [
             "messages": .array(messages.map { try Value(any: $0) }),
             "add_generation_prompt": .boolean(addGenerationPrompt),
         ]

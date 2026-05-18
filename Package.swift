@@ -238,10 +238,10 @@ let package = Package(
         .library(name: "MLXFFT", targets: ["MLXFFT"]),
         .library(name: "MLXLinalg", targets: ["MLXLinalg"]),
         .library(name: "MLXFast", targets: ["MLXFast"]),
-        .library(name: "Jinja", targets: ["Jinja"]),
-        .library(name: "Hub", targets: ["Hub"]),
-        .library(name: "Tokenizers", targets: ["Tokenizers"]),
-        .library(name: "Transformers", targets: ["Tokenizers", "Generation", "Models"]),
+        .library(name: "Jinja", targets: ["VMLXJinja"]),
+        .library(name: "Hub", targets: ["VMLXHub"]),
+        .library(name: "Tokenizers", targets: ["VMLXTokenizers"]),
+        .library(name: "Transformers", targets: ["VMLXTokenizers", "VMLXGeneration", "VMLXModels"]),
         .library(name: "MLXLMCommon", targets: ["MLXLMCommon"]),
         .library(name: "MLXLLM", targets: ["MLXLLM"]),
         .library(name: "MLXVLM", targets: ["MLXVLM"]),
@@ -342,56 +342,56 @@ let package = Package(
         ),
 
         .target(
-            name: "Jinja",
+            name: "VMLXJinja",
             dependencies: [
                 .product(name: "OrderedCollections", package: "swift-collections"),
             ],
             path: "Vendors/Jinja/Sources/Jinja"
         ),
         .target(
-            name: "EventSource",
+            name: "VMLXEventSource",
             path: "Vendors/EventSource/Sources/EventSource"
         ),
         .target(
-            name: "HuggingFace",
+            name: "VMLXHuggingFace",
             dependencies: [
-                "EventSource",
+                "VMLXEventSource",
                 .product(name: "Crypto", package: "swift-crypto"),
             ],
             path: "Vendors/swift-huggingface/Sources/HuggingFace"
         ),
         .target(
-            name: "yyjson",
+            name: "VMLXYYJSON",
             path: "Vendors/yyjson",
             sources: ["src"],
             publicHeadersPath: "src"
         ),
         .target(
-            name: "Generation",
-            dependencies: ["Tokenizers"],
+            name: "VMLXGeneration",
+            dependencies: ["VMLXTokenizers"],
             path: "Vendors/swift-transformers/Sources/Generation"
         ),
         .target(
-            name: "Hub",
+            name: "VMLXHub",
             dependencies: [
-                "Jinja",
-                "HuggingFace",
+                "VMLXJinja",
+                "VMLXHuggingFace",
                 .product(name: "OrderedCollections", package: "swift-collections"),
                 .product(name: "Crypto", package: "swift-crypto"),
-                "yyjson",
+                "VMLXYYJSON",
             ],
             path: "Vendors/swift-transformers/Sources/Hub",
             resources: [.process("Resources")],
             swiftSettings: transformersSwiftSettings
         ),
         .target(
-            name: "Models",
-            dependencies: ["Tokenizers", "Generation"],
+            name: "VMLXModels",
+            dependencies: ["VMLXTokenizers", "VMLXGeneration"],
             path: "Vendors/swift-transformers/Sources/Models"
         ),
         .target(
-            name: "Tokenizers",
-            dependencies: ["Hub", "Jinja"],
+            name: "VMLXTokenizers",
+            dependencies: ["VMLXHub", "VMLXJinja"],
             path: "Vendors/swift-transformers/Sources/Tokenizers"
         ),
 
@@ -516,7 +516,7 @@ let package = Package(
                 "MLXLLM",
                 "MLXLMCommon",
                 "MLXHuggingFace",
-                "Tokenizers",
+                "VMLXTokenizers",
             ],
             path: "Sources/MLXPress"
         ),
@@ -530,11 +530,11 @@ let package = Package(
                 "MLXFFT",
                 "MLXLinalg",
                 "MLXFast",
-                "Jinja",
-                "Hub",
-                "Tokenizers",
-                "Generation",
-                "Models",
+                "VMLXJinja",
+                "VMLXHub",
+                "VMLXTokenizers",
+                "VMLXGeneration",
+                "VMLXModels",
                 "MLXLMCommon",
                 "MLXLLM",
                 "MLXVLM",
@@ -576,7 +576,7 @@ let package = Package(
                 "MLXDistributedJACCL",
                 "MLX",
                 "MLXNN",
-                "Tokenizers",
+                "VMLXTokenizers",
             ],
             path: "tools/TPRankWorker"
         ),
@@ -593,7 +593,7 @@ let package = Package(
                 "MLXVLM",
                 "MLXHuggingFace",
                 "MLX",
-                "Tokenizers",
+                "VMLXTokenizers",
             ],
             path: "tools/OmniAudioLatencyBench"
         ),
@@ -605,7 +605,7 @@ let package = Package(
                 "MLXVLM",
                 "MLXHuggingFace",
                 "MLX",
-                "Tokenizers",
+                "VMLXTokenizers",
             ],
             path: "tools/OmniAudioChunkStabilityBench"
         ),
@@ -618,10 +618,10 @@ let package = Package(
                 "MLXHuggingFace",
                 "CmlxGraphShim",
                 "MLX",
-                "Jinja",
-                "Tokenizers",
-                "Generation",
-                "Models",
+                "VMLXJinja",
+                "VMLXTokenizers",
+                "VMLXGeneration",
+                "VMLXModels",
             ],
             path: "RunBench",
             exclude: ["coherency-matrix.sh", "test_slice.swift.bak"]
@@ -641,7 +641,7 @@ let package = Package(
         ),
         .testTarget(
             name: "MLXLMCommonFocusedTests",
-            dependencies: ["MLX", "MLXLMCommon", "MLXLLM", "MLXVLM", "Jinja", "VMLX"],
+            dependencies: ["MLX", "MLXLMCommon", "MLXLLM", "MLXVLM", "VMLXJinja", "VMLX"],
             path: "Tests/MLXLMCommonFocusedTests",
             sources: [
                 "DeepseekV4ChatTemplateFallbackFocusedTests.swift",
