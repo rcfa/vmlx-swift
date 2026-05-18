@@ -94,7 +94,7 @@ Focused fix artifacts live under `docs/local/swift-release-gates/dsv4-fixes/`.
 | `JANGQ/MiniMax-M2.7-Small-JANGTQ` | `minimax_m2` / `MiniMaxJANGTQModel` | `PARTIAL` | Loads in 9.7s; 3-turn chat is coherent; no loop; TQ disk round-trip passes; decode around 30.6 tok/s; tracked mmap buffers about 37 GB. | Thinking-on probe produced 483 chars reasoning and no visible answer. Activity Monitor-style footprint reaches about 38.2 GB, so this is not a low-RAM active-streaming pass. |
 | `JANGQ/ZAYA1-VL-8B-JANGTQ4` | `zaya1_vl` / `Zaya1VL` | `PASS` | Fresh current turnmatrix passes config/template, production defaults cache OFF/ON, BatchEngine text rows, disk restore, B=2 concurrent/per-slot/TurboQuant B=2, VL batch chat, structured VL chat cache, and media-salt isolation. Bundle defaults apply as `temp=0.600 topP=1.000 topK=0 rep=nil`; cache-on speed is about `59.4-63.6 tok/s` on short turns, peak RSS is about `6.8 GiB`, same-media disk restore hits `97/97`, different-media probe misses correctly, and compile OFF/ON VL two-turn chat both ground the image and answer the color follow-up as `blue`. | Generic paged prefix hit is `N-A` by topology. Video remains `N-A` because `ZAYA1-VL video input is not implemented`; this is a family capability gap, not a failed implemented row. |
 | `Osaurus/ZAYA1-VL-8B-MXFP4` | `zaya1_vl` / `Zaya1VL` | `PASS` | Release turnmatrix passes config/template, production defaults cache OFF/ON, BatchEngine rows, VL batch chat, structured chat cache, and media-salt isolation. Video is reported `N-A` because ZAYA1-VL processor does not implement video input. | None for implemented image/text/cache surfaces; video remains a family capability gap, not a failed row. |
-| `JANGQ/ZAYA1-VL-8B-JANGTQ_K` | `zaya1_vl` / `Zaya1VL` | `PARTIAL / NEEDS CURRENT RE-RUN` | Config/template, batch single/chat/disk restore/per-slot/TurboQuant B=2, and media-salt rows pass. Focused decoder test preserves nested `mxtq_bits.routed_expert` widths as gate/up=2 and down=4, and kernel probes match CPU dequant on sampled layer/expert rows. | Needs a current all-non-Kimi matrix re-run before Osaurus promotion. Historical math/top-k evidence ranks the wrong first token before decoding, `prod_defaults` fails `7+8-11`, and structured VL cache exhausts the 192-token budget. |
+| `JANGQ/ZAYA1-VL-8B-JANGTQ_K` | `zaya1_vl` / `Zaya1VL` | `PARTIAL / CURRENT BLOCKER` | Fresh current turnmatrix `20260518T_zaya_vl_jangtqk_current_turnmatrix/` passes config/template, BatchEngine single/chat/disk restore/concurrent/per-slot/TurboQuant B=2, VL batch chat, media-salt isolation, and text/image mixed row with video reported `N-A`. Focused decoder test preserves nested `mxtq_bits.routed_expert` widths as gate/up=2 and down=4, and kernel probes match CPU dequant on sampled layer/expert rows. | Production defaults cache OFF and ON still fail the same math row: S1/S2 return `8` for `7+8-11`, and the structured VL cache cold-image row exhausts the larger 512-token budget. Do not promote this K lane or hide it with sampler/template guards. |
 | `dealign.ai/Ling-2.6-flash-MXFP4-CRACK` | `bailing_hybrid` / `BailingHybridModel` | `PASS` | Current release turnmatrix passes config/template/MTP metadata, production defaults cache OFF/ON, BatchEngine single/chat/disk restore/concurrent/per-slot/TurboQuant B=2. Bundle defaults apply with `rep=nil`; disk L2 and SSM companion hits are recorded. | Generic paged prefix hit is `N-A` by topology because Ling/Bailing uses disk-backed restore. |
 | `JANGQ/Hy3-preview-JANGTQ` | `hy_v3` / `Hy3Model` | `PASS` | Current release turnmatrix passes config/template/MTP metadata, production defaults cache OFF/ON, paged cache hit, disk restore, B=2 concurrent, per-slot sampler, and TurboQuant B=2. Bundle defaults apply as `temp=0.900 topP=1.000 topK=-1 minP=0.000 rep=nil`. | Cold first prompt is slow; JANGTQ_K needs a current all-non-Kimi matrix re-run before Osaurus promotion. |
 | `JANGQ/Hy3-preview-JANGTQ_K` | `hy_v3` / `Hy3Model` | `PARTIAL / NEEDS CURRENT RE-RUN` | Eager load was killed, but active expert streaming now passes the short production matrix without a process-global model-dir override after `loadWeights` binds the loaded model directory. It skips 91,008 per-expert tensors, indexes 79 layers x 192 experts, and passes 7/7 at about 6.2 GiB RSS. | Needs a current all-non-Kimi matrix re-run before Osaurus promotion. Speed remains blocked at about 1.4 tok/s, and multi-model active streaming still needs a per-loaded-model store before Osaurus exposes simultaneous JANGTQ_K sessions. |
@@ -297,8 +297,8 @@ weights.
 
 ### ZAYA VL
 
-- Local bundles: JANGTQ4, JANGTQ_K, MXFP4. JANGTQ_K needs a current
-  all-non-Kimi re-run before Osaurus promotion.
+- Local bundles: JANGTQ4, JANGTQ_K, MXFP4. JANGTQ_K now has a current
+  all-non-Kimi turnmatrix artifact, but remains a blocker.
 - Swift dispatch: `zaya1_vl` through `Zaya1VL`.
 - Cache topology: text side uses ZAYA CCA state; media path uses media salt and
   VLM processor state; BatchEngine has VL chat/cache matrix harnesses.
@@ -323,12 +323,15 @@ weights.
   production defaults cache OFF/ON, BatchEngine rows, VL batch chat, structured
   cache, and media-salt isolation. Video rows are explicitly `N-A` because this
   processor throws `ZAYA1-VL video input is not implemented`.
-- Historical K issue: `ZAYA1-VL-8B-JANGTQ_K` remains a real blocker if reopened.
-  Its math/top-k
-  evidence ranks the wrong first token before decoding, `prod_defaults` fails
-  `7+8-11`, and the structured VL cache row exhausts the 192-token cold-image
-  budget. Kernel probes pass on sampled layers, so this is not closed by a
-  sampler/template guard.
+- Current K issue: `docs/local/live-model-matrix/20260518T_zaya_vl_jangtqk_current_turnmatrix/`
+  improved the K lane but did not clear it. Config/template, BatchEngine
+  single/chat/disk restore/B=2 concurrent/per-slot/TurboQuant, VL batch chat,
+  media-salt isolation, and text/image mixed rows pass. Production defaults
+  cache OFF and ON still fail S1/S2 by returning `8` for `7+8-11`, and the
+  structured VL cache row exhausts a larger 512-token cold-image budget. Prior
+  top-k evidence ranks the wrong first token before decoding, while sampled
+  mixed-bit kernel probes pass, so this remains artifact/runtime root-cause
+  work rather than a sampler, parser, cache, or forced-stop fix.
 
 ### Ling / Bailing Hybrid
 
@@ -480,11 +483,11 @@ weights.
 
 ## Immediate Engine Gaps Found
 
-1. Current K-lane caveat: `ZAYA1-VL-8B-JANGTQ_K` remains a real blocker
-   if reopened because the release matrix still fails the math production row
-   and structured VL cache row, and top-k evidence shows the wrong first token
-   before decoding policy. It is not an active Osaurus switch blocker in the
-   current pass.
+1. Current K-lane caveat: `ZAYA1-VL-8B-JANGTQ_K` remains a real blocker.
+   The current turnmatrix now proves many implemented text/image/cache rows,
+   but production defaults still fail the math row and structured VL cache row,
+   and top-k evidence shows the wrong first token before decoding policy. It is
+   not an active Osaurus switch blocker unless that specific K lane is exposed.
 2. ZAYA-VL video remains `N-A` for JANGTQ4/MXFP4 because the processor does not
    implement video input. Text/image/cache surfaces are live-proven for those
    two bundles.
