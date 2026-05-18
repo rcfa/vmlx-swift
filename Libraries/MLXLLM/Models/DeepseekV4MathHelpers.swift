@@ -272,6 +272,8 @@ public enum DeepseekV4Math {
         betaFast: Float,
         betaSlow: Float
     ) -> MLXArray {
+        _ = maxPos  // reserved for future extrapolation logic
+
         // Standard inv-freq table.
         let dimF = Float(dim)
         let halfDim = dim / 2
@@ -309,7 +311,6 @@ public enum DeepseekV4Math {
         let smooth = MLXArray(1.0) - rampArr
         let scaled = invFreqArr / factor
         return scaled * (MLXArray(1.0) - smooth) + invFreqArr * smooth
-        _ = maxPos  // reserved for future extrapolation logic
     }
 
     // MARK: - LM head fp32 matmul

@@ -28,10 +28,32 @@ import MLXNN
 public func applyRotaryPosition<R: RoPELayer>(_ rope: R, to x: MLXArray, cache: KVCache?)
     -> MLXArray
 {
+    applyRotaryPosition(rope, to: x, offset: capturedRotaryOffset(for: cache))
+}
+
+public enum CapturedRotaryOffset {
+    case array(MLXArray)
+    case scalar(Int)
+}
+
+public func capturedRotaryOffset(for cache: KVCache?) -> CapturedRotaryOffset {
     if let offsetArray = graphOffsetArray(for: cache) {
-        return rope(x, offset: offsetArray)
+        return .array(offsetArray)
     }
-    return rope(x, offset: cache?.offset ?? 0)
+    return .scalar(cache?.offset ?? 0)
+}
+
+public func applyRotaryPosition<R: RoPELayer>(
+    _ rope: R,
+    to x: MLXArray,
+    offset: CapturedRotaryOffset
+) -> MLXArray {
+    switch offset {
+    case .array(let offsetArray):
+        return rope(x, offset: offsetArray)
+    case .scalar(let offset):
+        return rope(x, offset: offset)
+    }
 }
 
 /// Returns a graph-visible cache offset when the cache exposes one.

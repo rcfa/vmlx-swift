@@ -7958,23 +7958,17 @@ func runOfficialMultiTurn(modelPath: String, maxNew: Int) async throws {
     }
 
     // S3: thinking=OFF — should produce mostly .chunk events, minimal
-    // .reasoning. Ask for a short visible answer.
+    // .reasoning. Ask for a source-reference-satisfiable answer.
     try await runTurn(
-        label: "S3 reasoning=OFF factual",
-        prompt: "What color is the sky on a clear day? Answer with one word.",
+        label: "S3 reasoning=OFF math 2+2",
+        prompt: "Compute 2 + 2. Respond with just the number.",
         thinking: false
     ) { text, reasoning, _ in
-        let combined = (text + " " + reasoning).lowercased()
-        if combined.contains("blue") {
+        let combined = text + reasoning
+        if combined.contains("4") {
             return (true, "")
         }
-        // Tolerate models that still answer in reasoning when
-        // enable_thinking=false is template-overridden — only fail on
-        // empty output.
-        if (text + reasoning).isEmpty {
-            return (false, "empty response")
-        }
-        return (true, "accepted non-blue answer")
+        return (false, "answer not found")
     }
 
     // S4: Multi-tool-call prompt. Two tools; ask the model to call
@@ -8035,14 +8029,17 @@ func runOfficialMultiTurn(modelPath: String, maxNew: Int) async throws {
         return (false, "empty output, no tool call")
     }
 
-    // S5: UTF-8 / emoji / multilingual stress — the shrinkage-prone
-    // class that originally tripped tpae's crash.
+    // S5: UTF-8 multilingual stress — the shrinkage-prone class that
+    // originally tripped tpae's crash. Validate expected UTF-8 survives
+    // instead of accepting any non-empty response.
     try await runTurn(
-        label: "S5 utf8 emoji stress",
-        prompt: "Write exactly this line verbatim: 🚀 café naïve résumé 你好 こんにちは 안녕하세요",
+        label: "S5 utf8 inclusion",
+        prompt: "Write one short sentence that includes both words café and 你好.",
         thinking: false
     ) { text, reasoning, _ in
-        if (text + reasoning).isEmpty { return (false, "empty") }
+        if !(text + reasoning).lowercased().contains("café") || !(text + reasoning).contains("你好") {
+            return (false, "missing expected UTF-8 words")
+        }
         return (true, "")
     }
 
@@ -8108,9 +8105,9 @@ func runOfficialMultiTurn(modelPath: String, maxNew: Int) async throws {
 // Coverage per invocation:
 //   S1  reasoning=ON  math (validate "4" in output)
 //   S2  SAME prompt as S1 — paged cache hit, TTFT drops
-//   S3  reasoning=OFF factual (validate "blue")
+//   S3  reasoning=OFF math (validate "4")
 //   S4  reasoning ON→OFF→ON alternation within one engine
-//   S5  UTF-8 / emoji / multilingual verbatim (shrinkage stress)
+//   S5  UTF-8 multilingual inclusion (validate expected words)
 //   S6  SSM-seed: hybrid-SSM-only models — identical prefix
 //       continuation should reuse paged KV + SSM companion cache
 //   S7  L2 disk: rerun with fresh process via env override
@@ -8399,17 +8396,18 @@ func runProdMatrix(modelPath: String, maxNew: Int) async throws {
         return (true, "")
     }
 
-    // ──────────────── S3  reasoning=OFF factual ────────────────
+    // ──────────────── S3  reasoning=OFF math ────────────────
     try await runTurn(
-        label: "S3 think=OFF factual",
-        prompt: "What color is the sky on a clear day? Answer with one word.",
+        label: "S3 think=OFF math(2+2)",
+        prompt: "Compute 2 + 2. Respond with just the number.",
         thinking: false
     ) { r in
         let visible = requireReasoningOffVisible(r)
         if !visible.0 { return visible }
-        let t = (r.text + r.reasoning).lowercased()
-        if t.contains("blue") { return (true, "") }
-        return (true, "accepted non-blue")
+        if !r.text.contains("4") {
+            return (false, "no '4' in visible output")
+        }
+        return (true, "")
     }
 
     // ──────────────── S4  reasoning ON→OFF→ON alternation ────────────────
@@ -8422,26 +8420,36 @@ func runProdMatrix(modelPath: String, maxNew: Int) async throws {
     }
     try await runTurn(
         label: "S4.2 flip think=OFF name",
-        prompt: "Name a planet. One word.",
+        prompt: "Question: Name the planet Mars. Answer with Mars only:",
         thinking: false
     ) { r in
-        requireReasoningOffVisible(r)
+        let visible = requireReasoningOffVisible(r)
+        if !visible.0 { return visible }
+        if !r.text.lowercased().contains("mars") {
+            return (false, "no 'Mars' in visible output")
+        }
+        return (true, "")
     }
     try await runTurn(
-        label: "S4.3 flip-back think=ON math(5*4)",
-        prompt: "Compute 5 * 4. Respond with just the number.",
+        label: "S4.3 flip-back think=ON math(5 times 4)",
+        prompt: "What is 5 times 4? Answer with only the number.",
         thinking: true
     ) { r in
         requireVisibleAnswer(r, contains: "20")
     }
 
-    // ──────────────── S5  UTF-8 verbatim ────────────────
+    // ──────────────── S5  UTF-8 inclusion ────────────────
     try await runTurn(
-        label: "S5 utf8 emoji verbatim",
-        prompt: "Write exactly this line verbatim: 🚀 café naïve résumé 你好 こんにちは 안녕하세요",
+        label: "S5 utf8 inclusion",
+        prompt: "Write one short sentence that includes both words café and 你好.",
         thinking: false
     ) { r in
-        requireReasoningOffVisible(r)
+        let visible = requireReasoningOffVisible(r)
+        if !visible.0 { return visible }
+        if !r.text.lowercased().contains("café") || !r.text.contains("你好") {
+            return (false, "missing expected UTF-8 words in visible output")
+        }
+        return (true, "")
     }
 
     print(String(format:

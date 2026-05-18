@@ -55,7 +55,7 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
     let speculativeSampler: SpeculativeSamplingController
     let maxTokens: Int?
     let depth: Int
-    let promptTokenIds: [Int]
+    var promptTokenIds: [Int]
     let cachePrefixTokenCounts: [Int]
     let originalInput: LMInput
     let cacheInitParameters: GenerateParameters
@@ -165,7 +165,10 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
         }
 
         var inputForPrepare = input
-        if let coordinator = cacheCoordinator, !promptTokenIds.isEmpty {
+        if let coordinator = cacheCoordinator,
+           !promptTokenIds.isEmpty,
+           !input.requiresPostPrepareCacheKey
+        {
             if !coordinator.isHybrid, cacheContainsPathDependentState(self.cache) {
                 coordinator.setHybrid(true)
             }
@@ -240,7 +243,6 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
         }
 
         let start = Date.timeIntervalSinceReferenceDate
-        processor?.prompt(input.text.tokens)
         let prepared = try model.prepare(
             inputForPrepare,
             cache: self.cache,
@@ -251,6 +253,7 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
         let firstToken: MLXArray
         switch prepared {
         case .tokens(let tokens):
+            processor?.prompt(input.text.tokens)
             let seedStart = Date.timeIntervalSinceReferenceDate
             let backbone = model.nativeBackboneForward(
                 Self.sequenceInput(tokens.tokens),
@@ -267,6 +270,16 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
             self.seedMainForwardTime += Date.timeIntervalSinceReferenceDate - seedStart
             self.seedMainForwardCount += 1
         case .logits(let output):
+            if let effectivePromptTokens = output.effectivePromptTokens,
+               !effectivePromptTokens.isEmpty
+            {
+                self.promptTokenIds = effectivePromptTokens
+                let promptTokens = MLXArray(effectivePromptTokens.map { Int32($0) })
+                    .expandedDimensions(axis: 0)
+                processor?.prompt(promptTokens)
+            } else {
+                processor?.prompt(input.text.tokens)
+            }
             firstToken = Self.sampleLast(
                 logits: output.logits,
                 sampler: sampler,
@@ -357,7 +370,8 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
                     : extractLayerData(from: cacheSnapshot)
                 let ssmCapture: [MLXArray]? = coordinator.isHybrid &&
                     coordinator.config.enableSSMReDerive &&
-                    !requiresDiskBackedRestore
+                    !requiresDiskBackedRestore &&
+                    !originalInput.hasMediaContent
                     ? reDeriveAndStoreSSMStatesForPromptBoundaries(
                         coordinator: coordinator,
                         model: model,
@@ -381,17 +395,19 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
                 snapshot: promptCacheSnapshot,
                 label: "prompt-boundary")
 
-            for boundary in Set(cachePrefixTokenCounts).sorted()
-            where boundary > 0 && boundary < promptTokenIds.count {
-                let boundaryTokens = Array(promptTokenIds.prefix(boundary))
-                if let boundarySnapshot = cacheSnapshotForBoundary(
-                    tokens: boundaryTokens,
-                    promptSnapshot: promptCacheSnapshot)
-                {
-                    store(
+            if !originalInput.requiresPostPrepareCacheKey {
+                for boundary in Set(cachePrefixTokenCounts).sorted()
+                where boundary > 0 && boundary < promptTokenIds.count {
+                    let boundaryTokens = Array(promptTokenIds.prefix(boundary))
+                    if let boundarySnapshot = cacheSnapshotForBoundary(
                         tokens: boundaryTokens,
-                        snapshot: boundarySnapshot,
-                        label: "history-boundary")
+                        promptSnapshot: promptCacheSnapshot)
+                    {
+                        store(
+                            tokens: boundaryTokens,
+                            snapshot: boundarySnapshot,
+                            label: "history-boundary")
+                    }
                 }
             }
 

@@ -303,7 +303,7 @@ class DeepseekV4Attention: Module {
                             // visibility.
                             pooled = pooled.expandedDimensions(axis: 1)
                             // local sliding-window visibility (B,1,L,windowLen)
-                            var localMask = DeepseekV4Math.buildWindowMask(
+                            let localMask = DeepseekV4Math.buildWindowMask(
                                 batch: B, queryLen: L, offset: offset,
                                 window: config.slidingWindow,
                                 windowLen: windowLen)
@@ -319,7 +319,6 @@ class DeepseekV4Attention: Module {
                             // Pre-broadcast both halves to the same query
                             // dim (already done by helpers); concat along
                             // last axis.
-                            _ = localMask
                             dsv4PrefillMask = concatenated(
                                 [localMask, compMask], axis: -1)
                         }
@@ -413,7 +412,7 @@ class DeepseekV4Attention: Module {
                 .expandedDimensions(axis: 1)
             let wBiases = qwo.biases?.reshaped(oGroups, oLoraRank, -1)
                 .expandedDimensions(axis: 1)
-            let outQ = MLX.quantizedMatmul(
+            let outQ = MLX.quantizedMM(
                 xT, wPacked, scales: wScales, biases: wBiases,
                 transpose: true, groupSize: qwo.groupSize, bits: qwo.bits)
             oA = outQ.transposed(1, 2, 0, 3).reshaped(

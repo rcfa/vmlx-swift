@@ -19,7 +19,11 @@ public enum CacheDetail: String, Sendable {
 // MARK: - CacheFetchResult
 
 /// The result of a unified cache lookup across all tiers.
-public enum CacheFetchResult: Sendable {
+///
+/// This carries `MLXArray` cache payloads restored from disk/SSM tiers. The
+/// coordinator serializes the cache lookup/store boundaries, but MLX arrays do
+/// not advertise a static `Sendable` conformance.
+public enum CacheFetchResult: @unchecked Sendable {
     /// A cache hit with the matched prefix data.
     ///
     /// - Parameters:

@@ -1301,7 +1301,9 @@ public actor BatchEngine {
         // LayerKind. Sliding-window models (Gemma3/Gemma4 SWA, Mistral4
         // with maxKVSize, MiMoV2Flash, BaichuanM1, Qwen3.5-VL inherited)
         // now hit paged + L2 disk on the same path as standard KV.
-        if let coordinator = cacheCoordinator {
+        if let coordinator = cacheCoordinator,
+           !slot.originalInput.requiresPostPrepareCacheKey
+        {
             let tokenIds = slot.originalInput.text.tokens.asArray(Int.self)
             let result = coordinator.fetch(tokens: tokenIds, mediaSalt: slot.mediaSalt)
             if case .hit(_, let remaining, let detail, let blocks, let ssmStates, let diskArrays) = result {
@@ -1478,6 +1480,12 @@ public actor BatchEngine {
                     }
                 }
             }
+        } else if cacheCoordinator != nil,
+                  slot.originalInput.requiresPostPrepareCacheKey
+        {
+            Self.logger.info(
+                "Slot \(slot.id.description, privacy: .public): skipped pre-prepare cache fetch because this input requires model-derived effective prompt tokens"
+            )
         }
 
         // Prefill: either full input (cache miss) or remaining tokens (cache hit).
@@ -1498,14 +1506,14 @@ public actor BatchEngine {
             return
         }
 
-        // Seed the processor with the full prompt tokens.
-        let promptTokens = slot.originalInput.text.tokens
-        slot.processor?.prompt(promptTokens)
-
         // Extract the first generated token from the prepare result
         let firstToken: MLXArray
         switch prepareResult {
         case .tokens(let remainingText):
+            // Seed the processor with the full prompt tokens.
+            let promptTokens = slot.originalInput.text.tokens
+            slot.processor?.prompt(promptTokens)
+
             // LLM path: prepare() consumed all but the last chunk, returned remaining tokens.
             // Run the last chunk through the model to get logits for the first decode token.
             let result = context.model(
@@ -1515,6 +1523,18 @@ public actor BatchEngine {
             firstToken = slot.sampleToken(from: logits)
 
         case .logits(let result):
+            if let effectivePromptTokens = result.effectivePromptTokens,
+               !effectivePromptTokens.isEmpty
+            {
+                slot.cachePromptTokenIds = effectivePromptTokens
+                slot.cachePromptUsesPostPrepareKey = true
+                let promptTokens = MLXArray(effectivePromptTokens.map { Int32($0) })
+                    .expandedDimensions(axis: 0)
+                slot.processor?.prompt(promptTokens)
+            } else {
+                let promptTokens = slot.originalInput.text.tokens
+                slot.processor?.prompt(promptTokens)
+            }
             // VLM path: prepare() already ran the full prompt and returned logits directly.
             let logits = result.logits[0 ..< 1, -1, 0...]
             firstToken = slot.sampleToken(from: logits)
@@ -1565,8 +1585,7 @@ public actor BatchEngine {
                     $0 is MambaCache || $0 is ArraysCache || $0 is ZayaCCACache
                 }
                 if hasSSM {
-                    let promptTokens = slot.originalInput.text.tokens
-                        .asArray(Int.self)
+                    let promptTokens = slot.cachePromptTokenIds
                     let ssmStates = extractSSMStates(from: slot.cache)
                     if !ssmStates.isEmpty {
                         coordinator.ssmStateCache.store(
@@ -2145,7 +2164,7 @@ public actor BatchEngine {
         // `mediaSalt` is passed through so the stored key matches the key
         // the next fetch will look for (VL multi-turn cache hits).
         if reason != .cancelled, let coordinator = cacheCoordinator {
-            let promptTokens = slot.originalInput.text.tokens.asArray(Int.self)
+            let promptTokens = slot.cachePromptTokenIds
             let hasHybridPool = slot.cache.contains { $0 is HybridPoolCache }
             guard let promptCacheSnapshot = slot.promptCacheSnapshot
                 ?? (hasHybridPool ? nil : makePromptBoundaryCacheSnapshot(from: slot.cache))
@@ -2171,7 +2190,8 @@ public actor BatchEngine {
                 let ssmStates: [MLXArray]? = {
                     guard coordinator.isHybrid else { return nil }
                     if coordinator.config.enableSSMReDerive &&
-                        !requiresDiskBackedRestore
+                        !requiresDiskBackedRestore &&
+                        !slot.originalInput.hasMediaContent
                     {
                         return reDeriveAndStoreSSMStatesForPromptBoundaries(
                             coordinator: coordinator,
@@ -2256,16 +2276,22 @@ public actor BatchEngine {
                 snapshot: promptCacheSnapshot,
                 label: "prompt-boundary")
 
-            for boundary in Set(slot.originalInput.cachePrefixTokenCounts).sorted()
-            where boundary > 0 && boundary < promptTokens.count {
-                if let snapshot = boundarySnapshot(
-                    tokens: Array(promptTokens.prefix(boundary)))
-                {
-                    storeCacheEntry(
-                        tokens: Array(promptTokens.prefix(boundary)),
-                        snapshot: snapshot,
-                        label: "history-boundary")
+            if !slot.cachePromptUsesPostPrepareKey {
+                for boundary in Set(slot.originalInput.cachePrefixTokenCounts).sorted()
+                where boundary > 0 && boundary < promptTokens.count {
+                    if let snapshot = boundarySnapshot(
+                        tokens: Array(promptTokens.prefix(boundary)))
+                    {
+                        storeCacheEntry(
+                            tokens: Array(promptTokens.prefix(boundary)),
+                            snapshot: snapshot,
+                            label: "history-boundary")
+                    }
                 }
+            } else if !slot.originalInput.cachePrefixTokenCounts.isEmpty {
+                Self.logger.debug(
+                    "Skipped history-boundary cache entries for slot \(slot.id.description, privacy: .public): input prefix counts are pre-pruned but cache key is post-prepare"
+                )
             }
 
             // A normal EOS stop means the last visible assistant token has

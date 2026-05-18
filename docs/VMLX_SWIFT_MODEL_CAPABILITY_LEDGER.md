@@ -86,6 +86,8 @@ Focused fix artifacts live under `docs/local/swift-release-gates/dsv4-fixes/`.
   `dsv4-fixes/debug_zaya_vl_jangtqk_template_smoke_direct_render.log`,
   `dsv4-fixes/post_zaya_vl_jangtqk_tool_template_smoke_after_sidecar_fix.log`,
   `dsv4-fixes/post_zaya_vl_jangtq4_tool_template_smoke_after_sidecar_fix.log`.
+- Live Nemotron Omni strict media-direct proof:
+  `live-model-matrix/20260518T_omni_jangtq_media_direct_contract_prompt_postfix/omni_jangtq.log`.
 
 ## Live Multi-Turn Rows First
 
@@ -109,6 +111,7 @@ Focused fix artifacts live under `docs/local/swift-release-gates/dsv4-fixes/`.
 | `dealign.ai/MiniMax-M2.7-JANG_K-CRACK` | `minimax_m2` / `MiniMaxModel` | `PARTIAL / INFER PASS` | Fresh `20260518T001257Z_minimax_m27_jangk_crack_infer/` passes config/template plus cache-off `BENCH_PROD` 7/7. Bundle defaults apply as `temp=1.000 topP=0.950 topK=40 rep=nil`; MTP depth is `off`; reasoning ON/OFF alternation is coherent; decode is about `45-50 tok/s`; peak RSS is about `41.0 GiB`; loader logs an in-memory shape-inferred 6-bit metadata repair. | Needs full cache/multibatch/disk matrix and an explicit decision on whether the shape-inferred metadata repair is acceptable as production metadata handling or should be corrected in the bundle. |
 | `dealign.ai/Gemma-4-26B-A4B-it-JANG_4M-CRACK` | `gemma4` / `Gemma4` | `PASS` | Text release turnmatrix passes config/template, cache OFF/ON `BENCH_PROD` 7/7, BatchEngine single/chat/disk restore/concurrent/per-slot/TurboQuant B=2. Structured VL chat-cache row passes: image A cold, same-image replay disk hit `308/308`, different-image miss, and text-only follow-up stays grounded. Live tool-call schema row passes through `UserInput.tools` with `get_weather({"location":"Tokyo"})`, `toolCalls=1`, and no raw marker leak. Long-budget single-turn Harmony reasoning on/off passes with 1420 reasoning chars ON and zero reasoning chars OFF. Fresh `20260517T_reasoning_turn_matrix_harness/` proves one loaded BatchEngine multi-turn ON/OFF/ON with prior assistant `reasoningContent` carried forward, and effort `low/medium/high/max` closes with visible output. | No active Gemma4 text/VL/tool/reasoning blocker from this row. GPT-OSS remains parser-contract only because no local GPT-OSS bundle is present. |
 | `/Users/eric/osaurus_models/finished/gemma-4-e2b-it-4bit` | `gemma4` / `Gemma4` | `PASS` | Osaurus-local E2B bundle passes template smoke, `BENCH_PROD` cache OFF/ON, BatchEngine chat, TurboQuant B=2 isolation, VL chat/cache, VL batch chat, and `BENCH_REASONING_TURN_MATRIX=1` at realistic budgets. Fresh current refresh `20260518T_gemma4_e2b_refresh_no_fake_guards/` re-proves cache OFF 7/7, cache ON 7/7, 1536-token reasoning turn matrix, structured VL chat cache, and explicit no-hidden-guard sampling after a diagnostic validator fix. Bundle defaults apply as `temp=1.000 topP=0.950 topK=64 rep=nil`; cache-on rows use disk-backed restore because Gemma4 heterogeneous SWA/full-attention cache is paged-incompatible in this topology. The cache-on refresh records `disk{hits=1,misses=20,stores=14}`, while the reasoning matrix records `disk{hits=8,misses=0,stores=16}` and the VL row hits same-media disk restore `301/301`; `no_guard_sampling_after_validator_fix.log` proves greedy/no-rep and temp=0.6/rep=1.0 thinking-on stop cleanly with no loop, BOS repeat, or marker leak. | The retained 256-token thinking-on row failed by length before visible output; this is a real server/UI budget setting caveat, not a reason to force-close reasoning or inject sampler guards. The no-guard red log only exposed a brittle harness assertion that rejected "sun" as a star; decode itself was coherent. This bundle is outside `~/models` and was tested because Osaurus logs reported E2B looping. |
+| `/Users/eric/models/mlx-community/gemma-3n-E2B-it-4bit` | `gemma3n_text` / `Gemma3nTextModel` | `PASS / TEXT-ONLY` | Fresh strict Gemma3n row fixes real Swift runtime gaps: full conditional-generation weights are sanitized from `language_model.model.*` to `language_model.*` while dropping text-irrelevant `vision_tower.*` and `audio_tower.*`; attention captures RoPE offset before cache update; conditional-generation prompt prefill keeps unscaled VLM-style embeddings while cached decode tokens restore the language-model embedding scale. Focused `Gemma3nTextSanitizeFocusedTests` pass 8/8. Live strict artifacts pass cache-off greedy, bundle defaults, and cache coordinator: `20260518T123300Z_gemma3n_e2b_prod_greedy_strict_promptfix_192/` runs explicit greedy/no repetition penalty at about `130 tok/s`; `20260518T123320Z_gemma3n_e2b_prod_bundle_defaults_strict_promptfix_192/` applies bundle defaults `temp=0.600 topP=0.950 topK=64 rep=nil`; `20260518T123340Z_gemma3n_e2b_prod_cachecoord_strict_promptfix_192/` records S2 TTFT `61ms -> 24ms` plus disk L2 `hits=1,misses=21,stores=21` with `pagedIncompatible=true`. | This is not a Gemma3n VLM/audio pass. The text sanitizer intentionally drops towers until a native Gemma3n media processor/cache path is proven. The earlier loose BENCH_PROD validators accepted non-blue and non-verbatim output; those fake passes are now removed and guarded by tests. S5 validates UTF-8 inclusion, not exact verbatim reproduction. |
 
 Fresh parser/cache contract refresh:
 `docs/local/production-readiness/20260517T2148_nonexcluded_parser_cache_refresh/`
@@ -434,7 +437,23 @@ weights.
 - Cache topology: hybrid SSM/cache state applies; Omni path also has image,
   video, audio, and pre-encoded audio handling.
 - Template/reasoning/tools: template smoke passes; reasoning parser maps to
-  Nemotron H; tool parser maps to Nemotron format.
+  Nemotron H for text turns; tool parser maps to Nemotron format. Media turns
+  use the closed-thinking direct-answer media template because live JANGTQ
+  probes showed open-thinking/assistant-only media tails hallucinating over
+  placeholder text while the same RADIO/Parakeet embeddings grounded correctly
+  with the direct media contract. This is a media capability boundary, not a
+  sampler/repetition/EOS guard.
+- Current strict JANGTQ artifact:
+  `docs/local/live-model-matrix/20260518T_omni_jangtq_media_direct_contract_prompt_postfix/omni_jangtq.log`
+  passes 19/19 at 192 tokens with bundle defaults
+  (`temp=0.600 topP=0.950 topK=0 minP=0.000 rep=1.000 seed=20260517`).
+  It covers text single-turn, text multi-turn, image single-turn, image
+  reasoning-off direct, image multi-turn, video encoder, Parakeet audio
+  encoder, video/audio LMInput, text reasoning OFF, text ON/OFF/ON reasoning
+  toggle, mixed image+audio, media-salt isolation, hybrid SSM warm-pass, and
+  BatchEngine text/image/audio rows. Focused
+  `NemotronHOmniPreEncodedAudioTests` pass 16/16 after the media contract
+  update and strict image validator fix.
 - Current status: JANGTQ, JANGTQ4, and MXFP4 core Omni paths are live-proven. The
   fresh JANGTQ artifact
   `docs/local/live-model-matrix/20260517T214045Z_nemotron_jangtq_omni_recheck/omni_jangtq_48.log`

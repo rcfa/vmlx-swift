@@ -104,21 +104,29 @@ enum OmniBench {
                 context: context, cache: cache, maxNewTokens: maxNewTokens)
         })
 
-        // Row 2: Text-only multi-turn (3 turns, cache reuse)
+        // Row 2: Text-only multi-turn (3 turns, rendered as full chat
+        // history each turn). Raw KV/Mamba cache reuse is only valid for
+        // append-only token suffixes; a fresh prompt with a populated cache
+        // is a cache-contract violation, not a multi-turn session.
         results.append(await runRow("2. text-only multi-turn x3", maxNew: maxNewTokens) {
-            let cache = context.model.newCache(parameters: .init())
             let prompts = [
                 "What is the capital of France?",
                 "And of Germany?",
                 "Of those two countries, which has more people?",
             ]
+            var history: [Chat.Message] = []
             var detail = ""
             var totalToks = 0
             var totalSecs = 0.0
             for (i, p) in prompts.enumerated() {
-                let r = try await runTextTurn(
-                    prompt: p, context: context, cache: cache,
+                history.append(.user(p))
+                let r = try await runChatTurn(
+                    history: history, context: context,
                     maxNewTokens: maxNewTokens)
+                history.append(Chat.Message(
+                    role: .assistant,
+                    content: r.shortText,
+                    reasoningContent: r.reasoningText.isEmpty ? nil : r.reasoningText))
                 detail += "T\(i + 1): \(r.shortText.prefix(80)) | "
                 totalToks += r.tokens
                 totalSecs += r.secs
@@ -133,7 +141,7 @@ enum OmniBench {
             let img = try synthesiseGradient(side: 224)
             let cache = context.model.newCache(parameters: .init())
             return try await runImageTurn(
-                prompt: "Describe this image in one sentence.",
+                prompt: "Name the two most prominent colors in this image.",
                 image: img, context: context, cache: cache,
                 maxNewTokens: maxNewTokens)
         })
@@ -146,7 +154,7 @@ enum OmniBench {
             let img = try synthesiseGradient(side: 224)
             let cache = context.model.newCache(parameters: .init())
             return try await runImageTurn(
-                prompt: "Describe this image briefly.",
+                prompt: "What are the two main colors in this image? Answer briefly.",
                 image: img, context: context, cache: cache,
                 maxNewTokens: maxNewTokens,
                 enableThinking: false)
@@ -163,18 +171,32 @@ enum OmniBench {
             })
         }
 
-        // Row 4: Image multi-turn (cache reuse + MediaSalt)
+        // Row 4: Image multi-turn. This must render real chat history with
+        // the image attached to the original media-bearing user message. Do
+        // not reuse raw cache across unrelated fresh prompts here.
         results.append(await runRow("4. image multi-turn x2", maxNew: maxNewTokens) {
             let img = try synthesiseGradient(side: 224)
-            let cache = context.model.newCache(parameters: .init())
-            let r1 = try await runImageTurn(
-                prompt: "Describe this image briefly.",
-                image: img, context: context, cache: cache,
+            var history: [Chat.Message] = [
+                .user("Name the two most prominent colors in this image.",
+                      images: [.ciImage(img)]),
+            ]
+            let r1 = try await runChatTurn(
+                history: history, context: context,
                 maxNewTokens: maxNewTokens)
-            let r2 = try await runImageTurn(
-                prompt: "What two colors are most prominent?",
-                image: img, context: context, cache: cache,
+            try validateSyntheticGradientImageText(
+                r1.shortText,
+                row: "image multi-turn turn1")
+            history.append(Chat.Message(
+                role: .assistant,
+                content: r1.shortText,
+                reasoningContent: r1.reasoningText.isEmpty ? nil : r1.reasoningText))
+            history.append(.user("Repeat the two color names from the image."))
+            let r2 = try await runChatTurn(
+                history: history, context: context,
                 maxNewTokens: maxNewTokens)
+            try validateSyntheticGradientImageText(
+                r2.shortText,
+                row: "image multi-turn turn2")
             return TurnResult(
                 shortText: "T1: \(r1.shortText.prefix(80)) || T2: \(r2.shortText.prefix(80))",
                 tokens: r1.tokens + r2.tokens,
@@ -269,7 +291,17 @@ enum OmniBench {
                     prompt: "Describe this video briefly.",
                     videoURL: videoFixture,
                     context: context, cache: cache,
-                    maxNewTokens: maxNewTokens)
+                    maxNewTokens: maxNewTokens,
+                    enableThinking: true)
+            })
+            results.append(await runRow("5c. video reasoning OFF direct", maxNew: maxNewTokens) {
+                let cache = context.model.newCache(parameters: .init())
+                return try await runVideoTurn(
+                    prompt: "Describe this video briefly.",
+                    videoURL: videoFixture,
+                    context: context, cache: cache,
+                    maxNewTokens: maxNewTokens,
+                    enableThinking: false)
             })
         }
 
@@ -556,7 +588,7 @@ enum OmniBench {
                     maxNewTokens: maxNewTokens)
                 let img = try synthesiseGradient(side: 224)
                 var userInput = UserInput(
-                    prompt: "Describe this image briefly.",
+                    prompt: "What are the two main colors in this image? Answer briefly.",
                     images: [.ciImage(img)])
                 userInput.additionalContext = ["enable_thinking": false]
                 let lmInput = try await ctxBatch.processor.prepare(input: userInput)
@@ -581,6 +613,9 @@ enum OmniBench {
                             "BatchEngine image B=1: empty output stream"])
                 }
                 try validateVisibleOmniText(text, row: "BatchEngine image B=1")
+                try validateSyntheticGradientImageText(
+                    text,
+                    row: "BatchEngine image B=1")
                 return TurnResult(
                     shortText: text.replacingOccurrences(of: "\n", with: " "),
                     tokens: chunks, secs: secs)
@@ -681,8 +716,27 @@ enum OmniBench {
 
     struct TurnResult {
         let shortText: String
+        let reasoningText: String
         let tokens: Int
         let secs: Double
+
+        init(
+            shortText: String,
+            tokens: Int,
+            secs: Double,
+            reasoningText: String = ""
+        ) {
+            self.shortText = shortText
+            self.reasoningText = reasoningText
+            self.tokens = tokens
+            self.secs = secs
+        }
+    }
+
+    private struct RawGenerationResult {
+        let tokenIds: [Int]
+        let stopTokenID: Int?
+        let hitMaxTokens: Bool
     }
 
     private static func makeOmniParameters(
@@ -728,12 +782,20 @@ enum OmniBench {
             parameters: params)
 
         let t0 = CFAbsoluteTimeGetCurrent()
-        let tokens = collectGeneratedTokens(
+        let raw = collectRawGeneratedTokens(
             iter, context: context, maxNewTokens: maxNewTokens)
         let secs = CFAbsoluteTimeGetCurrent() - t0
-        let text = userVisibleText(
+        let tokens = raw.tokenIds
+        let parts = reasoningAndVisibleText(
             context: context, lmInput: lmInput, tokenIds: tokens,
-            allowReasoningFallback: enableThinking)
+            allowReasoningFallback: false)
+        let text = parts.visible
+        debugOmniRawDecode(
+            label: "text thinking=\(enableThinking)",
+            context: context,
+            lmInput: lmInput,
+            raw: raw,
+            visibleText: text)
         if !enableThinking && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw NSError(
                 domain: "OmniBench", code: 104,
@@ -742,7 +804,55 @@ enum OmniBench {
         }
         return TurnResult(
             shortText: text.replacingOccurrences(of: "\n", with: " "),
-            tokens: tokens.count, secs: secs)
+            tokens: tokens.count, secs: secs,
+            reasoningText: parts.reasoning)
+    }
+
+    private static func runChatTurn(
+        history: [Chat.Message],
+        context: ModelContext,
+        maxNewTokens: Int,
+        enableThinking: Bool = true
+    ) async throws -> TurnResult {
+        let userInput = UserInput(
+            chat: history,
+            additionalContext: ["enable_thinking": enableThinking])
+        let lmInput = try await context.processor.prepare(input: userInput)
+
+        let params = makeOmniParameters(
+            context: context,
+            maxNewTokens: maxNewTokens)
+        let cache = context.model.newCache(parameters: params)
+        let iter = try TokenIterator(
+            input: lmInput, model: context.model, cache: cache,
+            parameters: params)
+
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let raw = collectRawGeneratedTokens(
+            iter, context: context, maxNewTokens: maxNewTokens)
+        let secs = CFAbsoluteTimeGetCurrent() - t0
+        let tokens = raw.tokenIds
+        let parts = reasoningAndVisibleText(
+            context: context, lmInput: lmInput, tokenIds: tokens,
+            allowReasoningFallback: false)
+        let text = parts.visible
+        debugOmniRawDecode(
+            label: "chat history thinking=\(enableThinking)",
+            context: context,
+            lmInput: lmInput,
+            raw: raw,
+            visibleText: text)
+        if raw.hitMaxTokens {
+            throw NSError(
+                domain: "OmniBench", code: 105,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "chat history turn hit max_tokens before a normal stop"])
+        }
+        try validateVisibleOmniText(text, row: "chat history turn")
+        return TurnResult(
+            shortText: text.replacingOccurrences(of: "\n", with: " "),
+            tokens: tokens.count, secs: secs,
+            reasoningText: parts.reasoning)
     }
 
     private static func runImageTurn(
@@ -765,15 +875,25 @@ enum OmniBench {
             input: lmInput, model: context.model, cache: cache,
             parameters: params)
         let t0 = CFAbsoluteTimeGetCurrent()
-        let tokens = collectGeneratedTokens(
+        let raw = collectRawGeneratedTokens(
             iter, context: context, maxNewTokens: maxNewTokens)
         let secs = CFAbsoluteTimeGetCurrent() - t0
-        let text = userVisibleText(
+        let tokens = raw.tokenIds
+        let parts = reasoningAndVisibleText(
             context: context, lmInput: lmInput, tokenIds: tokens)
+        let text = parts.visible
+        debugOmniRawDecode(
+            label: "image direct thinking=\(enableThinking)",
+            context: context,
+            lmInput: lmInput,
+            raw: raw,
+            visibleText: text)
         try validateVisibleOmniText(text, row: "image turn")
+        try validateSyntheticGradientImageText(text, row: "image turn")
         return TurnResult(
             shortText: text.replacingOccurrences(of: "\n", with: " "),
-            tokens: tokens.count, secs: secs)
+            tokens: tokens.count, secs: secs,
+            reasoningText: parts.reasoning)
     }
 
     private static func runImageTailVariants(
@@ -783,7 +903,9 @@ enum OmniBench {
         maxNewTokens: Int
     ) async throws -> TurnResult {
         var userInput = UserInput(prompt: prompt, images: [.ciImage(image)])
-        userInput.additionalContext = ["enable_thinking": false]
+        let baseThinking = ProcessInfo.processInfo
+            .environment["BENCH_OMNI_TAIL_PROBE_BASE"] == "thinking"
+        userInput.additionalContext = ["enable_thinking": !baseThinking ? false : true]
         let baseInput = try await context.processor.prepare(input: userInput)
 
         let variants: [(name: String, tail: String, allowReasoningFallback: Bool)] = [
@@ -813,18 +935,28 @@ enum OmniBench {
                 input: lmInput, model: context.model, cache: cache,
                 parameters: params)
             let t0 = CFAbsoluteTimeGetCurrent()
-            let tokens = collectGeneratedTokens(
+            let raw = collectRawGeneratedTokens(
                 iter, context: context, maxNewTokens: maxNewTokens)
             let secs = CFAbsoluteTimeGetCurrent() - t0
+            let tokens = raw.tokenIds
             let text = userVisibleText(
                 context: context,
                 lmInput: lmInput,
                 tokenIds: tokens,
                 allowReasoningFallback: variant.allowReasoningFallback)
+            debugOmniRawDecode(
+                label: "image tail \(variant.name)",
+                context: context,
+                lmInput: lmInput,
+                raw: raw,
+                visibleText: text)
             totalTokens += tokens.count
             totalSecs += secs
             do {
                 try validateVisibleOmniText(text, row: "image tail \(variant.name)")
+                try validateSyntheticGradientImageText(
+                    text,
+                    row: "image tail \(variant.name)")
                 groundedPasses += 1
                 details.append("\(variant.name)=PASS:\(text.prefix(70))")
             } catch {
@@ -850,6 +982,8 @@ enum OmniBench {
         replacementTail: String
     ) throws -> LMInput {
         let currentTails = [
+            "<|im_start|>assistant\n",
+            "<|im_start|>assistant\n<think>\n",
             "<|im_start|>assistant\n<think></think>",
             "<|im_start|>assistant\n<think>\n</think>\n\n",
         ]
@@ -890,9 +1024,11 @@ enum OmniBench {
         videoURL: URL,
         context: ModelContext,
         cache: [KVCache],
-        maxNewTokens: Int
+        maxNewTokens: Int,
+        enableThinking: Bool = true
     ) async throws -> TurnResult {
-        let userInput = UserInput(prompt: prompt, videos: [.url(videoURL)])
+        var userInput = UserInput(prompt: prompt, videos: [.url(videoURL)])
+        userInput.additionalContext = ["enable_thinking": enableThinking]
         let lmInput = try await context.processor.prepare(input: userInput)
 
         let params = makeOmniParameters(
@@ -903,11 +1039,18 @@ enum OmniBench {
             input: lmInput, model: context.model, cache: cache,
             parameters: params)
         let t0 = CFAbsoluteTimeGetCurrent()
-        let tokens = collectGeneratedTokens(
+        let raw = collectRawGeneratedTokens(
             iter, context: context, maxNewTokens: maxNewTokens)
         let secs = CFAbsoluteTimeGetCurrent() - t0
+        let tokens = raw.tokenIds
         let text = userVisibleText(
             context: context, lmInput: lmInput, tokenIds: tokens)
+        debugOmniRawDecode(
+            label: "video thinking=\(enableThinking)",
+            context: context,
+            lmInput: lmInput,
+            raw: raw,
+            visibleText: text)
         try validateVisibleOmniText(text, row: "video turn")
         return TurnResult(
             shortText: text.replacingOccurrences(of: "\n", with: " "),
@@ -966,11 +1109,18 @@ enum OmniBench {
             input: lmInput, model: context.model, cache: cache,
             parameters: params)
         let t0 = CFAbsoluteTimeGetCurrent()
-        let tokens = collectGeneratedTokens(
+        let raw = collectRawGeneratedTokens(
             iter, context: context, maxNewTokens: maxNewTokens)
         let secs = CFAbsoluteTimeGetCurrent() - t0
+        let tokens = raw.tokenIds
         let text = userVisibleText(
             context: context, lmInput: lmInput, tokenIds: tokens)
+        debugOmniRawDecode(
+            label: "audio",
+            context: context,
+            lmInput: lmInput,
+            raw: raw,
+            visibleText: text)
         try validateVisibleOmniText(text, row: "audio turn")
         return TurnResult(
             shortText: text.replacingOccurrences(of: "\n", with: " "),
@@ -982,14 +1132,71 @@ enum OmniBench {
         context: ModelContext,
         maxNewTokens: Int
     ) -> [Int] {
+        collectRawGeneratedTokens(
+            iterator, context: context, maxNewTokens: maxNewTokens).tokenIds
+    }
+
+    private static func collectRawGeneratedTokens(
+        _ iterator: TokenIterator,
+        context: ModelContext,
+        maxNewTokens: Int
+    ) -> RawGenerationResult {
         let stops = rawIteratorStopTokenIDs(context: context)
         var tokens: [Int] = []
         for token in iterator {
-            if stops.contains(token) { break }
+            if stops.contains(token) {
+                return RawGenerationResult(
+                    tokenIds: tokens,
+                    stopTokenID: token,
+                    hitMaxTokens: false)
+            }
             tokens.append(token)
-            if tokens.count >= maxNewTokens { break }
+            if tokens.count >= maxNewTokens {
+                return RawGenerationResult(
+                    tokenIds: tokens,
+                    stopTokenID: nil,
+                    hitMaxTokens: true)
+            }
         }
-        return tokens
+        return RawGenerationResult(
+            tokenIds: tokens,
+            stopTokenID: nil,
+            hitMaxTokens: false)
+    }
+
+    private static func debugOmniRawDecode(
+        label: String,
+        context: ModelContext,
+        lmInput: LMInput,
+        raw: RawGenerationResult,
+        visibleText: String
+    ) {
+        guard ProcessInfo.processInfo.environment["BENCH_OMNI_DIAG"] == "1" else {
+            return
+        }
+        let rawText = context.tokenizer.decode(
+            tokenIds: raw.tokenIds,
+            skipSpecialTokens: false)
+        let promptTokens = lmInput.text.tokens.reshaped(-1).asArray(Int.self)
+        let promptTail = context.tokenizer.decode(
+            tokenIds: Array(promptTokens.suffix(256)),
+            skipSpecialTokens: false)
+        let tokenTail = raw.tokenIds.suffix(24).map(String.init).joined(separator: ",")
+        print("""
+        [OMNI_DIAG] label=\(label) tokens=\(raw.tokenIds.count) stopToken=\(raw.stopTokenID.map(String.init) ?? "nil") hitMax=\(raw.hitMaxTokens)
+        [OMNI_DIAG] token_tail=[\(tokenTail)]
+        [OMNI_DIAG] prompt_tail="\(escapedDiag(promptTail))"
+        [OMNI_DIAG] raw="\(escapedDiag(rawText))"
+        [OMNI_DIAG] visible="\(escapedDiag(visibleText))"
+        """)
+    }
+
+    private static func escapedDiag(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     private static func rawIteratorStopTokenIDs(context: ModelContext) -> Set<Int> {
@@ -1025,6 +1232,19 @@ enum OmniBench {
         tokenIds: [Int],
         allowReasoningFallback: Bool = true
     ) -> String {
+        reasoningAndVisibleText(
+            context: context,
+            lmInput: lmInput,
+            tokenIds: tokenIds,
+            allowReasoningFallback: allowReasoningFallback).visible
+    }
+
+    private static func reasoningAndVisibleText(
+        context: ModelContext,
+        lmInput: LMInput,
+        tokenIds: [Int],
+        allowReasoningFallback: Bool = true
+    ) -> (reasoning: String, visible: String) {
         let raw = context.tokenizer.decode(tokenIds: tokenIds, skipSpecialTokens: false)
         let promptTokens = lmInput.text.tokens.reshaped(-1).asArray(Int.self)
         let promptTail = context.tokenizer.decode(
@@ -1035,7 +1255,7 @@ enum OmniBench {
             stampName: context.configuration.reasoningParserName,
             promptTail: promptTail)
         else {
-            return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            return ("", raw.trimmingCharacters(in: .whitespacesAndNewlines))
         }
 
         var visible = ""
@@ -1051,10 +1271,11 @@ enum OmniBench {
 
         let trimmedVisible = visible.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedVisible.isEmpty {
-            return trimmedVisible
+            return (reasoning.trimmingCharacters(in: .whitespacesAndNewlines), trimmedVisible)
         }
-        guard allowReasoningFallback else { return "" }
-        return reasoning.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedReasoning = reasoning.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard allowReasoningFallback else { return (trimmedReasoning, "") }
+        return (trimmedReasoning, trimmedReasoning)
     }
 
     private static func validateVisibleOmniText(_ text: String, row: String) throws {
@@ -1105,6 +1326,43 @@ enum OmniBench {
         }
     }
 
+    private static func validateSyntheticGradientImageText(
+        _ text: String,
+        row: String
+    ) throws {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        let impossibleTerms = [
+            "ooredoo",
+            "white background",
+            "blue circle",
+            "solid color",
+            "single, solid color",
+            "uniform, consistent color",
+            "no gradients",
+            "person's face",
+            "yellow shirt",
+            "text \"describe",
+            "centered in white",
+        ]
+        if impossibleTerms.contains(where: lower.contains) {
+            throw NSError(
+                domain: "OmniBench", code: 26,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "\(row): hallucinated non-existent image content; excerpt=\(String(trimmed.prefix(180)))"])
+        }
+        let hasBlue = lower.contains("blue") || lower.contains("cyan")
+        let hasWarm = lower.contains("red")
+            || lower.contains("orange")
+            || lower.contains("yellow")
+        if !hasBlue || !hasWarm {
+            throw NSError(
+                domain: "OmniBench", code: 25,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "\(row): synthetic warm/blue image not grounded; excerpt=\(String(trimmed.prefix(180)))"])
+        }
+    }
+
     private static func occurrenceCount(_ needle: String, in haystack: String) -> Int {
         guard !needle.isEmpty else { return 0 }
         var count = 0
@@ -1141,13 +1399,12 @@ enum OmniBench {
     private static func synthesiseGradient(side: Int) throws -> CIImage {
         var bytes = [UInt8](repeating: 0, count: side * side * 4)
         for y in 0 ..< side {
-            let r = UInt8(255 - (255 * y) / max(side - 1, 1))
-            let b = UInt8((255 * y) / max(side - 1, 1))
             for x in 0 ..< side {
                 let off = (y * side + x) * 4
-                bytes[off + 0] = r
-                bytes[off + 1] = 64
-                bytes[off + 2] = b
+                let isTop = y < side / 2
+                bytes[off + 0] = isTop ? 255 : 0
+                bytes[off + 1] = isTop ? 32 : 80
+                bytes[off + 2] = isTop ? 0 : 255
                 bytes[off + 3] = 255
             }
         }

@@ -10,6 +10,7 @@ import CoreImage.CIFilterBuiltins
 import Accelerate
 @preconcurrency import AVFoundation
 import MLX
+import MLXLMCommon
 
 private final class AudioConverterInputProvider: @unchecked Sendable {
     private let lock = NSLock()
@@ -613,7 +614,7 @@ public func nemotronOmniExtractVideoFrames(
 /// Native Swift video preprocessor — full Nemotron-3-Nano-Omni pipeline:
 ///   1. Frame extraction (uniform sample via `MediaProcessing.asCIImageSequence`)
 ///   2. Pad N to a multiple of `videoTemporalPatchDim=2` by repeating last frame
-///   3. Bicubic resize each frame to (imageSize, imageSize) via CIImage transform
+///   3. Source-style antialiased bicubic resize each frame
 ///   4. RGB Float32 extraction via vImage
 ///   5. CLIP normalize per channel
 ///   6. Stack T frames into channel dim → (N/T, T*3, H, W) MLXArray
@@ -646,15 +647,22 @@ public func nemotronOmniPreprocessVideo(
     }
     let nFrames = frames.count
     let nGroups = nFrames / videoTemporalPatchDim
-    let H = imageSize
-    let W = imageSize
+    let firstExtent = frames[0].extent
+    let targetSize = nemotronOmniVideoTargetSize(
+        width: Int(firstExtent.width.rounded()),
+        height: Int(firstExtent.height.rounded()))
+    let H = targetSize.height
+    let W = targetSize.width
 
     // Resize + normalize each frame to a (3, H, W) Float32 array.
     // Layout: per-frame (3, H, W) row-major — same as PyTorch convention.
     var stacked = [Float](repeating: 0, count: nFrames * 3 * H * W)
     let perFrame = 3 * H * W
     for (i, frame) in frames.enumerated() {
-        let resized = nemotronOmniResizeAndNormalize(frame, target: imageSize)
+        let resized = nemotronOmniResizeAndNormalize(
+            frame,
+            targetWidth: W,
+            targetHeight: H)
         for j in 0 ..< perFrame {
             stacked[i * perFrame + j] = resized[j]
         }
@@ -665,49 +673,106 @@ public func nemotronOmniPreprocessVideo(
     return pixelValues.reshaped([nGroups, videoTemporalPatchDim * 3, H, W])
 }
 
+public func nemotronOmniVideoTargetSize(
+    width: Int,
+    height: Int,
+    targetPatches: Int = 1024,
+    patchSize: Int = 16,
+    downsampleFactor: Int = 2
+) -> (width: Int, height: Int, tokens: Int) {
+    let safeWidth = max(1, width)
+    let safeHeight = max(1, height)
+    let aspect = Double(safeWidth) / Double(safeHeight)
+    var patchH = max(Int((Double(targetPatches) / aspect).squareRoot().rounded()), 1)
+    var patchW = max(Int((Double(targetPatches) * aspect).squareRoot().rounded()), 1)
+    let divisor = max(1, downsampleFactor)
+    if divisor > 1 {
+        let remH = patchH % divisor
+        let remW = patchW % divisor
+        let patchHUp = patchH + (remH == 0 ? 0 : divisor - remH)
+        let patchWUp = patchW + (remW == 0 ? 0 : divisor - remW)
+        let patchHDown = patchH - remH
+        let patchWDown = patchW - remW
+        if patchHUp * patchWUp <= targetPatches {
+            patchH = patchHUp
+            patchW = patchWUp
+        } else {
+            patchH = max(divisor, patchHDown)
+            patchW = max(divisor, patchWDown)
+        }
+    }
+    let tokens = max(1, (patchH * patchW) / (divisor * divisor))
+    return (width: patchW * patchSize, height: patchH * patchSize, tokens: tokens)
+}
+
 /// Bicubic resize a CIImage to (target, target) and normalize via CLIP
 /// mean/std → returns a contiguous (3*target*target,) Float32 buffer in
 /// (3, H, W) order.
 private func nemotronOmniResizeAndNormalize(_ image: CIImage, target: Int) -> [Float] {
-    // Resize via CIImage affine transform with Lanczos interpolation
-    // (closest match to PyTorch BICUBIC for our use-case).
-    let extent = image.extent
-    let scaleX = CGFloat(target) / extent.width
-    let scaleY = CGFloat(target) / extent.height
-    let resized = image
-        .transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
-        .cropped(to: CGRect(x: 0, y: 0, width: target, height: target))
+    nemotronOmniResizeAndNormalize(image, targetWidth: target, targetHeight: target)
+}
 
-    // Render to RGBA8 via CIContext, then strip alpha + normalize
+private func nemotronOmniResizeAndNormalize(
+    _ image: CIImage,
+    targetWidth: Int,
+    targetHeight: Int
+) -> [Float] {
+    let extent = image.extent
+    let sourceWidth = max(1, Int(extent.width.rounded()))
+    let sourceHeight = max(1, Int(extent.height.rounded()))
+
+    // Render the source image to uint8 first, then use the same tensor-space
+    // antialiased bicubic resize contract as the bundled Python processor:
+    // torch.nn.functional.interpolate(..., mode="bicubic",
+    // align_corners=False, antialias=True).
     let ctx = imagePreprocessContext
     let bitsPerComponent = 8
-    let bytesPerRow = 4 * target
-    var buffer = [UInt8](repeating: 0, count: 4 * target * target)
+    let bytesPerRow = 4 * sourceWidth
+    var buffer = [UInt8](repeating: 0, count: 4 * sourceWidth * sourceHeight)
     let cgContext = CGContext(
-        data: &buffer, width: target, height: target,
+        data: &buffer, width: sourceWidth, height: sourceHeight,
         bitsPerComponent: bitsPerComponent, bytesPerRow: bytesPerRow,
         space: CGColorSpace(name: CGColorSpace.sRGB)!,
         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue,
     )!
-    if let cg = ctx.createCGImage(resized, from: CGRect(x: 0, y: 0, width: target, height: target)) {
-        cgContext.draw(cg, in: CGRect(x: 0, y: 0, width: target, height: target))
+    if let cg = ctx.createCGImage(image, from: extent) {
+        cgContext.draw(cg, in: CGRect(x: 0, y: 0, width: sourceWidth, height: sourceHeight))
     }
 
-    // Convert (H, W, 4) RGBA8 → (3, H, W) Float32 with CLIP normalization
+    // Convert (H, W, 4) RGBA8 to (1, 3, H, W) Float32, matching the
+    // Python CHW tensor before interpolation.
+    var chw = [Float](repeating: 0, count: 3 * sourceWidth * sourceHeight)
+    let sourcePlane = sourceWidth * sourceHeight
+    for y in 0 ..< sourceHeight {
+        for x in 0 ..< sourceWidth {
+            let src = (y * sourceWidth + x) * 4
+            let dst = y * sourceWidth + x
+            chw[0 * sourcePlane + dst] = Float(buffer[src])
+            chw[1 * sourcePlane + dst] = Float(buffer[src + 1])
+            chw[2 * sourcePlane + dst] = Float(buffer[src + 2])
+        }
+    }
+
+    var tensor = MLXArray(chw, [1, 3, sourceHeight, sourceWidth])
+    if sourceHeight != targetHeight || sourceWidth != targetWidth {
+        tensor = bicubicInterpolate(
+            tensor,
+            size: (targetHeight, targetWidth),
+            alignCorners: false,
+            antialias: true)
+    }
+    MLX.eval(tensor)
+    let resized = tensor.reshaped([-1]).asArray(Float.self)
+
+    // Normalize the resized tensor exactly after interpolation, as the source
+    // processor does with `(t / 255.0 - mean) / std`.
     let mean: [Float] = NEMOTRON_OMNI_CLIP_MEAN
     let std: [Float] = NEMOTRON_OMNI_CLIP_STD
-    var out = [Float](repeating: 0, count: 3 * target * target)
-    let plane = target * target
-    for y in 0 ..< target {
-        for x in 0 ..< target {
-            let i = (y * target + x) * 4
-            let r = Float(buffer[i]) / 255.0
-            let g = Float(buffer[i + 1]) / 255.0
-            let b = Float(buffer[i + 2]) / 255.0
-            let pix = y * target + x
-            out[0 * plane + pix] = (r - mean[0]) / std[0]
-            out[1 * plane + pix] = (g - mean[1]) / std[1]
-            out[2 * plane + pix] = (b - mean[2]) / std[2]
+    var out = [Float](repeating: 0, count: 3 * targetWidth * targetHeight)
+    let plane = targetWidth * targetHeight
+    for c in 0 ..< 3 {
+        for pix in 0 ..< plane {
+            out[c * plane + pix] = ((resized[c * plane + pix] / 255.0) - mean[c]) / std[c]
         }
     }
     return out
@@ -737,12 +802,27 @@ public func nemotronOmniApplyEVS(
     _ feats: MLXArray,
     targetTokenCount: Int
 ) -> MLXArray {
+    let keepIdx = nemotronOmniEVSKeepIndices(feats, targetTokenCount: targetTokenCount)
+    if keepIdx.isEmpty {
+        return feats[0 ..< 1]
+    }
+    let totalTokens = feats.dim(0) * feats.dim(1)
+    let hidden = feats.dim(2)
+    let flat = feats.reshaped([totalTokens, hidden])
+    let idxArr = MLXArray(keepIdx.map { Int32($0) })
+    let gathered = flat.take(idxArr, axis: 0)
+    return gathered.reshaped([1, keepIdx.count, hidden])
+}
+
+public func nemotronOmniEVSKeepIndices(
+    _ feats: MLXArray,
+    targetTokenCount: Int
+) -> [Int] {
     let nGroups = feats.dim(0)
     let tokensPerGroup = feats.dim(1)
-    let hidden = feats.dim(2)
 
     if nGroups < 2 {
-        return feats
+        return Array(0 ..< (nGroups * tokensPerGroup))
     }
 
     // Cosine similarity between consecutive groups, per token position.
@@ -765,15 +845,12 @@ public func nemotronOmniApplyEVS(
         .asArray(Float.self))
 
     let keepIdx = (0 ..< totalTokens)
-        .sorted { scores[$0] > scores[$1] }
+        .sorted {
+            if scores[$0] == scores[$1] { return $0 < $1 }
+            return scores[$0] > scores[$1]
+        }
         .prefix(nKeep)
         .sorted()
 
-    if keepIdx.isEmpty {
-        return feats[0 ..< 1]
-    }
-    let flat = feats.reshaped([totalTokens, hidden])
-    let idxArr = MLXArray(keepIdx.map { Int32($0) })
-    let gathered = flat.take(idxArr, axis: 0)
-    return gathered.reshaped([1, keepIdx.count, hidden])
+    return Array(keepIdx)
 }

@@ -3,7 +3,7 @@
 import Foundation
 import MLX
 import MLXLMCommon
-import MLXVLM
+@testable import MLXVLM
 import Testing
 
 private struct FocusedOmniTokenizer: Tokenizer {
@@ -115,6 +115,63 @@ private struct FocusedOmniMediaTokenizer: Tokenizer {
     }
 }
 
+private struct FocusedOmniTemplateTokenizer: Tokenizer {
+    var bosToken: String? { nil }
+    var eosToken: String? { nil }
+    var unknownToken: String? { nil }
+
+    func encode(text: String, addSpecialTokens: Bool) -> [Int] {
+        text.unicodeScalars.map { Int($0.value) }
+    }
+
+    func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String {
+        var result = ""
+        for id in tokenIds {
+            if let scalar = UnicodeScalar(id) {
+                result.unicodeScalars.append(scalar)
+            }
+        }
+        return result
+    }
+
+    func convertTokenToId(_ token: String) -> Int? {
+        switch token {
+        case "<image>": 18
+        case "<so_embedding>": 27
+        default: nil
+        }
+    }
+
+    func convertIdToToken(_ id: Int) -> String? {
+        switch id {
+        case 18: "<image>"
+        case 27: "<so_embedding>"
+        default: String(id)
+        }
+    }
+
+    func applyChatTemplate(
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?
+    ) throws -> [Int] {
+        var rendered = ""
+        for message in messages {
+            let role = (message["role"] as? String) ?? "user"
+            rendered += "<|im_start|>\(role)\n"
+            rendered += String(describing: message["content"] ?? "")
+            rendered += "<|im_end|>\n"
+        }
+        rendered += "<|im_start|>assistant\n"
+        if additionalContext?["enable_thinking"] as? Bool == false {
+            rendered += "<think></think>"
+        } else {
+            rendered += "<think>\n"
+        }
+        return encode(text: rendered, addSpecialTokens: false)
+    }
+}
+
 @Suite("Nemotron H Omni pre-encoded audio")
 struct NemotronHOmniPreEncodedAudioTests {
     @Test("live audio buffer keeps full snapshot while streaming chunks")
@@ -192,6 +249,120 @@ struct NemotronHOmniPreEncodedAudioTests {
         }
     }
 
+    @Test("processor preserves bundle compact no-thinking media tail")
+    func processorPreservesCompactNoThinkingMediaTail() async throws {
+        try await FocusedMLXTestSupport.withLock {
+            let tokenizer = FocusedOmniTemplateTokenizer()
+            let processor = NemotronHOmniProcessor(
+                NemotronHOmniProcessorConfiguration(),
+                tokenizer: tokenizer)
+            var input = UserInput(
+                prompt: "Briefly describe what you hear.",
+                audios: [
+                    .preEncoded(
+                        samples: [Float](repeating: 0.0, count: 1_600),
+                        sampleRate: 16_000,
+                        embedding: MLXArray.zeros([5, 2_688]))
+                ])
+            input.additionalContext = ["enable_thinking": false]
+
+            let lmInput = try await processor.prepare(input: input)
+            let rendered = tokenizer.decode(
+                tokenIds: lmInput.text.tokens.reshaped(-1).asArray(Int.self),
+                skipSpecialTokens: false)
+
+            #expect(rendered.hasSuffix("<|im_start|>assistant\n<think></think>"))
+            #expect(!rendered.hasSuffix("<|im_start|>assistant\n<think>\n</think>\n\n"))
+        }
+    }
+
+    @Test("media no-thinking prompt carries explicit direct-answer instruction")
+    func mediaNoThinkingPromptCarriesDirectAnswerInstruction() async throws {
+        try await FocusedMLXTestSupport.withLock {
+            let tokenizer = FocusedOmniTemplateTokenizer()
+            let processor = NemotronHOmniProcessor(
+                NemotronHOmniProcessorConfiguration(),
+                tokenizer: tokenizer)
+            var input = UserInput(
+                prompt: "Briefly describe what you hear.",
+                audios: [
+                    .preEncoded(
+                        samples: [Float](repeating: 0.0, count: 1_600),
+                        sampleRate: 16_000,
+                        embedding: MLXArray.zeros([5, 2_688]))
+                ])
+            input.additionalContext = ["enable_thinking": false]
+
+            let lmInput = try await processor.prepare(input: input)
+            let rendered = tokenizer.decode(
+                tokenIds: lmInput.text.tokens.reshaped(-1).asArray(Int.self),
+                skipSpecialTokens: false)
+
+            #expect(rendered.contains(
+                "Answer directly with only the final visible response."))
+            #expect(rendered.contains(
+                "Do not include analysis, reasoning, scratchpad steps, or drafts."))
+            #expect(rendered.hasSuffix("<|im_start|>assistant\n<think></think>"))
+        }
+    }
+
+    @Test("media thinking request uses direct-answer media contract")
+    func mediaThinkingRequestUsesDirectAnswerMediaContract() async throws {
+        try await FocusedMLXTestSupport.withLock {
+            let tokenizer = FocusedOmniTemplateTokenizer()
+            let processor = NemotronHOmniProcessor(
+                NemotronHOmniProcessorConfiguration(),
+                tokenizer: tokenizer)
+            var input = UserInput(
+                prompt: "Briefly describe what you hear.",
+                audios: [
+                    .preEncoded(
+                        samples: [Float](repeating: 0.0, count: 1_600),
+                        sampleRate: 16_000,
+                        embedding: MLXArray.zeros([5, 2_688]))
+                ])
+            input.additionalContext = ["enable_thinking": true]
+
+            let lmInput = try await processor.prepare(input: input)
+            let rendered = tokenizer.decode(
+                tokenIds: lmInput.text.tokens.reshaped(-1).asArray(Int.self),
+                skipSpecialTokens: false)
+
+            #expect(rendered.hasSuffix("<|im_start|>assistant\n<think></think>"))
+            #expect(!rendered.hasSuffix("<|im_start|>assistant\n<think>\n"))
+            #expect(rendered.contains(
+                "Answer directly with only the final visible response."))
+        }
+    }
+
+    @Test("media default prompt uses direct-answer media contract")
+    func mediaDefaultPromptUsesDirectAnswerMediaContract() async throws {
+        try await FocusedMLXTestSupport.withLock {
+            let tokenizer = FocusedOmniTemplateTokenizer()
+            let processor = NemotronHOmniProcessor(
+                NemotronHOmniProcessorConfiguration(),
+                tokenizer: tokenizer)
+            let input = UserInput(
+                prompt: "Briefly describe what you hear.",
+                audios: [
+                    .preEncoded(
+                        samples: [Float](repeating: 0.0, count: 1_600),
+                        sampleRate: 16_000,
+                        embedding: MLXArray.zeros([5, 2_688]))
+                ])
+
+            let lmInput = try await processor.prepare(input: input)
+            let rendered = tokenizer.decode(
+                tokenIds: lmInput.text.tokens.reshaped(-1).asArray(Int.self),
+                skipSpecialTokens: false)
+
+            #expect(rendered.hasSuffix("<|im_start|>assistant\n<think></think>"))
+            #expect(!rendered.hasSuffix("<|im_start|>assistant\n<think>\n"))
+            #expect(rendered.contains(
+                "Answer directly with only the final visible response."))
+        }
+    }
+
     @Test("video EVS count matches LMInput placeholder contract")
     func videoEVSCountMatchesSourceTokenCount() {
         FocusedMLXTestSupport.withLock {
@@ -211,6 +382,42 @@ struct NemotronHOmniPreEncodedAudioTests {
                 embeddingTokenCount: 1228)
             #expect(video.embeddingTokenCount == 1228)
         }
+    }
+
+    @Test("video prompt uses source-style frame labels and keeps full placeholder budget")
+    func videoPromptUsesFrameLabelsAndPlaceholderBudget() {
+        let media = NemotronHOmniProcessor.videoPromptMedia(
+            totalTokens: 4_096,
+            groups: 16,
+            tokensPerGroup: 256,
+            temporalPatchDim: 2)
+
+        #expect(media.hasPrefix("Frame 1 and frame 2: <img><image>"))
+        #expect(media.contains("\nFrame 3 and frame 4: <img><image>"))
+        #expect(media.contains("\nFrame 31 and frame 32: <img><image>"))
+        #expect(!media.contains("<video>"))
+        #expect(media.hasSuffix("</img>\n"))
+        #expect(media.components(separatedBy: "<image>").count - 1 == 4_096)
+    }
+
+    @Test("EVS keep indices retain first group and target count")
+    func evsKeepIndicesRetainFirstGroupAndTargetCount() {
+        FocusedMLXTestSupport.withLock {
+            let feats = MLXArray.zeros([16, 256, 8])
+            let keep = nemotronOmniEVSKeepIndices(feats, targetTokenCount: 1_024)
+            #expect(keep.count == 1_024)
+            #expect(Array(keep.prefix(256)) == Array(0 ..< 256))
+            #expect(keep == keep.sorted())
+        }
+    }
+
+    @Test("video target size preserves aspect ratio and source patch budget")
+    func videoTargetSizePreservesAspectRatioAndPatchBudget() {
+        let target = nemotronOmniVideoTargetSize(width: 1_920, height: 1_080)
+
+        #expect(target.width == 672)
+        #expect(target.height == 384)
+        #expect(target.tokens == 252)
     }
 
     @Test("RADIO pixel shuffle preserves expected downsample shape")

@@ -217,6 +217,20 @@ public extension LMInput {
         let mediaTokenSet = Set(mediaTokenIds)
         return remainingTokenIds.contains { mediaTokenSet.contains($0) }
     }
+
+    /// True when the model may only know the cache key after
+    /// `prepare(_:cache:windowSize:)` runs.
+    ///
+    /// Nemotron Omni video EVS is the current concrete case: the processor
+    /// renders the full pre-EVS video placeholder run, the model computes
+    /// video embeddings, then prunes placeholder positions together with
+    /// `inputs_embeds` and returns `LMOutput.effectivePromptTokens`. A cache
+    /// entry restored under the pre-pruned token stream would be unsafe
+    /// because the live KV offset and token sequence describe the post-EVS
+    /// prompt.
+    var requiresPostPrepareCacheKey: Bool {
+        video?.embeddingTokenCount != nil
+    }
 }
 
 /// ``LanguageModel`` step output. This is consumed internally
@@ -229,6 +243,15 @@ public struct LMOutput {
     /// optional ``State`` to carry forward into the next step
     public let state: State?
 
+    /// Optional effective prompt token IDs after model-side prompt pruning.
+    ///
+    /// Some multimodal models splice media embeddings into a full prompt and
+    /// then prune placeholder positions together with `inputs_embeds` before
+    /// language-model prefill. When present, cache storage should key the
+    /// resulting KV state by these effective tokens instead of the pre-pruned
+    /// template token stream.
+    public let effectivePromptTokens: [Int]?
+
     public struct State {
         public let crossAttentionStates: MLXArray?
 
@@ -237,9 +260,14 @@ public struct LMOutput {
         }
     }
 
-    public init(logits: MLXArray, state: LMOutput.State? = nil) {
+    public init(
+        logits: MLXArray,
+        state: LMOutput.State? = nil,
+        effectivePromptTokens: [Int]? = nil
+    ) {
         self.logits = logits
         self.state = state
+        self.effectivePromptTokens = effectivePromptTokens
     }
 }
 

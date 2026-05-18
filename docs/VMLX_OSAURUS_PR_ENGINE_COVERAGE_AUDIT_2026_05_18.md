@@ -120,6 +120,220 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   pass `loadPreservedMTP: loadNativeMTP`, preserve `generationDefaults:
   generationConfig`, and carry `mtpStatus` into `ModelConfiguration`.
 
+2026-05-18 03:22 PDT Nemotron Omni consolidation refresh:
+
+- This pass explains why the package switch is taking longer than a mechanical
+  package merge: Osaurus currently gets correctness from the interaction of
+  pinned packages, app/session policy, Python-side processors, and runtime
+  glue. Moving that into one Swift package makes each hidden boundary an engine
+  contract. The current live example is Nemotron Omni media: the source Python
+  path uses CLIP/RADIO image preprocessing with bicubic interpolation,
+  `align_corners=false`, and antialiasing, then applies video EVS after the
+  full placeholder run has been spliced into `inputs_embeds` and `input_ids`.
+- Focused Swift tests now cover source-style video frame labels, aspect-
+  preserving video target sizing, compact no-thinking media tail,
+  source-compatible EVS keep indices, pre-encoded Parakeet embedding reuse, and
+  post-prepare media cache keys. The focused commands pass:
+  `MediaCachePlaceholderTests` 3/3 and `NemotronHOmniPreEncodedAudioTests`
+  13/13:
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test
+  --filter <test-suite> --jobs 2`.
+- Release `RunBench` rebuilt after the source-style media changes. Live JANGTQ
+  artifact
+  `docs/local/live-model-matrix/20260518T_omni_bicubic_antialias_jangtq/`
+  exits 0 and reports `20 passed, 0 failed | load 1.37s`. The live sampling
+  line is sourced from the bundle generation config:
+  `temp=0.600 topP=0.950 topK=0 minP=0.000 rep=1.000 seed=0`.
+- The 20/20 live result is a structural/runtime pass, not a blanket semantic
+  production sign-off. Image reasoning-on grounds the orange-to-light-blue
+  gradient; no-thinking image/video outputs are still weakly grounded in several
+  rows, and short budgets can leave visible content truncated. These are live
+  model/runtime quality caveats that still need a longer media-quality gate.
+- Cache-boundary fix: `TokenIterator`, `BatchEngine`, and `NativeMTPTokenIterator`
+  now honor `LMOutput.effectivePromptTokens` for post-EVS cache storage and
+  logit-processor prompt state. Inputs whose cache key is only known after
+  model prepare skip pre-prepare cache fetch instead of restoring under the
+  pre-pruned token stream. History-boundary aliases are also skipped when their
+  saved counts are in the pre-pruned coordinate space. This is correctness
+  routing, not a sampler/parser workaround.
+- Remaining cache gap: video EVS does not yet have a pre-prepare effective-key
+  resolver or durable alias table, so repeated video prompts will not get a
+  real prefix hit until that contract is added. Do not claim full video cache
+  production readiness from the 20/20 structural matrix alone.
+
+2026-05-18 04:25 PDT Nemotron Omni live-behavior correction:
+
+- A later live reread showed the earlier 20/20 Omni matrix was too permissive:
+  the no-thinking image row had been repaired, but the harness still counted
+  reasoning-only/max-token output as acceptable in one chat-history path. The
+  bench now treats a chat-history turn that hits `max_tokens` before a normal
+  stop as FAIL and does not fall back to reasoning text as visible content.
+- Processor fix: media placeholders are now attached to the chat message that
+  actually carried media instead of always being prepended to the last user
+  message. This matters for VL multi-turn history where turn 1 has an image
+  and turn 2 is text-only. The change is prompt construction only; it is not a
+  sampler, EOS, repetition, or forced reasoning-close guard.
+- Bench fix: Omni text/image multi-turn rows now render real chat history
+  instead of reusing a populated raw KV/Mamba cache with unrelated fresh
+  prompts. That old harness behavior was a cache-contract violation and could
+  induce loops. It was removed rather than hidden with generation parameters.
+- Live artifacts:
+  - `docs/local/live-model-matrix/20260518T110730Z_omni_nothink_instruction_jangtq/`
+    proved the source-style no-thinking media instruction changes the JANGTQ
+    image no-thinking answer from the earlier monochrome/curved-line failure
+    to a grounded gradient answer, but still failed image multi-turn under the
+    old raw-cache harness.
+  - `docs/local/live-model-matrix/20260518T112412Z_omni_strict_chat_nofallback_256_jangtq/`
+    is the honest red row: strict chat-history VL reasoning-on at 256 tokens
+    fails because turn 2 stays inside reasoning and hits max tokens with no
+    visible answer.
+  - `docs/local/live-model-matrix/20260518T112503Z_omni_strict_chat_nofallback_512_jangtq/`
+    is the strict green direct path: 15/15 pass, row 4 closes `</think>` at
+    493 generated tokens and visible content is `Orange and blue`.
+  - `docs/local/live-model-matrix/20260518T112555Z_omni_batch_512_jangtq/`
+    is the BatchEngine path: 19/19 pass, including B1 text B=1, B2 text B=2,
+    B3 image B=1, and B4 audio B=1. B3/B4 throughput is low
+    (`11.2`/`11.5 tok/s`) and needs performance work, but coherence and routing
+    are now live-proven for the tested JANGTQ Omni bundle.
+- Verification after the patch:
+  `swift build -c release --product RunBench --jobs 2` passes. The focused
+  unit suite also passes when invoked through the Xcode toolchain:
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test
+  --filter NemotronHOmniPreEncodedAudioTests --jobs 2` runs 14/14 tests green.
+  The system `swift test` path remains misleading here because it compiles an
+  unrelated debug target that imports `Testing` before test selection.
+
+2026-05-18 06:20 PDT Nemotron Omni strict media refresh:
+
+- Root cause update: the remaining JANGTQ Omni image failures were not sampler,
+  EOS, repetition, or cache issues. The open-thinking media template and
+  assistant-only media tail hallucinated over placeholder/prompt text, while the
+  same image tensor path grounded correctly with the bundle's closed-thinking
+  direct-answer media contract. Text-only reasoning remains live and tested.
+- Processor contract is now explicit: Nemotron Omni media turns render the
+  direct-answer media template (`enable_thinking=false` for template rendering)
+  and carry the source-style direct-answer instruction. This is a model-family
+  media capability boundary, not a hidden sampling guard; Osaurus should not
+  expose media reasoning for this Omni path until a real grounded media-thinking
+  row exists.
+- The strict image validator no longer accepts fake text-only image answers or
+  negated gradient claims. It now rejects known hallucinations such as white
+  background/text-prompt descriptions and requires the warm/blue synthetic
+  fixture to be grounded.
+- Focused verification:
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test
+  --filter NemotronHOmniPreEncodedAudioTests --jobs 2` passes 16/16.
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift build
+  -c release --product RunBench --jobs 2` passes.
+- Live artifact:
+  `docs/local/live-model-matrix/20260518T_omni_jangtq_media_direct_contract_prompt_postfix/omni_jangtq.log`
+  passes 19/19 using bundle defaults
+  (`temp=0.600 topP=0.950 topK=0 minP=0.000 rep=1.000 seed=20260517`).
+  Covered rows include text single-turn, text multi-turn, image single-turn,
+  image reasoning-off direct, image multi-turn, video encoder, Parakeet audio
+  encoder, video LMInput, audio LMInput, text reasoning OFF, text ON/OFF/ON
+  reasoning toggle, mixed image+audio, media-salt isolation, hybrid SSM
+  warm-pass parity, and BatchEngine text/image/audio rows.
+
+2026-05-18 04:45 PDT build/coverage/live refresh:
+
+- Consolidated package build gate: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+  xcrun swift build --target VMLX --jobs 2` passes. Artifact log:
+  `docs/local/build-logs/vmlx_target_build_20260518T113748Z.log`; that saved
+  umbrella-target build has no `warning:` or `error:` lines after explicitly
+  excluding documentation/template reference files from SwiftPM source targets.
+- Broad test-target compile gate: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+  xcrun swift build --build-tests --jobs 2` passes.
+- Full active focused runtime-policy gate:
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test
+  --filter MLXLMCommonFocusedTests --jobs 2` passes. Current count after the
+  Omni media-contract refresh: 240 Swift Testing tests across 28 suites plus
+  22 selected XCTest focused rows.
+- Source-coverage fix: `BatchEngineGrowingChatCacheSourceTests` was still in
+  inactive `Tests/MLXLMTests` and filtered runs executed zero tests. The guard
+  is now moved into active `MLXLMCommonFocusedTests`; the exact filter
+  `BatchEngineGrowingChatCacheSourceTests` runs 8/8 tests green and covers
+  post-answer cache boundaries, disk restore materialization, full-hit trim,
+  SSM/ZAYA/rotating-cache guardrails, and absence of hidden reasoning close
+  forcing.
+- DSV4 cleanup: `DeepseekV4.swift` now uses current `quantizedMM`, keeps the
+  prefill local mask immutable, and `DeepseekV4MathHelpers.yarnInvFreq` no
+  longer has unreachable code. Focused DSV4/cache source gate passes 29/29:
+  `DeepseekV4IndexerCausalTopKTests|DeepseekV4ReasoningPolicyTests|
+  DeepseekV4ChatTemplateFallbackFocusedTests|BatchEngineGrowingChatCacheSourceTests`.
+- Current live Omni direct artifact:
+  `docs/local/live-model-matrix/20260518T114355Z_omni_strict_chat_nofallback_512_jangtq_current/`
+  exits 0 and reports `15 passed, 0 failed | load 1.46s`. The row includes
+  image no-thinking direct (`A gradient background transitioning from orange to
+  yellow.`), image multi-turn (`Orange and blue` on turn 2), audio media-salt
+  isolation, reasoning ON/OFF/ON, video, mixed image+audio, and hybrid
+  SSM warm-pass with `["KVCacheSimple", "MambaCache"]`.
+- Current live Omni BatchEngine artifact:
+  `docs/local/live-model-matrix/20260518T114440Z_omni_batch_512_jangtq_current/`
+  exits 0 and reports `19 passed, 0 failed | load 1.38s`, including B1 text
+  B=1, B2 concurrent text B=2, B3 image B=1, and B4 audio B=1. B3/B4 remain
+  slower (`11.6`/`11.3 tok/s`) but they no longer fail coherence/routing in
+  this current JANGTQ row.
+- Release `RunBench` still builds (`swift build -c release --product RunBench
+  --jobs 2`), but the executable build emits bench/source warnings in
+  `RunBench`, `Source/MLX`, and `Source/MLXNN`. These are not live-row
+  blockers, but they are still cleanup work before claiming warning-free
+  package production polish.
+
+2026-05-18 05:33 PDT Gemma3n E2B correction:
+
+- The local Gemma3n E2B MLX bundle
+  `/Users/eric/models/mlx-community/gemma-3n-E2B-it-4bit` exposed why this
+  package switch is not a mechanical merge. The initial Swift text path failed
+  at load because full VLM checkpoint keys arrived as `language_model.model.*`
+  with `vision_tower.*` and `audio_tower.*` sidecars, while the text model
+  expected canonical `language_model.*` keys. This is now handled by
+  `Gemma3nTextModel.sanitize(weights:)`, which canonicalizes the text prefixes
+  and drops non-text towers for the text-only runtime path.
+- A second real runtime bug was prompt RoPE positioning: Gemma3n attention was
+  applying query RoPE after cache update, so prompt queries could see the
+  advanced cache offset. `Gemma3nAttention` now captures the rotary offset
+  before the key/value update and applies that same captured offset to keys and
+  queries. This is a cache-position fix, not a sampler or EOS workaround.
+- A third runtime mismatch was Gemma3n conditional-generation embedding scale.
+  Source `mlx_vlm` uses unscaled `inputs_embeds` for VLM-style prompt prefill
+  but calls the language model directly for generated decode tokens, where
+  token embeddings are scaled by `sqrt(hidden_size)`. Swift now detects the
+  conditional-generation config and keeps prompt-prefill embeddings unscaled
+  while restoring scale for single cached decode tokens. This fixed the
+  token-2 drift that caused looping/word-puzzle behavior after the first token.
+- The production harness also had weak validators. The old S3 validator
+  returned PASS for `accepted non-blue`, and the S5 row claimed verbatim UTF-8
+  success while accepting any non-empty text. Python reference on the same
+  bundle also fails the old sky/planet/verbatim prompts, so the gate now uses
+  reference-satisfiable prompts and validates actual expected content (`4`,
+  `Mars`, and `café`/`你好`). The older `BENCH_OFFICIAL` path had the same
+  non-blue and fake-verbatim weakness; it is tightened too. Focused tests guard
+  against reintroducing those fake passes anywhere in `RunBench`.
+- Verification:
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test
+  --filter Gemma3nTextSanitizeFocusedTests --jobs 2` passes 8/8, and
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift build
+  -c release --product RunBench --jobs 2` passes.
+- Live artifacts:
+  - `docs/local/live-model-matrix/20260518T123300Z_gemma3n_e2b_prod_greedy_strict_promptfix_192/`
+    passes 7/7 with explicit greedy/no repetition penalty, about `130 tok/s`,
+    peak RSS about `2723 MiB`, and no reasoning leakage. S5 satisfies the
+    UTF-8 inclusion predicate but length-stops at 192 tokens, so do not treat
+    it as exact-verbatim proof.
+  - `docs/local/live-model-matrix/20260518T123320Z_gemma3n_e2b_prod_bundle_defaults_strict_promptfix_192/`
+    passes 7/7 using real bundle defaults
+    `temp=0.600 topP=0.950 topK=64 minP=0.000 rep=nil`.
+  - `docs/local/live-model-matrix/20260518T123340Z_gemma3n_e2b_prod_cachecoord_strict_promptfix_192/`
+    passes 7/7 with L2 coordinator enabled. S2 TTFT drops from `61ms` to
+    `24ms`; cache stats report `pagedIncompatible=true`,
+    `disk{hits=1,misses=21,stores=21,maxBytes=4294967296}`, and no SSM
+    rederive because this text path is non-hybrid.
+- Boundary: this clears the current Gemma3n text-only loading/decode/cache row.
+  It does not claim Gemma3n vision or audio towers are wired in Swift; those
+  towers are intentionally dropped in the text sanitizer until the VLM/audio
+  path has its own media processor and cache proof.
+
 2026-05-17 21:09 PDT `vmlx-swift-lm` parity refresh:
 
 - The current reference repo state is still dirty and concurrent-agent active:
@@ -281,9 +495,11 @@ promotion blockers:
   non-Kimi all-model rerun before Osaurus promotion.
 - GPT-OSS / GLM5 / Mistral4 / Pixtral: parser/unit coverage exists, but there
   are no local live decode rows in this pass.
-- Omni live voice: core text/image/audio/video rows pass. A focused 2026-05-18
-  cache-on repeat gate fixed the iterator bench cache-store evidence gap, but
-  repeated live audio still remains a semantic quality/termination gate.
+- Omni live voice: text, image, audio, video, mixed-media, media-salt, hybrid
+  SSM, and BatchEngine rows now pass structurally in the 20/20 JANGTQ matrix.
+  No-thinking image/video grounding remains weak, and video EVS cache prefetch
+  is correctness-blocked until a real post-prepare key resolver or alias
+  contract exists.
 - Qwen high-resolution video: bounded media resize rows pass; raw 1080p video
   is not production-clear because the pre-fix row peaked at 164.2 GiB physical
   footprint.
@@ -314,7 +530,7 @@ row below has current `vmlx-swift` live proof.
 | #1037 `Ling/ZAYA hardening + BatchEngine lifecycle` | merged | Ling/Bailing, ZAYA, BatchEngine lifecycle, topology-aware cache. | Ling JANGTQ2/MXFP4 pass; ZAYA text JANGTQ4/JANGTQ_K pass; ZAYA1-VL JANGTQ4 passes. Cache proof is topology-specific: disk/SSM/CCA, not generic prefix hit. | ZAYA1-VL JANGTQ_K remains partial; Hy3 K needs current rerun. |
 | #1057 `MiniMax speed fix` | merged | MiniMax speed/lifecycle, typed load config, VLM detection, tokenizer/Jinja compatibility. | Large MiniMax JANGTQ_K/JANG cache-off infer rows pass; production-shaped chat-cache row passes; strict TQ B=2 now passes after `6560879`. | Low-footprint active-routed MiniMax proof is still open. Shape-inferred 6-bit metadata repair in JANG_K should be corrected in bundle or explicitly accepted. |
 | #1066 `pin DSV4 vmlx update` | merged | DSV4 tokenizer/cache/runtime pin, local tokenizer fallback. | DSV4 separator fix and template kwargs rows pass; DSV4 live cache OFF/ON chat is coherent. | DSV4 remains partial until long-context/vector/API/speed/low-footprint gates pass. |
-| #1073 `Nemotron Omni live voice input path` | merged | Live voice, Parakeet/RADIO, media-cache token-aware restore, DSV4 pool/compressor fixes. | Omni JANGTQ/JANGTQ4/MXFP4 core matrices pass; current docs track Parakeet chunk concat caveat. Focused 2026-05-18 repeat-audio gate now proves block-L2 and `ssm_companion` writes for BatchEngine and manual TokenIterator paths after the bench store fix. DSV4 pool/compressor lineage is recorded. | Repeated cache-on audio semantic quality/termination and package-wide HTTP route proof remain open. |
+| #1073 `Nemotron Omni live voice input path` | merged | Live voice, Parakeet/RADIO, media-cache token-aware restore, DSV4 pool/compressor fixes. | Omni JANGTQ/JANGTQ4/MXFP4 core matrices pass; the latest strict JANGTQ media-direct row is 19/19 with bundle sampling defaults and proves text reasoning remains separate from direct-answer media mode. Focused 2026-05-18 repeat-audio gate proves block-L2 and `ssm_companion` writes for BatchEngine and manual TokenIterator paths after the bench store fix. DSV4 pool/compressor lineage is recorded. | Video EVS prefetch-key contract, repeated cache-on audio semantic quality/termination, broader Omni media-thinking research, and package-wide HTTP route proof remain open. |
 | #1110 `Harden DSV4 reasoning gates and runtime proof` | open, dirty | Native DSV4 chat encoder/tokenizer bridge, live DSV4 proof, runtime pin check. Current Osaurus head pins `vmlx-swift-lm 2cc64dd`. | `vmlx-swift` has DSV4 prompt-boundary fix and partial live proof, but it does not yet close the full #1110 bar. | Do not treat #1110 as merged release state; switch PR must resolve dirty state and rerun DSV4 release gates. |
 | #1118 `Add PocketTTS language selection` | open, behind | TTS language UI/config and resolver-pin churn. | No direct vmlx inference-engine change; keep Omni/Parakeet input-audio evidence separate from output TTS. | Re-run pin-integrity checks after any rebase/merge before the package switch. |
 | #1119 `Add model idle residency policy` | merged | Server idle residency, unload/sleep policy, runtime lifecycle hooks. | `VMLXServerRuntimeSettings.power` documents light/deep sleep settings and cache release/disable APIs exist. | Needs live Osaurus server deep-sleep/wake proof with loaded models before lifecycle readiness is claimed. |
@@ -358,7 +574,7 @@ Recent dependency scan, 2026-05-04 through 2026-05-18:
 | Generation defaults | Bundle defaults are source of truth before explicit request override. | Ledger rows print temp/topP/topK/minP/rep per family. | Covered for tested rows; require same telemetry for new rows. |
 | Hybrid SSM / CCA / SWA cache | Cache proof must be topology-specific, not generic prefix-hit. | Qwen/Ling/ZAYA/Gemma4 rows record disk L2, SSM companion, CCA, SWA incompatibility, and media salt where applicable. Fresh Gemma E2B refresh records disk hits/stores plus VL media-salt restore; fresh Ling no-guard refresh confirms Bailing template/decode stress without fake sampler fixes. | Covered for listed PASS rows; DSV4 long-context and ZAYA1-VL K remain open. |
 | TurboQuant KV | Explicit TQ mode must preserve coherency and prove actual compression. | `20260518T_minimax_m27_jangtqk_tq_tail_fix_exact/` proves actual TQ transitions and exact outputs after tail preservation. | Fixed for MiniMax strict row; keep family-by-family gates. |
-| VL/media salt | Image/video/audio state must be isolated across turns and cache hits. | Qwen, ZAYA1-VL, Gemma4, and Omni rows prove same/different media behavior where implemented. | Raw Qwen high-res video and repeated Omni cache-on audio remain open. |
+| VL/media salt | Image/video/audio state must be isolated across turns and cache hits. | Qwen, ZAYA1-VL, Gemma4, and Omni rows prove same/different media behavior where implemented. Omni video EVS now stores under post-prepare effective tokens instead of the pre-pruned prompt key. | Raw Qwen high-res video, Omni video EVS prefetch/alias hits, and repeated Omni cache-on audio remain open. |
 | Reasoning on/off | No fake close; reasoning off must affect template/runtime where supported, and visible output must remain coherent. | Gemma4 reasoning matrix, MiniMax rows, DSV4 reasoning kwargs, Ling/Bailing aliases. Fresh Gemma E2B no-guard red/green pair proves the harness now accepts coherent stellar equivalents instead of forcing decode behavior; fresh Ling row proves the Russian stress prompt with `temp=0.7` stops normally. | Covered for tested families; package-wide model matrix still open for absent local bundles. |
 | MTP autodetect | Only real tensor evidence plus usable tuning may enable MTP; model names and stale metadata are insufficient. Qwen auto-depth must come from bundle-local `vmlx_mtp_tuning.json`, not profile/name rules. | Non-Kimi MTP census and Qwen MTP settings docs; CRACK rows explicitly stay MTP off. Focused tests cover tuned D2, validated D3, missing tuning, blocked tuning rows, valid tuning without MTP tensors, `MTPBundleStatus.snapshot`, missing-tuning evidence, and LLM/VLM factory wiring into `ModelConfiguration`. | Correct fail-closed policy covered; full MTP speed target remains separate/open. |
 

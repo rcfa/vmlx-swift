@@ -256,13 +256,20 @@ public class NemotronHOmni: Module, VLMModel, KVCacheDimensionProvider, LoRAMode
         // Concatenate image and video embeds (in the same order the
         // processor wrote their placeholders) and splice in one pass.
         var visualEmbeds: MLXArray? = nil
+        var imageEmbedCount = 0
+        var videoRetention: (keepIndices: [Int], totalTokens: Int)? = nil
         if let pixelValues = input.image?.pixels {
             visualEmbeds = extractImageEmbeds(pixelValues: pixelValues)
+            imageEmbedCount = visualEmbeds?.dim(0) ?? 0
         }
         if let video = input.video {
-            let videoEmbeds = extractVideoEmbeds(
+            let videoEmbedsWithRetention = extractVideoEmbedsWithRetention(
                 pixelValues: video.pixels,
                 targetTokenCount: video.embeddingTokenCount)
+            let videoEmbeds = videoEmbedsWithRetention.fullEmbeds
+            videoRetention = (
+                keepIndices: videoEmbedsWithRetention.keepIndices,
+                totalTokens: videoEmbedsWithRetention.totalTokens)
             visualEmbeds = visualEmbeds.map {
                 MLX.concatenated([$0, videoEmbeds], axis: 0)
             } ?? videoEmbeds
@@ -287,10 +294,23 @@ public class NemotronHOmni: Module, VLMModel, KVCacheDimensionProvider, LoRAMode
                 replacement: audioEmbeds,
                 tokenId: config.soundContextTokenId)
         }
+        var effectivePromptTokens: [Int]? = nil
+        if let videoRetention {
+            let pruned = try pruneVideoPlaceholdersAfterEVS(
+                tokens: input.text.tokens,
+                inputsEmbeds: spliced,
+                imageTokenCount: imageEmbedCount,
+                videoTotalTokenCount: videoRetention.totalTokens,
+                videoKeepIndices: videoRetention.keepIndices)
+            spliced = pruned.inputsEmbeds
+            effectivePromptTokens = pruned.tokenIds
+        }
 
         let logits = languageModel.callAsFunction(
             inputsEmbeds: spliced, cache: convertedCache)
-        return .logits(LMOutput(logits: logits))
+        return .logits(LMOutput(
+            logits: logits,
+            effectivePromptTokens: effectivePromptTokens))
     }
 
     // MARK: - Multimodal embedding extraction
@@ -321,30 +341,19 @@ public class NemotronHOmni: Module, VLMModel, KVCacheDimensionProvider, LoRAMode
         return feats.reshaped([N * tokens, feats.dim(-1)])
     }
 
-    /// Run RADIO's video embedder, then apply Efficient Video Sampling
-    /// before the placeholders are spliced into the language-model prompt.
-    /// The source runtime builds its prompt from the post-EVS token count, so
-    /// video generation must not feed the full redundant 32-frame token stream.
+    /// Run RADIO's video embedder and optionally apply Efficient Video Sampling.
+    ///
+    /// The full source-equivalent generation path uses
+    /// `extractVideoEmbedsWithRetention`: it splices the full pre-EVS video
+    /// placeholder run, then prunes embeddings and token IDs together.
+    /// This helper remains useful for direct embedding probes.
     public func extractVideoEmbeds(
         pixelValues: MLXArray,
         targetTokenCount: Int? = nil,
         applyEVS: Bool = true,
         pruningRate: Float = 0.7
     ) -> MLXArray {
-        var feats = radioModel(pixelValues, video: true)
-        feats = feats[0..., config.visionNumClsTokens..., 0...]
-        let nGroups = feats.dim(0)
-        let patches = feats.dim(1)
-        let hidden = feats.dim(2)
-        let side = Int(Double(patches).squareRoot())
-        precondition(side * side == patches,
-                     "RADIO patch count must be a perfect square; got P=\(patches)")
-        feats = feats.reshaped([nGroups, side, side, hidden])
-        feats = nemotronOmniPixelShuffle(feats, scaleFactor: config.downsampleRatio)
-        let tokensPerGroup = feats.dim(1) * feats.dim(2)
-        let cIn = feats.dim(3)
-        feats = feats.reshaped([nGroups, tokensPerGroup, cIn])
-        feats = visionMLP(feats)
+        var feats = projectedVideoEmbedsByGroup(pixelValues: pixelValues)
         if applyEVS {
             if let targetTokenCount {
                 feats = nemotronOmniApplyEVS(feats, targetTokenCount: targetTokenCount)
@@ -353,6 +362,52 @@ public class NemotronHOmni: Module, VLMModel, KVCacheDimensionProvider, LoRAMode
             }
         }
         return feats.reshaped([feats.dim(0) * feats.dim(1), feats.dim(-1)])
+    }
+
+    private func projectedVideoEmbedsByGroup(pixelValues: MLXArray) -> MLXArray {
+        var feats = radioModel(pixelValues, video: true)
+        feats = feats[0..., config.visionNumClsTokens..., 0...]
+        let nGroups = feats.dim(0)
+        let patches = feats.dim(1)
+        let hidden = feats.dim(2)
+        let gridH = pixelValues.dim(2) / config.visionPatchSize
+        let gridW = pixelValues.dim(3) / config.visionPatchSize
+        precondition(gridH * gridW == patches,
+                     "RADIO video patch grid mismatch; got P=\(patches), H=\(gridH), W=\(gridW)")
+        feats = feats.reshaped([nGroups, gridH, gridW, hidden])
+        feats = nemotronOmniPixelShuffle(feats, scaleFactor: config.downsampleRatio)
+        let tokensPerGroup = feats.dim(1) * feats.dim(2)
+        let cIn = feats.dim(3)
+        feats = feats.reshaped([nGroups, tokensPerGroup, cIn])
+        return visionMLP(feats)
+    }
+
+    private func extractVideoEmbedsWithRetention(
+        pixelValues: MLXArray,
+        targetTokenCount: Int? = nil,
+        pruningRate: Float = 0.7
+    ) -> (fullEmbeds: MLXArray, keepIndices: [Int], totalTokens: Int) {
+        let feats = projectedVideoEmbedsByGroup(pixelValues: pixelValues)
+        let nGroups = feats.dim(0)
+        let tokensPerGroup = feats.dim(1)
+        let hidden = feats.dim(2)
+        let totalTokens = nGroups * tokensPerGroup
+        let keepIndices: [Int]
+        if let targetTokenCount {
+            keepIndices = nemotronOmniEVSKeepIndices(
+                feats,
+                targetTokenCount: targetTokenCount)
+        } else {
+            let q = min(max(Double(pruningRate), 0.0), 1.0)
+            let nKeep = max(tokensPerGroup, Int(Double(totalTokens) * (1.0 - q)))
+            keepIndices = nemotronOmniEVSKeepIndices(
+                feats,
+                targetTokenCount: nKeep)
+        }
+        return (
+            fullEmbeds: feats.reshaped([totalTokens, hidden]),
+            keepIndices: keepIndices,
+            totalTokens: totalTokens)
     }
 
     /// Run STFT + Parakeet + sound_projection on a mono waveform stored
@@ -430,6 +485,60 @@ public class NemotronHOmni: Module, VLMModel, KVCacheDimensionProvider, LoRAMode
             }
         }
         return MLX.where(maskExpanded, replaceBuffer.asType(inputsEmbeds.dtype), inputsEmbeds)
+    }
+
+    /// Apply source-style EVS after full video placeholders have been spliced.
+    ///
+    /// Nemotron's Python path renders the full video prompt, replaces every
+    /// video `<image>` placeholder with a video embedding, then prunes only the
+    /// selected video placeholder positions from `inputs_embeds` and `input_ids`
+    /// together. Frame labels, wrapper tokens, image placeholders, and audio
+    /// placeholders remain in the effective prompt.
+    private func pruneVideoPlaceholdersAfterEVS(
+        tokens: MLXArray,
+        inputsEmbeds: MLXArray,
+        imageTokenCount: Int,
+        videoTotalTokenCount: Int,
+        videoKeepIndices: [Int]
+    ) throws -> (inputsEmbeds: MLXArray, tokenIds: [Int]) {
+        guard videoTotalTokenCount > 0 else {
+            return (inputsEmbeds, tokens.reshaped([-1]).asArray(Int.self))
+        }
+        let tokenIds = tokens.reshaped([-1]).asArray(Int.self)
+        let keepVideo = Set(videoKeepIndices)
+        var retainedPositions: [Int32] = []
+        var retainedTokenIds: [Int] = []
+        var visualOrdinal = 0
+        var videoOrdinal = 0
+
+        for (position, tokenId) in tokenIds.enumerated() {
+            var keep = true
+            if tokenId == config.imageContextTokenId {
+                if visualOrdinal < imageTokenCount {
+                    keep = true
+                } else if videoOrdinal < videoTotalTokenCount {
+                    keep = keepVideo.contains(videoOrdinal)
+                    videoOrdinal += 1
+                }
+                visualOrdinal += 1
+            }
+            if keep {
+                retainedPositions.append(Int32(position))
+                retainedTokenIds.append(tokenId)
+            }
+        }
+
+        guard videoOrdinal == videoTotalTokenCount else {
+            throw NSError(
+                domain: "NemotronHOmni", code: -30,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "video placeholder count \(videoOrdinal) does not match video embeddings \(videoTotalTokenCount)"])
+        }
+
+        let gather = MLXArray(retainedPositions)
+        let pruned = inputsEmbeds[0].take(gather, axis: 0)
+            .expandedDimensions(axis: 0)
+        return (pruned, retainedTokenIds)
     }
 
     // MARK: - Sanitize
@@ -600,14 +709,15 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
         return clips
     }
 
-    /// Decode video resources to the (groups, T*3, 512, 512) channel-stack
-    /// tensor that NemotronH RADIO's `video_embedder` consumes.
-    public func preprocess(videos: [UserInput.Video]) async throws -> (MLXArray, Int) {
+    /// Decode video resources to the (groups, T*3, H, W) channel-stack tensor
+    /// that NemotronH RADIO's `video_embedder` consumes.
+    public func preprocess(videos: [UserInput.Video]) async throws -> (MLXArray, Int, Int) {
         // Concatenate all video pixel-tensors into a single (totalGroups,
         // T*3, H, W) tensor and return the total post-pixel-shuffle token
-        // count for placeholder budgeting (256 tokens per group × N groups).
+        // count for placeholder budgeting.
         var groupTensors: [MLXArray] = []
         var totalGroups = 0
+        var tokensPerGroup: Int?
         for v in videos {
             let url: URL
             switch v {
@@ -625,13 +735,21 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
                 videoTemporalPatchDim: 2)
             // pixels shape: (groups, T*3, H, W). Flatten group axis so we
             // can stack across multiple videos.
+            let perGroup = Self.videoTokensPerGroup(pixelValues: pixels)
+            if let tokensPerGroup, tokensPerGroup != perGroup {
+                throw NSError(
+                    domain: "NemotronHOmniProcessor", code: -21,
+                    userInfo: [NSLocalizedDescriptionKey:
+                        "multiple video inputs with different post-shuffle token counts are not supported"])
+            }
+            tokensPerGroup = perGroup
             groupTensors.append(pixels)
             totalGroups += pixels.dim(0)
         }
         let pixelValues = groupTensors.count == 1
             ? groupTensors[0]
             : MLX.concatenated(groupTensors, axis: 0)
-        return (pixelValues, totalGroups)
+        return (pixelValues, totalGroups, tokensPerGroup ?? 0)
     }
 
     public func prepare(input: UserInput) async throws -> LMInput {
@@ -646,10 +764,12 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
         var processedImage: LMInput.ProcessedImage?
         var processedVideo: LMInput.ProcessedVideo?
         var processedAudio: LMInput.ProcessedAudio?
+        let tokensPerTile = 256
         var totalImageTokens = 0
         var totalVideoTokens = 0
+        var totalVideoGroups = 0
+        var totalVideoTokensPerGroup = tokensPerTile
         var totalAudioTokens = 0
-        let tokensPerTile = 256
 
         if !input.images.isEmpty {
             let ciImages = try input.images.map { try $0.asCIImage() }
@@ -662,20 +782,23 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
         }
 
         if !input.videos.isEmpty {
-            let (pixels, groups) = try await preprocess(videos: input.videos)
-            // Each group emits 256 post-pixel-shuffle tokens before EVS.
-            // The source runtime applies EVS, then builds the prompt from
-            // the pruned embedding count. Match that contract here so the
-            // placeholder positions and video embeddings stay one-to-one.
-            let videoTokens = Self.videoTokenCountAfterEVS(
+            let (pixels, groups, videoTokensPerGroup) = try await preprocess(videos: input.videos)
+            // Source processor renders the full pre-EVS placeholder run; the
+            // model applies EVS after splicing and prunes `inputs_embeds` and
+            // `input_ids` together. Keep both counts: full tokens for prompt
+            // rendering, retained tokens for the model-side EVS target.
+            let fullVideoTokens = groups * videoTokensPerGroup
+            let retainedVideoTokens = Self.videoTokenCountAfterEVS(
                 groups: groups,
-                tokensPerGroup: tokensPerTile,
+                tokensPerGroup: videoTokensPerGroup,
                 pruningRate: config.videoPruningRate)
             processedVideo = LMInput.ProcessedVideo(
                 pixels: pixels,
-                frames: [THW(groups, config.imageSize, config.imageSize)],
-                embeddingTokenCount: videoTokens)
-            totalVideoTokens = videoTokens
+                frames: [THW(groups, pixels.dim(2), pixels.dim(3))],
+                embeddingTokenCount: retainedVideoTokens)
+            totalVideoTokens = fullVideoTokens
+            totalVideoGroups = groups
+            totalVideoTokensPerGroup = videoTokensPerGroup
         }
 
         if !input.audios.isEmpty {
@@ -729,14 +852,11 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
             media += "</img>\n"
         }
         if totalVideoTokens > 0 {
-            // Video reuses `<image>` placeholders per Python convention
-            // (model.py § comment on img_context_token_id reuse). The
-            // model's prepare() runs the video tower and splices into
-            // the same token positions; image+video in one prompt
-            // serialize image-first then video-second by construction.
-            media += "<img>"
-            media += String(repeating: "<image>", count: totalVideoTokens)
-            media += "</img>\n"
+            media += Self.videoPromptMedia(
+                totalTokens: totalVideoTokens,
+                groups: totalVideoGroups,
+                tokensPerGroup: totalVideoTokensPerGroup,
+                temporalPatchDim: 2)
         }
         if totalAudioTokens > 0 {
             media += "<so_start>"
@@ -750,22 +870,27 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
         // messages and add the expanded run again, desynchronizing
         // placeholder count from the encoded media embeddings.
         var messages = Self.textOnlyMessages(from: input)
+        var templateContext = input.additionalContext
         if !media.isEmpty {
-            Self.prependMedia(media, toLastUserIn: &messages)
+            if let index = Self.mediaTargetMessageIndex(in: input) {
+                Self.prependMedia(media, toMessageAt: index, in: &messages)
+            } else {
+                Self.prependMedia(media, toLastUserIn: &messages)
+            }
+            // Nemotron Omni's text-only reasoning path is valid, but live
+            // media probes show that its open-thinking media template
+            // hallucinates over placeholder text instead of grounding in the
+            // spliced RADIO/Parakeet embeddings. Media turns therefore use
+            // the model's documented closed-thinking template contract.
+            Self.addNoThinkingMediaInstruction(to: &messages)
+            var mediaContext = templateContext ?? [:]
+            mediaContext["enable_thinking"] = false
+            templateContext = mediaContext
         }
 
-        var promptTokens = try tokenizer.applyChatTemplate(
+        let promptTokens = try tokenizer.applyChatTemplate(
             messages: messages, tools: input.tools,
-            additionalContext: input.additionalContext)
-        if !media.isEmpty {
-            // The shipped template's compact no-thinking tail is text-safe, but
-            // the omni VLM path grounds images only with an explicitly closed,
-            // newline-delimited thought block. Keep reasoning disabled; only
-            // canonicalize the closed media prompt tail.
-            promptTokens = Self.canonicalizeNoThinkingMediaTail(
-                promptTokens,
-                tokenizer: tokenizer)
-        }
+            additionalContext: templateContext)
         let promptArray = MLXArray(promptTokens).expandedDimensions(axis: 0)
         let mask = ones(like: promptArray).asType(.int8)
 
@@ -809,24 +934,108 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
         messages[0]["content"] = media + text
     }
 
-    private static func canonicalizeNoThinkingMediaTail(
-        _ promptTokens: [Int],
-        tokenizer: any MLXLMCommon.Tokenizer
-    ) -> [Int] {
-        let compactTail = "<|im_start|>assistant\n<think></think>"
-        let canonicalTail = "<|im_start|>assistant\n<think>\n</think>\n\n"
-        let compactIds = tokenizer.encode(
-            text: compactTail,
-            addSpecialTokens: false)
-        guard promptTokens.count >= compactIds.count,
-              Array(promptTokens.suffix(compactIds.count)) == compactIds
-        else {
-            return promptTokens
+    private static func prependMedia(
+        _ media: String,
+        toMessageAt index: Int,
+        in messages: inout [Message]
+    ) {
+        guard messages.indices.contains(index) else {
+            prependMedia(media, toLastUserIn: &messages)
+            return
         }
-        let canonicalIds = tokenizer.encode(
-            text: canonicalTail,
-            addSpecialTokens: false)
-        return Array(promptTokens.dropLast(compactIds.count)) + canonicalIds
+        let text = contentText(from: messages[index]["content"])
+        messages[index]["content"] = media + text
+    }
+
+    private static func mediaTargetMessageIndex(in input: UserInput) -> Int? {
+        guard case .chat(let chat) = input.prompt else {
+            return nil
+        }
+        return chat.indices.reversed().first { index in
+            let message = chat[index]
+            return !message.images.isEmpty
+                || !message.videos.isEmpty
+                || !message.audios.isEmpty
+        }
+    }
+
+    private static func addNoThinkingMediaInstruction(to messages: inout [Message]) {
+        let instruction =
+            "Answer directly with only the final visible response. " +
+            "Do not include analysis, reasoning, scratchpad steps, or drafts."
+        if let systemIndex = messages.firstIndex(where: {
+            ($0["role"] as? String) == "system"
+        }) {
+            let existing = contentText(from: messages[systemIndex]["content"])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            messages[systemIndex]["content"] = existing.isEmpty
+                ? instruction
+                : instruction + "\n" + existing
+            return
+        }
+        messages.insert(["role": "system", "content": instruction], at: 0)
+    }
+
+    private static func videoTokensPerGroup(pixelValues: MLXArray) -> Int {
+        let patchSize = 16
+        let downsampleFactor = 2
+        let gridH = pixelValues.dim(2) / patchSize
+        let gridW = pixelValues.dim(3) / patchSize
+        return max(1, (gridH * gridW) / (downsampleFactor * downsampleFactor))
+    }
+
+    static func videoPromptMedia(
+        totalTokens: Int,
+        groups: Int,
+        tokensPerGroup: Int = 256,
+        temporalPatchDim: Int = 2
+    ) -> String {
+        guard totalTokens > 0 else { return "" }
+        let groupCount = max(1, groups)
+        let tokenCounts = videoPromptTokenCounts(
+            totalTokens: totalTokens,
+            groups: groupCount,
+            tokensPerGroup: tokensPerGroup)
+        var chunks: [String] = []
+        for group in 0 ..< groupCount {
+            let count = tokenCounts[group]
+            guard count > 0 else { continue }
+            chunks.append(
+                videoFrameLabel(group: group, temporalPatchDim: temporalPatchDim)
+                    + "<img>"
+                    + String(repeating: "<image>", count: count)
+                    + "</img>")
+        }
+        return chunks.joined(separator: "\n") + "\n"
+    }
+
+    private static func videoPromptTokenCounts(
+        totalTokens: Int,
+        groups: Int,
+        tokensPerGroup: Int
+    ) -> [Int] {
+        var counts = [Int](repeating: 0, count: groups)
+        guard totalTokens > 0, groups > 0 else { return counts }
+        var remaining = totalTokens
+        counts[0] = min(max(1, tokensPerGroup), remaining)
+        remaining -= counts[0]
+        guard groups > 1, remaining > 0 else { return counts }
+        for group in 1 ..< groups {
+            let groupsLeft = groups - group
+            let count = (remaining + groupsLeft - 1) / groupsLeft
+            counts[group] = count
+            remaining -= count
+        }
+        return counts
+    }
+
+    private static func videoFrameLabel(group: Int, temporalPatchDim: Int) -> String {
+        let framesPerGroup = max(1, temporalPatchDim)
+        let labels = (0 ..< framesPerGroup).map { frameOffset in
+            let prefix = frameOffset == 0 ? "Frame" : "frame"
+            return "\(prefix) \(group * framesPerGroup + frameOffset + 1)"
+        }
+        return labels.joined(separator: " and ") + ": "
     }
 
     public static func videoTokenCountAfterEVS(

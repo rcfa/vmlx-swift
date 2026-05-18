@@ -1040,7 +1040,7 @@ public struct TokenIterator: TokenIteratorProtocol {
     let cacheCoordinator: CacheCoordinator?
 
     /// Prompt token IDs captured at init for cache store after generation.
-    public let promptTokenIds: [Int]
+    public private(set) var promptTokenIds: [Int]
 
     /// Canonical prompt-prefix boundaries safe to store in addition to the
     /// full generation prompt.
@@ -1211,7 +1211,10 @@ public struct TokenIterator: TokenIteratorProtocol {
         // Gemma3n, Gemma4 SWA layers, Mistral4 with maxKVSize, MiMoV2Flash,
         // BaichuanM1, Qwen3.5-VL inherited) now get full L2 disk
         // persistence + paged restore on cache hit.
-        if let coordinator = cacheCoordinator, !promptTokenIds.isEmpty {
+        if let coordinator = cacheCoordinator,
+           !promptTokenIds.isEmpty,
+           !input.requiresPostPrepareCacheKey
+        {
             if !coordinator.isHybrid {
                 if cacheContainsPathDependentState(self.cache) {
                     coordinator.setHybrid(true)
@@ -1404,6 +1407,13 @@ public struct TokenIterator: TokenIteratorProtocol {
                     }
                 }
             }
+        } else if cacheCoordinator != nil,
+                  !promptTokenIds.isEmpty,
+                  input.requiresPostPrepareCacheKey
+        {
+            Self.logger.info(
+                "TokenIterator: skipped pre-prepare cache fetch because this input requires model-derived effective prompt tokens"
+            )
         }
 
         // Prefill: either full input (cache miss) or remaining tokens (cache hit).
@@ -1474,13 +1484,12 @@ public struct TokenIterator: TokenIteratorProtocol {
     }
 
     mutating func prepare(input: LMInput, windowSize: Int? = nil) throws {
-        processor?.prompt(input.text.tokens)
-
         let prepared = try MLXPressGenerationProfile.time("prompt.model_prepare") {
             try model.prepare(input, cache: cache, windowSize: windowSize)
         }
         switch prepared {
         case .tokens(let tokens):
+            processor?.prompt(input.text.tokens)
             y = tokens
 
             // evaluate the remainder of the prompt -- this primes the pump
@@ -1491,6 +1500,14 @@ public struct TokenIterator: TokenIteratorProtocol {
             }
 
         case .logits(let result):
+            if let effectivePromptTokens = result.effectivePromptTokens {
+                promptTokenIds = effectivePromptTokens
+                let promptTokens = MLXArray(effectivePromptTokens.map { Int32($0) })
+                    .expandedDimensions(axis: 0)
+                processor?.prompt(promptTokens)
+            } else {
+                processor?.prompt(input.text.tokens)
+            }
             y = .init(tokens: MLXPressGenerationProfile.time("prompt.sample") {
                 convertToToken(logits: result.logits)
             })
@@ -1701,7 +1718,8 @@ public struct TokenIterator: TokenIteratorProtocol {
                 : extractLayerData(from: snapshot)
             let ssmCapture: [MLXArray]? = coordinator.isHybrid &&
                 coordinator.config.enableSSMReDerive &&
-                !requiresDiskBackedRestore
+                !requiresDiskBackedRestore &&
+                !originalInput.hasMediaContent
                 ? reDeriveAndStoreSSMStatesForPromptBoundaries(
                     coordinator: coordinator,
                     model: model,
@@ -1735,18 +1753,20 @@ public struct TokenIterator: TokenIteratorProtocol {
                 kvBits: nil,
                 kvMode: .none)
 
-            for boundary in Set(cachePrefixTokenCounts).sorted()
-            where boundary > 0 && boundary < promptTokenIds.count {
-                let boundaryTokens = Array(promptTokenIds.prefix(boundary))
-                if let boundarySnapshot = cacheSnapshotForBoundary(
-                    tokens: boundaryTokens,
-                    promptSnapshot: promptCacheSnapshot)
-                {
-                    store(
+            if !originalInput.requiresPostPrepareCacheKey {
+                for boundary in Set(cachePrefixTokenCounts).sorted()
+                where boundary > 0 && boundary < promptTokenIds.count {
+                    let boundaryTokens = Array(promptTokenIds.prefix(boundary))
+                    if let boundarySnapshot = cacheSnapshotForBoundary(
                         tokens: boundaryTokens,
-                        cache: boundarySnapshot,
-                        kvBits: nil,
-                        kvMode: .none)
+                        promptSnapshot: promptCacheSnapshot)
+                    {
+                        store(
+                            tokens: boundaryTokens,
+                            cache: boundarySnapshot,
+                            kvBits: nil,
+                            kvMode: .none)
+                    }
                 }
             }
         }

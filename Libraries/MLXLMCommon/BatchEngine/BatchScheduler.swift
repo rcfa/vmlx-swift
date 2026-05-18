@@ -63,6 +63,20 @@ struct BatchSlot {
     /// not the live decode cache, because coordinator keys are prompt-only.
     var promptCacheSnapshot: [KVCache]?
 
+    /// Token IDs that describe the cache snapshot at the prompt boundary.
+    ///
+    /// Usually this is the same as `originalInput.text.tokens`. Some models
+    /// perform source-compatible prompt pruning inside `prepare` after media
+    /// embeddings are available; those models return `LMOutput.effectivePromptTokens`,
+    /// and cache stores must use that post-pruned key.
+    var cachePromptTokenIds: [Int]
+
+    /// Whether `cachePromptTokenIds` came from model-side post-prepare pruning.
+    ///
+    /// When true, input-side prefix counts are in the pre-pruned coordinate
+    /// space and are not safe to reuse for history-boundary cache entries.
+    var cachePromptUsesPostPrepareKey: Bool
+
     /// The original full input, preserved for VLM `prepare()` which needs image data.
     /// Also used for seeding the logit processor with the full prompt tokens.
     let originalInput: LMInput
@@ -164,6 +178,8 @@ extension BatchSlot {
         self.maxTokens = request.parameters.maxTokens
         self.cache = cache
         self.promptCacheSnapshot = nil
+        self.cachePromptTokenIds = request.input.text.tokens.reshaped(-1).asArray(Int.self)
+        self.cachePromptUsesPostPrepareKey = false
         self.originalInput = request.input
         self.pendingTokens = request.input.text.tokens
         self.nextToken = nil

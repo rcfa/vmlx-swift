@@ -109,6 +109,67 @@ let transformersSwiftSettings: [SwiftSetting] = [
     .enableExperimentalFeature("StrictConcurrency")
 ]
 
+let mlxLMCommonExcludedFiles: [String] = [
+    "README.md",
+    "BatchEngine/BATCH_ENGINE.md",
+    "BatchEngine/DSV4-OSAURUS-HOOKUP.md",
+    "BatchEngine/FORK-SYNC-PROCESS.md",
+    "BatchEngine/GEMMA4-SLIDING-WINDOW-CRASH.md",
+    "BatchEngine/JANGTQ-RUNTIME-PATCH-GUIDE.md",
+    "BatchEngine/KV-SIZING-CONTRACT.md",
+    "BatchEngine/LOW-SPEC-HOST-GUIDANCE.md",
+    "BatchEngine/MCDC-COVERAGE-STRATEGY.md",
+    "BatchEngine/MEDIA-MODEL-MATRIX.md",
+    "BatchEngine/MODEL-LOADING-STATUS-2026-05-01.md",
+    "BatchEngine/OMNI-OSAURUS-HOOKUP.md",
+    "BatchEngine/OMNI-VOICE-INTEGRATION.md",
+    "BatchEngine/OSAURUS-API-SURFACE.md",
+    "BatchEngine/OSAURUS-INTEGRATION-2026-05-01.md",
+    "BatchEngine/OSAURUS-INTEGRATION.md",
+    "BatchEngine/OSAURUS-PRODUCTION-REFERENCE-2026-05-01.md",
+    "BatchEngine/OSAURUS-RELEASE-HANDOFF.md",
+    "BatchEngine/OSAURUS-RUNTIME-HANDOFF-2026-05-06.md",
+    "BatchEngine/OSAURUS-TEAM-BUILD-GUIDE.md",
+    "BatchEngine/PARAKEET-RADIO-INTEGRATION.md",
+    "BatchEngine/RALPH-EDGE-CASE-STATE.md",
+    "BatchEngine/RALPH-EDGE-TASK.md",
+    "BatchEngine/RALPH-TASK-HARMONY.md",
+    "BatchEngine/REASONING-STREAM-EVENT.md",
+    "BatchEngine/STAGE-1B4-DESIGN-2026-05-02.md",
+    "BatchEngine/STOP-SEQUENCES-CONTRACT.md",
+    "BatchEngine/TPAE-2026-04-20-TRIAGE.md",
+    "Cache/COLD-WEIGHT-TIER-DESIGN.md",
+    "Cache/JANGPRESS-AGENTS.md",
+    "Cache/JANGPRESS-DEEP-TRACE.md",
+    "Cache/JANGPRESS-INTEGRATION.md",
+    "Cache/JANGPRESS-MEASUREMENTS.md",
+    "Cache/JANGPRESS-PER-MODEL-RESULTS.md",
+    "Cache/JANGPRESS-PRODUCTION.md",
+    "Cache/JANGPRESS-STATUS.md",
+    "Cache/JANGPRESS-USAGE.md",
+    "Cache/JANGPRESS-VMLX-SWIFT-LM-INTEGRATION-2026-05-02.md",
+    "ChatTemplates/DSV4Minimal.jinja",
+    "ChatTemplates/Gemma4Minimal.jinja",
+    "ChatTemplates/Gemma4WithTools.jinja",
+    "ChatTemplates/MiniMaxM2Minimal.jinja",
+    "ChatTemplates/NemotronMinimal.jinja",
+    "ChatTemplates/swift-jinja-patches/0001-lexer-curly-ambiguity.patch",
+    "ChatTemplates/swift-jinja-patches/0002-runtime-dict-iter-and-select-expression.patch",
+    "ChatTemplates/swift-jinja-patches/README.md",
+    "SpecDec/DDTREE-DESIGN.md",
+    "SpecDec/OSAURUS-SPECDEC.md",
+    "TOOL-CALL-STRUCTURED-CONTRACT.md",
+]
+
+let mlxDistributedCoreExcludedFiles: [String] = [
+    "README.md",
+    "DISTRIBUTED-INFERENCE-ROADMAP.md",
+    "EXO-ARCHITECTURE-REVIEW.md",
+    "JACCL-RDMA-DISCOVERY-BRINGUP.md",
+    "OSAURUS-DISTRIBUTED-INTEGRATION.md",
+    "TWO-M5-BRINGUP.md",
+]
+
 let cmlx = Target.target(
     name: "Cmlx",
     path: "Source/Cmlx",
@@ -254,6 +315,10 @@ let package = Package(
         .library(name: "MLXDistributedJACCL", targets: ["MLXDistributedJACCL"]),
         .library(name: "MLXDistributedTP", targets: ["MLXDistributedTP"]),
         .library(name: "MLXPress", targets: ["MLXPress"]),
+        .library(name: "vMLXFlux", targets: ["vMLXFlux"]),
+        .library(name: "vMLXFluxKit", targets: ["vMLXFluxKit"]),
+        .library(name: "vMLXFluxModels", targets: ["vMLXFluxModels"]),
+        .library(name: "vMLXFluxVideo", targets: ["vMLXFluxVideo"]),
         .library(name: "VMLX", targets: ["VMLX"]),
         .executable(name: "RunBench", targets: ["RunBench"]),
         .executable(name: "ANEProbe", targets: ["ANEProbe"]),
@@ -261,6 +326,7 @@ let package = Package(
         .executable(name: "OmniAudioChunkStabilityBench", targets: ["OmniAudioChunkStabilityBench"]),
         .executable(name: "mlxpress", targets: ["MLXPressCLI"]),
         .executable(name: "mlxpress-selfcheck", targets: ["MLXPressSelfCheck"]),
+        .executable(name: "vmlxflux-probe", targets: ["vMLXFluxProbe"]),
     ],
     dependencies: [
         // for Complex type
@@ -399,13 +465,13 @@ let package = Package(
             name: "MLXLMCommon",
             dependencies: ["MLX", "MLXNN", "MLXOptimizers", "MLXRandom"],
             path: "Libraries/MLXLMCommon",
-            exclude: ["README.md"]
+            exclude: mlxLMCommonExcludedFiles
         ),
         .target(
             name: "MLXLLM",
             dependencies: ["MLXLMCommon", "MLX", "MLXNN", "MLXOptimizers"],
             path: "Libraries/MLXLLM",
-            exclude: ["README.md"]
+            exclude: ["README.md", "Models/DSV4-PORT-STATUS.md"]
         ),
         .target(
             name: "MLXVLM",
@@ -423,7 +489,7 @@ let package = Package(
             name: "MLXDistributedCore",
             dependencies: [],
             path: "Libraries/MLXDistributedCore",
-            exclude: ["README.md"]
+            exclude: mlxDistributedCoreExcludedFiles
         ),
         .target(
             name: "MLXDistributedTransport",
@@ -521,6 +587,45 @@ let package = Package(
             path: "Sources/MLXPress"
         ),
         .target(
+            name: "vMLXFluxKit",
+            dependencies: [
+                "MLX",
+                "MLXNN",
+                "MLXRandom",
+                "MLXLMCommon",
+            ],
+            path: "Libraries/vMLXFluxKit"
+        ),
+        .target(
+            name: "vMLXFluxModels",
+            dependencies: [
+                "vMLXFluxKit",
+                "MLX",
+                "MLXNN",
+                "Tokenizers",
+            ],
+            path: "Libraries/vMLXFluxModels"
+        ),
+        .target(
+            name: "vMLXFluxVideo",
+            dependencies: [
+                "vMLXFluxKit",
+                "MLX",
+                "MLXNN",
+                "MLXRandom",
+            ],
+            path: "Libraries/vMLXFluxVideo"
+        ),
+        .target(
+            name: "vMLXFlux",
+            dependencies: [
+                "vMLXFluxKit",
+                "vMLXFluxModels",
+                "vMLXFluxVideo",
+            ],
+            path: "Libraries/vMLXFlux"
+        ),
+        .target(
             name: "VMLX",
             dependencies: [
                 "MLX",
@@ -545,6 +650,7 @@ let package = Package(
                 "MLXDistributedJACCL",
                 "MLXDistributedTP",
                 "MLXPress",
+                "vMLXFlux",
             ],
             path: "Libraries/VMLX",
             swiftSettings: [
@@ -560,6 +666,11 @@ let package = Package(
             name: "MLXPressSelfCheck",
             dependencies: ["MLXPress"],
             path: "Sources/MLXPressSelfCheck"
+        ),
+        .executableTarget(
+            name: "vMLXFluxProbe",
+            dependencies: ["vMLXFlux", "vMLXFluxKit"],
+            path: "tools/vMLXFluxProbe"
         ),
         .executableTarget(
             name: "CompileBench",
@@ -640,12 +751,18 @@ let package = Package(
             sources: ["MLXPressLowRamPolicySourceTests.swift"]
         ),
         .testTarget(
+            name: "vMLXFluxTests",
+            dependencies: ["vMLXFlux"],
+            path: "Tests/vMLXFluxTests"
+        ),
+        .testTarget(
             name: "MLXLMCommonFocusedTests",
             dependencies: ["MLX", "MLXLMCommon", "MLXLLM", "MLXVLM", "Jinja", "VMLX"],
             path: "Tests/MLXLMCommonFocusedTests",
             sources: [
                 "DeepseekV4ChatTemplateFallbackFocusedTests.swift",
                 "FocusedMLXTestSupport.swift",
+                "BatchEngineGrowingChatCacheSourceTests.swift",
                 "CacheCoordinatorTopologyFocusedTests.swift",
                 "VMLXUmbrellaProductTests.swift",
                 "ZayaConfigDecodeFocusedTests.swift",
@@ -657,6 +774,7 @@ let package = Package(
                 "JangPressPrestackerCleanupTests.swift",
                 "DeepseekV4IndexerCausalTopKTests.swift",
                 "DeepseekV4ReasoningPolicyTests.swift",
+                "Gemma3nTextSanitizeFocusedTests.swift",
                 "MediaCachePlaceholderTests.swift",
                 "NemotronHOmniPreEncodedAudioTests.swift",
                 "MTPRuntimeFocusedTests.swift",
@@ -672,24 +790,28 @@ let package = Package(
             name: "Example1",
             dependencies: ["MLX"],
             path: "Source/Examples",
+            exclude: ["Tutorial.swift", "CustomFunctionExample.swift", "CustomFunctionExampleSimple.swift"],
             sources: ["Example1.swift"]
         ),
         .executableTarget(
             name: "Tutorial",
             dependencies: ["MLX"],
             path: "Source/Examples",
+            exclude: ["Example1.swift", "CustomFunctionExample.swift", "CustomFunctionExampleSimple.swift"],
             sources: ["Tutorial.swift"]
         ),
         .executableTarget(
             name: "CustomFunctionExample",
             dependencies: ["MLX"],
             path: "Source/Examples",
+            exclude: ["Example1.swift", "Tutorial.swift", "CustomFunctionExampleSimple.swift"],
             sources: ["CustomFunctionExample.swift"]
         ),
         .executableTarget(
             name: "CustomFunctionExampleSimple",
             dependencies: ["MLX"],
             path: "Source/Examples",
+            exclude: ["Example1.swift", "Tutorial.swift", "CustomFunctionExample.swift"],
             sources: ["CustomFunctionExampleSimple.swift"]
         ),
     ],

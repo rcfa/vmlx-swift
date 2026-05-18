@@ -83,6 +83,7 @@ public struct Gemma3nTextConfiguration: Codable {
     let laurelRank: Int
     let ropeScaling: [String: String]?
     let slidingWindowPattern: Int?
+    let usesVLMInputEmbeddingPath: Bool
 
     enum CodingKeys: String, CodingKey {
         case modelType = "model_type"
@@ -116,10 +117,13 @@ public struct Gemma3nTextConfiguration: Codable {
 
     enum VLMCodingKeys: String, CodingKey {
         case textConfig = "text_config"
+        case architectures
     }
 
     public init(from decoder: Decoder) throws {
         let nestedContainer = try decoder.container(keyedBy: VLMCodingKeys.self)
+        let architectures = try nestedContainer.decodeIfPresent([String].self, forKey: .architectures) ?? []
+        usesVLMInputEmbeddingPath = architectures.contains("Gemma3nForConditionalGeneration")
 
         // in the case of Gemma 3n model, the configuration matches VLMs and text config is under a text_config key
         let container =
@@ -258,6 +262,7 @@ class Gemma3nAttention: Module {
         cache: KVCache? = nil
     ) -> MLXArray {
         let (B, L, _) = (x.dim(0), x.dim(1), x.dim(2))
+        let rotaryOffset = capturedRotaryOffset(for: cache)
 
         var queries = qProj(x)
         queries = queries.reshaped(B, L, -1, headDim)
@@ -275,7 +280,7 @@ class Gemma3nAttention: Module {
                 keys = kProj(x).reshaped(B, L, -1, headDim)
                 keys = kNorm(keys)
                 keys = keys.transposed(0, 2, 1, 3)
-                keys = applyRotaryPosition(rope, to: keys, cache: cache)
+                keys = applyRotaryPosition(rope, to: keys, offset: rotaryOffset)
 
                 values = vProj(x).reshaped(B, L, -1, headDim)
                 values = vNorm(values)
@@ -289,7 +294,7 @@ class Gemma3nAttention: Module {
             keys = kProj(x).reshaped(B, L, -1, headDim)
             keys = kNorm(keys)
             keys = keys.transposed(0, 2, 1, 3)
-            keys = applyRotaryPosition(rope, to: keys, cache: cache)
+            keys = applyRotaryPosition(rope, to: keys, offset: rotaryOffset)
 
             values = vProj(x).reshaped(B, L, -1, headDim)
             values = vNorm(values)
@@ -301,7 +306,7 @@ class Gemma3nAttention: Module {
         }
 
         queries = queries.transposed(0, 2, 1, 3)
-        queries = applyRotaryPosition(rope, to: queries, cache: cache)
+        queries = applyRotaryPosition(rope, to: queries, offset: rotaryOffset)
 
         var adjustedMask = mask
         if case .array(let maskArray) = mask {
@@ -805,7 +810,11 @@ public class Gemma3nLanguageModel: Module {
             h = inputsEmbeds
         } else if let inputs {
             h = embedTokens(inputs)
-            h = (h * MLXArray(_embedTokensScale, dtype: .float32)).asType(h.dtype)
+            let isSingleCachedTokenDecode =
+                inputs.shape[1] == 1 && (cache?.contains { ($0?.offset ?? 0) > 0 } ?? false)
+            if !config.usesVLMInputEmbeddingPath || isSingleCachedTokenDecode {
+                h = (h * MLXArray(_embedTokensScale, dtype: .float32)).asType(h.dtype)
+            }
         } else {
             fatalError("Either inputs or inputsEmbeds must be provided")
         }
@@ -999,22 +1008,15 @@ public class Gemma3nTextModel: Module, LLMModel {
         var processedWeights: [String: MLXArray] = [:]
 
         for (key, value) in weights {
-            if key.hasPrefix("model.language_model.") {
-                // Remove "model." prefix for VLM-style weights
-                let newKey = key.replacingOccurrences(
-                    of: "model.language_model.", with: "language_model.")
-                processedWeights[newKey] = value
-            } else {
-                // Keep other weights as-is
-                processedWeights[key] = value
-            }
+            guard let newKey = Self.textWeightKey(from: key) else { continue }
+            processedWeights[newKey] = value
         }
 
         let expectedVocab = config.vocabSize
         let keysToCheck = [
-            "language_model.model.embed_tokens.weight",
-            "language_model.model.embed_tokens.scales",
-            "language_model.model.embed_tokens.biases",
+            "language_model.embed_tokens.weight",
+            "language_model.embed_tokens.scales",
+            "language_model.embed_tokens.biases",
             "language_model.lm_head.weight",
             "language_model.lm_head.scales",
             "language_model.lm_head.biases",
@@ -1027,6 +1029,32 @@ public class Gemma3nTextModel: Module, LLMModel {
         }
 
         return processedWeights
+    }
+
+    private static func textWeightKey(from key: String) -> String? {
+        let droppedPrefixes = [
+            "audio_tower.",
+            "vision_tower.",
+            "embed_audio.",
+            "embed_vision.",
+            "model.audio_tower.",
+            "model.vision_tower.",
+            "model.embed_audio.",
+            "model.embed_vision.",
+        ]
+        if droppedPrefixes.contains(where: key.hasPrefix) {
+            return nil
+        }
+        if key.hasPrefix("language_model.model.") {
+            return "language_model." + String(key.dropFirst("language_model.model.".count))
+        }
+        if key.hasPrefix("model.language_model.model.") {
+            return "language_model." + String(key.dropFirst("model.language_model.model.".count))
+        }
+        if key.hasPrefix("model.language_model.") {
+            return "language_model." + String(key.dropFirst("model.language_model.".count))
+        }
+        return key
     }
 
     /// Handles prompt processing for sequences
