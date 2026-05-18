@@ -204,6 +204,28 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   --package-path Packages/OsaurusCore --filter RuntimePolicySourceTests --jobs 2`
   passes 28/28.
 
+2026-05-18 13:56 PDT Osaurus PR #1147 completion audit checkpoint:
+
+- Osaurus PR #1147 head `cb24ea29` adds
+  `docs/internal/live-gates/20260518T_pr1147_completion_audit.md`. The audit
+  restates the switch objective as concrete deliverables and maps Qwen VL /
+  Qwen3.6 MTP VL, Gemma VL, ZAYA-VL, Nemotron Omni, DSV4, MiniMax, Ling/Hy3,
+  generation defaults, saved-setting carryover, and old-library removal to
+  required artifact folders.
+- The audit includes a local `/Users/eric/models` census and records that
+  Qwen3.6 MTP activation must come from real `vmlx_mtp_tuning.json` rows:
+  27B MXFP4 selects D2, 27B JANG_4M / 27B MXFP8 / 35B MXFP4 / 35B MXFP8 select
+  D3, and 35B JANG_2K is blocked and must not auto-enable.
+- The audit's current outcome is explicitly `Not complete.` This engine repo
+  should not treat Osaurus PR #1147 as production-clear until the named live
+  app/API folders contain visible output, cache stats, TTFT, tok/s, RSS /
+  physical footprint, media sequence proof, parser/tool proof, and carryover
+  inverse proof.
+- Osaurus focused source policy verification after the audit change:
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
+  --package-path Packages/OsaurusCore --filter RuntimePolicySourceTests --jobs 2`
+  passes 28/28.
+
 2026-05-17 20:25 PDT live refresh:
 
 - `gh pr list --repo osaurus-ai/osaurus --state all --limit 20` shows the
