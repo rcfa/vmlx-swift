@@ -1411,6 +1411,28 @@ docs/local/live-model-matrix/20260517T170614Z_omni_live_voice_fresh_recheck/
   intentionally negative: `chunk_concat_safe_default=false` and 10 unstable
   comparisons. Retain PCM and pre-encode the full current snapshot, or send raw
   PCM at endpoint. Do not concatenate independently encoded Parakeet chunks.
+- Fresh 2026-05-18 cache-on repeat gate:
+  `docs/local/live-model-matrix/20260518T_omni_jangtq4_audio_cache_repeats_current/`
+  exposed a harness gap: manual `TokenIterator` rows created cache index
+  directories but wrote no `.safetensors` prompt-boundary blocks because the
+  bench did not call `storeCacheAfterGeneration`. BatchEngine rows did write
+  block-L2 and `ssm_companion` artifacts. This was a bench/evidence bug, not a
+  runtime sampler issue.
+- Post-fix artifact:
+  `docs/local/live-model-matrix/20260518T_omni_jangtq4_audio_cache_repeats_after_iterator_store/`.
+  `OmniAudioLatencyBench` now stores prompt-boundary cache after manual
+  iterator loops with `includeGeneratedBoundary=false`. All four path/mode
+  directories (`batch`/`iterator` x `raw_samples`/`preencoded`) now contain
+  block-L2 `.safetensors` files and `ssm_companion` state. The run used bundle
+  defaults (`temp=0.600 topP=0.950 topK=0 minP=0.000 rep=1.000`), pre-encoded
+  Parakeet to `63 x 2688` in about 50 ms, and streamed 12/12 repeated rows with
+  zero literal sound-wrapper, reasoning, or channel-marker leaks.
+- Quality boundary from the same post-fix row: outputs remain broadly
+  audio-grounded and run at about 63.6-71.5 tok/s, but every row hit the
+  32-token cap and several short stochastic samples repeat phrases or mislabel
+  the simple beep as guitar/voice/drum. Cache-on repeated live audio therefore
+  remains PARTIAL for semantic quality/termination, not because of missing
+  cache writes or hidden sampler policy.
 
 ## Required Proof Per Active Bundle
 

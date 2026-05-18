@@ -257,7 +257,7 @@ enum OmniAudioLatencyRunner {
             context: context, maxNewTokens: maxNewTokens)
 
         let iteratorStart = CFAbsoluteTimeGetCurrent()
-        let iterator = try TokenIterator(
+        var iterator = try TokenIterator(
             input: lmInput,
             model: context.model,
             parameters: params,
@@ -277,6 +277,9 @@ enum OmniAudioLatencyRunner {
             peakRSS = max(peakRSS, currentRSSMiB())
             if tokenIds.count >= maxNewTokens { break }
         }
+        iterator.storeCacheAfterGeneration(
+            generatedTokenIds: tokenIds,
+            includeGeneratedBoundary: false)
 
         let totalMs = elapsedMs(since: turnStart)
         let text = userVisibleText(

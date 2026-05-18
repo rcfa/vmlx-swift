@@ -53,8 +53,9 @@ promotion blockers:
   non-Kimi all-model rerun before Osaurus promotion.
 - GPT-OSS / GLM5 / Mistral4 / Pixtral: parser/unit coverage exists, but there
   are no local live decode rows in this pass.
-- Omni live voice: core text/image/audio/video rows pass, but repeated
-  cache-on live audio remains a focused quality/root-cause gate.
+- Omni live voice: core text/image/audio/video rows pass. A focused 2026-05-18
+  cache-on repeat gate fixed the iterator bench cache-store evidence gap, but
+  repeated live audio still remains a semantic quality/termination gate.
 - Qwen high-resolution video: bounded media resize rows pass; raw 1080p video
   is not production-clear because the pre-fix row peaked at 164.2 GiB physical
   footprint.
@@ -85,7 +86,7 @@ row below has current `vmlx-swift` live proof.
 | #1037 `Ling/ZAYA hardening + BatchEngine lifecycle` | merged | Ling/Bailing, ZAYA, BatchEngine lifecycle, topology-aware cache. | Ling JANGTQ2/MXFP4 pass; ZAYA text JANGTQ4/JANGTQ_K pass; ZAYA1-VL JANGTQ4 passes. Cache proof is topology-specific: disk/SSM/CCA, not generic prefix hit. | ZAYA1-VL JANGTQ_K remains partial; Hy3 K needs current rerun. |
 | #1057 `MiniMax speed fix` | merged | MiniMax speed/lifecycle, typed load config, VLM detection, tokenizer/Jinja compatibility. | Large MiniMax JANGTQ_K/JANG cache-off infer rows pass; production-shaped chat-cache row passes; strict TQ B=2 now passes after `6560879`. | Low-footprint active-routed MiniMax proof is still open. Shape-inferred 6-bit metadata repair in JANG_K should be corrected in bundle or explicitly accepted. |
 | #1066 `pin DSV4 vmlx update` | merged | DSV4 tokenizer/cache/runtime pin, local tokenizer fallback. | DSV4 separator fix and template kwargs rows pass; DSV4 live cache OFF/ON chat is coherent. | DSV4 remains partial until long-context/vector/API/speed/low-footprint gates pass. |
-| #1073 `Nemotron Omni live voice input path` | merged | Live voice, Parakeet/RADIO, media-cache token-aware restore, DSV4 pool/compressor fixes. | Omni JANGTQ/JANGTQ4/MXFP4 core matrices pass; current docs track Parakeet chunk concat caveat. DSV4 pool/compressor lineage is recorded. | Repeated cache-on audio and package-wide HTTP route proof remain open. |
+| #1073 `Nemotron Omni live voice input path` | merged | Live voice, Parakeet/RADIO, media-cache token-aware restore, DSV4 pool/compressor fixes. | Omni JANGTQ/JANGTQ4/MXFP4 core matrices pass; current docs track Parakeet chunk concat caveat. Focused 2026-05-18 repeat-audio gate now proves block-L2 and `ssm_companion` writes for BatchEngine and manual TokenIterator paths after the bench store fix. DSV4 pool/compressor lineage is recorded. | Repeated cache-on audio semantic quality/termination and package-wide HTTP route proof remain open. |
 | #1110 `Harden DSV4 reasoning gates and runtime proof` | open, dirty | Native DSV4 chat encoder/tokenizer bridge, live DSV4 proof, runtime pin check. Current Osaurus head pins `vmlx-swift-lm 2cc64dd`. | `vmlx-swift` has DSV4 prompt-boundary fix and partial live proof, but it does not yet close the full #1110 bar. | Do not treat #1110 as merged release state; switch PR must resolve dirty state and rerun DSV4 release gates. |
 
 ## Pinned Dependency Window

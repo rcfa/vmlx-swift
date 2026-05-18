@@ -466,9 +466,19 @@ weights.
   PCM and submit a full-snapshot pre-encode or raw PCM at endpoint.
 - Open: cache-off repeated rows no longer leak literal sound markers after the
   wrapper fix, but some short BatchEngine/pre-encoded rows are still weak.
-  Repeated audio with disk cache ON remains a separate output-quality edge from
-  the earlier gate. Cache-on live audio stays PARTIAL until a focused root-cause
-  gate is added.
+  Fresh cache-on repeat gate
+  `docs/local/live-model-matrix/20260518T_omni_jangtq4_audio_cache_repeats_current/`
+  exposed a bench-only gap where manual `TokenIterator` loops did not call
+  `storeCacheAfterGeneration`, so iterator cache dirs had only SQLite indexes.
+  `OmniAudioLatencyBench` now stores prompt-boundary cache after manual
+  iterator loops; the post-fix artifact
+  `docs/local/live-model-matrix/20260518T_omni_jangtq4_audio_cache_repeats_after_iterator_store/`
+  writes block-L2 `.safetensors` plus `ssm_companion` for batch and iterator,
+  raw and pre-encoded modes. The 12 repeated cache-on rows have zero sound /
+  reasoning / channel marker leaks and stay broadly audio-grounded at about
+  63.6-71.5 tok/s, but every row reaches the 32-token cap and several samples
+  repeat phrases or mislabel the simple beep. Cache-on live audio remains
+  PARTIAL for semantic quality/termination, not cache write coverage.
 
 ### Kimi K2.6
 
