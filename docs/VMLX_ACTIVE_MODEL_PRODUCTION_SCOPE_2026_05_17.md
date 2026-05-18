@@ -149,6 +149,7 @@ forced thinking closure, or name-based MTP activation.
 | MiniMax M2.7 | Small JANGTQ rows prove generation config (`temp=1.000 topP=0.950 topK=40 rep=nil`), greedy/no-guard behavior, coherent thinking on/off alternation, and no loops/leaks at 38-47 tok/s depending on row. Fresh `20260518T001219Z_minimax_m27_jangtqk_crack_infer/` proves the large JANGTQ_K CRACK bundle passes config/template plus 7/7 `BENCH_PROD` cache-off with `temp=1.000 topP=0.950 topK=40 rep=nil`, MTP off, no reasoning leak on OFF rows, about `48-49 tok/s`, and peak RSS about `55.9 GiB`. Fresh `20260518T001257Z_minimax_m27_jangk_crack_infer/` proves the large JANG_K CRACK bundle passes the same infer gate at about `45-50 tok/s`, peak RSS about `41.0 GiB`, with an in-memory shape-inferred 6-bit metadata repair logged. | PARTIAL / INFER PASS | CRACK models are not MTP models unless tensor evidence proves otherwise. Larger JANG/JANGTQ_K CRACK rows still need full cache/B=2/TurboQuant/disk-restore matrices and low-footprint active-routed proof before Osaurus promotion; no hidden sampler guard is allowed to compensate for any failure. |
 | Qwen3.6 27B MXFP4 non-MTP | Fresh `20260517T_qwen36_27b_mxfp4_crack_video_resize_postfix_turnmatrix/` passes config/template, bundle-default production cache OFF/ON, BatchEngine text rows, disk restore, B=2 concurrent/per-slot/TurboQuant rows, VL batch chat, structured VL cache, media-salt isolation, and mixed text/image/video. Bundle defaults apply as `temp=1.000 topP=0.950 topK=20 rep=nil`; MTP depth is `off`; reasoning ON/OFF flips work at a 2048-token production budget; same-media image cache hits disk `99/99`; video uses explicit `BENCH_VL_VIDEO_RESIZE=224` and logs `video pixels shape: [560, 1536]`. The preserved pre-fix artifact `20260517T_qwen36_27b_mxfp4_crack_current_non_kimi_turnmatrix/` shows the unbounded 1080p video turn failed after peaking at 164.2 GiB physical footprint in MLX/Metal allocation. | PASS for implemented bounded text/image/video/cache surfaces; high-res video scaling remains PARTIAL | Do not auto-enable MTP on this CRACK bundle. Do not treat raw high-resolution video as production-clear; Osaurus wiring needs an explicit media resize/token budget setting rather than relying on the bundle's very large video preprocessor limit. |
 | Qwen3.6 27B JANG_4M non-MTP | Fresh `20260518T000445Z_qwen36_27b_jang4m_crack_turnmatrix/` passes config/template, production defaults cache OFF/ON, BatchEngine single/chat/disk/B=2/per-slot/TurboQuant rows, VL batch chat, structured VL cache, media-salt isolation, and mixed text/image/video. Bundle defaults apply as `temp=1.000 topP=0.950 topK=20 rep=nil`; MTP depth is `off`; production decode is about `28 tok/s`; peak RSS is about `14.4 GiB` cache-off and `15.5 GiB` cache-on; `PROD_CACHE_STATS` records `pagedIncompatible=true`, disk hit/store counts, and SSM companion hit; same-media image cache hits disk `99/99`; bounded video logs `BENCH_VL_VIDEO_RESIZE=224` and `video pixels shape: [560, 1536]`. | PASS for implemented bounded text/image/video/cache surfaces; high-res video scaling remains PARTIAL | Same CRACK boundary as MXFP4: no native-MTP auto-enable without tensor evidence, no fake sampler guard, and raw high-resolution video still needs explicit media budget policy. |
+| Qwen3.6 35B A3B JANGTQ non-MTP | Fresh `20260518T_qwen36_35b_jangtq_crack_turnmatrix/` passes config/template, production defaults cache OFF/ON, BatchEngine single/chat/disk/B=2/per-slot/TurboQuant rows, VL batch chat, structured VL cache, media-salt isolation, and mixed text/image/video. Bundle defaults apply as `temp=1.000 topP=0.950 topK=20 rep=nil`; MTP depth is `off`; production decode is about `84-89 tok/s`; peak RSS is about `11.8 GiB`; `PROD_CACHE_STATS` records `pagedIncompatible=true`, disk hit/store counts, and SSM companion hit; disk L2 writes real `.safetensors` blocks; bounded video logs `BENCH_VL_VIDEO_RESIZE=224` and `video pixels shape: [560, 1536]`. | PASS for implemented bounded text/image/video/cache surfaces; high-res video scaling remains PARTIAL | Same CRACK boundary: no native-MTP auto-enable without tensor evidence, no fake sampler guard, and raw high-resolution video still needs explicit media budget policy. |
 | Qwen3.5 35B non-MTP | `20260517T164940Z_release_turnmatrix_qwen35_35b_4bit_after_compat_split/` passes config/template, production cache off/on, BatchEngine, TQ B=2 compatibility split, VL cache, media salt, and mixed text/image/video. | PASS with throughput watch | High-resolution video can be very slow; Qwen hybrid SSM cache restore must stay topology-specific. |
 
 ## No-Fake-Guard Invariants For The Remaining Rows
@@ -473,6 +474,7 @@ docs/local/live-model-matrix/20260517T_qwen35_jangtq_vl_fix/
 docs/local/live-model-matrix/20260517T_qwen35_jangtq_vl_matrix_after_fix/
 docs/local/live-model-matrix/20260517T_qwen35_jangtq_turnmatrix_after_vl_fix/
 docs/local/live-model-matrix/20260517T_qwen35_qwen3vl_video_config_fix/
+docs/local/live-model-matrix/20260518T_qwen36_35b_jangtq_crack_turnmatrix/
 ```
 
 Root cause:
@@ -498,25 +500,26 @@ Current proof:
 - media-salt row proves same-image disk-backed restore HIT and different-image
   MISS with identical token counts, so image cache isolation is not a false
   positive;
-- broader turn matrix passes config, template, production defaults with cache
-  OFF/ON, BatchEngine single/chat/disk-restore/concurrent/per-slot/TurboQuant
-  rows, VL batch chat, VL chat cache, and media-salt isolation. The generic
-  batch cache-hit row remains `N-A` by topology/harness semantics.
+- fresh current turn matrix passes config, template, production defaults with
+  cache OFF/ON, BatchEngine single/chat/disk-restore/concurrent/per-slot/
+  TurboQuant rows, VL batch chat, VL chat cache, media-salt isolation, and mixed
+  text/image/video. The generic batch cache-hit row remains `N-A` by topology/
+  harness semantics.
 - Qwen3VL video processor config is now wired through the real
-  `video_preprocessor_config.json` contract. The focused video smoke row loads
-  `Qwen35MoE` with `Qwen3VLProcessor`, attaches `LMInput.video` with pixels
-  shape `[560, 1536]` on the resized 1080p fixture, and returns coherent
-  visible content with `enable_thinking=false`.
+  `video_preprocessor_config.json` contract. The current mixed media row loads
+  `Qwen35MoE` with `Qwen3VLProcessor`, attaches `LMInput.video` with
+  `BENCH_VL_VIDEO_RESIZE=224`, logs pixels shape `[560, 1536]` on the resized
+  1080p fixture, and returns coherent visible content with
+  `enable_thinking=false`.
 
 Open boundary:
 
-- `vl_mixed_text_image_video` completed T1 text reasoning-on, T2 repeated text
-  cache, and T3 image with thinking off, then stayed in the T4 high-resolution
-  video prefill/forward path for more than seven minutes on the 1080p fixture.
-  The config repair does not fake-clamp the video budget: this bundle's
-  `video_preprocessor_config.json` declares a large `longest_edge=25165824`, so
-  the true high-resolution video row still needs a throughput/scaling gate. Do
-  not count high-res video as production-clear for this bundle yet.
+- The bounded video path is production-green for the current engine row, but
+  raw high-resolution video without an explicit resize remains a throughput and
+  resource watch. The config repair does not fake-clamp the video budget: this
+  bundle's `video_preprocessor_config.json` declares a large
+  `longest_edge=25165824`, so raw high-resolution video still needs a separate
+  scaling gate before Osaurus exposes it without a media budget.
 
 ## Qwen3.6 27B MXFP4 Non-MTP Video-Budget Gate - 2026-05-17
 
