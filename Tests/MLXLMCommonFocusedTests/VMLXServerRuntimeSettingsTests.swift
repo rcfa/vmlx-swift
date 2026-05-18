@@ -532,6 +532,25 @@ struct VMLXServerRuntimeSettingsTests {
         #expect(config.longPromptMultiplier == 1.5)
     }
 
+    @Test("media cache salt is required when cache reuse is enabled")
+    func mediaCacheSaltIsRequiredWhenCacheReuseIsEnabled() {
+        var settings = VMLXServerRuntimeSettings()
+        settings.multimodal.requireMediaSaltForCache = false
+
+        #expect(settings.validationIssues().contains {
+            $0.severity == .error && $0.field == "multimodal.requireMediaSaltForCache"
+        })
+
+        settings.cache.prefix.enabled = false
+        settings.cache.pagedKV.enabled = false
+        settings.cache.blockDisk.enabled = false
+        settings.cache.legacyDisk.enabled = false
+
+        #expect(!settings.validationIssues().contains {
+            $0.field == "multimodal.requireMediaSaltForCache"
+        })
+    }
+
     @Test("turboquant KV requires explicit bit widths")
     func turboQuantKVRequiresExplicitBitWidths() {
         var settings = VMLXServerRuntimeSettings()

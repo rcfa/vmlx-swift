@@ -25,7 +25,7 @@ fallbacks.
 | Power Management | `VMLXServerPowerSettings` | JIT load, wake-on-request, light sleep, deep sleep. Sleep timers must be positive when set, and deep sleep must be later than light sleep. |
 | Performance & Generation | `VMLXServerGenerationDefaults` | `nil` means bundle metadata first, then documented engine fallback. Do not write hidden default sampling guards here. |
 | Tool Integration | `VMLXServerToolSettings` | MCP config, auto tool choice, parser overrides, reasoning parser override, optional custom template. Parser overrides must resolve to known aliases or explicit no-op values (`auto`, `none`, `off`, `disabled`). |
-| Multimodal Support | `VMLXServerMultimodalSettings` | Auto/force off/force on VLM mode plus video/audio toggles and media-salt cache requirement. |
+| Multimodal Support | `VMLXServerMultimodalSettings` | Auto/force off/force on VLM mode plus video/audio toggles and media-salt cache requirement. Media salt cannot be disabled while any prompt/KV cache reuse tier is enabled. |
 | Speculative Decoding / MTP | `VMLXServerMTPSettings` | Auto launches native MTP only when real tensor evidence plus usable bundle-local `vmlx_mtp_tuning.json` resolve a launch depth. Force-on errors for metadata-only, missing-tuning, blocked-tuning, or unsupported profiles. Draft cache must stay private, and only accepted verifier tokens may enter the base cache. |
 
 The panel/server should validate each request against

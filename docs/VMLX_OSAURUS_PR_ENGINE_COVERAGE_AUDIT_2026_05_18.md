@@ -254,6 +254,10 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   tools, reasoning, and native-MTP lanes from `UserInput` without serializing
   prompt content or tool names. Focused verification:
   `VMLINUXUmbrellaProductTests` passes 7/7 with the Xcode framework path.
+- Follow-up media-cache settings validation now rejects
+  `multimodal.requireMediaSaltForCache=false` whenever prefix, paged KV,
+  block-L2, or legacy disk cache reuse is enabled. This keeps image/video/audio
+  requests from sharing cache keys by text alone.
 
 ## Current Switch Verdict
 

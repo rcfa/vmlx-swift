@@ -203,6 +203,15 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
                     message: "TurboQuant KV requires explicit key and value bit widths."))
             }
         }
+        if !multimodal.requireMediaSaltForCache
+            && (cache.prefix.enabled
+                || cache.pagedKV.enabled
+                || cache.blockDisk.enabled
+                || cache.legacyDisk.enabled) {
+            issues.append(.error(
+                field: "multimodal.requireMediaSaltForCache",
+                message: "Media salt is required when any prompt or KV cache reuse tier is enabled."))
+        }
         if let keyBits = cache.turboQuantKeyBits, !(2...8).contains(keyBits) {
             issues.append(.error(
                 field: "cache.turboQuantKeyBits",
