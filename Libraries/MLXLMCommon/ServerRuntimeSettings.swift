@@ -213,6 +213,20 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
                 field: "cache.turboQuantValueBits",
                 message: "TurboQuant value bits must be between 2 and 8."))
         }
+        if let override = Self.nonEmptyOverride(tools.toolParserOverride),
+           !Self.isNoopParserOverride(override),
+           ToolCallFormat.fromCapabilityName(override) == nil {
+            issues.append(.error(
+                field: "tools.toolParserOverride",
+                message: "Tool parser override is not a known parser alias."))
+        }
+        if let override = Self.nonEmptyOverride(tools.reasoningParserOverride),
+           !Self.isNoopParserOverride(override),
+           ReasoningParser.fromCapabilityName(override) == nil {
+            issues.append(.error(
+                field: "tools.reasoningParserOverride",
+                message: "Reasoning parser override is not a known parser alias."))
+        }
         if let draftTokenLimit = mtp.draftTokenLimit, draftTokenLimit <= 0 {
             issues.append(.error(
                 field: "mtp.draftTokenLimit",
@@ -543,6 +557,21 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
                 .appendingPathComponent(suffix)
         }
         return URL(fileURLWithPath: path)
+    }
+
+    private static func nonEmptyOverride(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmed, !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+
+    private static func isNoopParserOverride(_ value: String) -> Bool {
+        switch value.lowercased().replacingOccurrences(of: "-", with: "_") {
+        case "auto", "none", "off", "disabled":
+            true
+        default:
+            false
+        }
     }
 
     private func appendDisabled(

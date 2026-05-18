@@ -244,7 +244,11 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   video/audio lanes, or `mtp.mode = off`, while preserving the same redacted
   issue JSON shape. Focused verification:
   `VMLINUXServerRuntimeSettingsTests|RuntimeMoETopKOverrideFocusedTests`
-  passes 22/22 with the Xcode framework path.
+  passes 23/23 with the Xcode framework path.
+- Follow-up parser settings validation rejects unknown
+  `toolParserOverride` / `reasoningParserOverride` strings while allowing known
+  aliases and explicit no-op values (`auto`, `none`, `off`, `disabled`). This
+  keeps Osaurus parser pickers from passing stale UI labels into the engine.
 
 ## Current Switch Verdict
 

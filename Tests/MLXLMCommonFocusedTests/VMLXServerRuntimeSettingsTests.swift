@@ -546,6 +546,26 @@ struct VMLXServerRuntimeSettingsTests {
             Issue.record("TurboQuant KV mode should not be inferred without bit widths")
         }
     }
+
+    @Test("parser overrides validate known aliases")
+    func parserOverridesValidateKnownAliases() {
+        var valid = VMLXServerRuntimeSettings()
+        valid.tools.toolParserOverride = "qwen3_6"
+        valid.tools.reasoningParserOverride = "qwen3_6"
+        #expect(valid.validationIssues().isEmpty)
+
+        valid.tools.toolParserOverride = "auto"
+        valid.tools.reasoningParserOverride = "none"
+        #expect(valid.validationIssues().isEmpty)
+
+        var invalid = VMLXServerRuntimeSettings()
+        invalid.tools.toolParserOverride = "not-a-tool-parser"
+        invalid.tools.reasoningParserOverride = "not-a-reasoning-parser"
+        let fields = Set(invalid.validationIssues().map(\.field))
+
+        #expect(fields.contains("tools.toolParserOverride"))
+        #expect(fields.contains("tools.reasoningParserOverride"))
+    }
 }
 
 @Suite("Runtime MoE top-k override focused contracts")
