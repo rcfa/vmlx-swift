@@ -1,6 +1,7 @@
 // Copyright © 2026 Osaurus AI. All rights reserved.
 
 import Foundation
+import CoreImage
 import MLX
 import MLXLMCommon
 import MLXVLM
@@ -115,6 +116,103 @@ private struct FocusedOmniMediaTokenizer: Tokenizer {
     }
 }
 
+private final class RecordingOmniMediaTokenizer: GenerationPromptControllableTokenizer, @unchecked Sendable {
+    var bosToken: String? { nil }
+    var eosToken: String? { nil }
+    var unknownToken: String? { nil }
+
+    private let lock = NSLock()
+    private var _messages: [[String: any Sendable]] = []
+    private var _historyTokenCount: Int = 0
+
+    var messages: [[String: any Sendable]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return _messages
+    }
+
+    var historyTokenCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _historyTokenCount
+    }
+
+    func encode(text: String, addSpecialTokens: Bool) -> [Int] {
+        var ids: [Int] = addSpecialTokens ? [1] : []
+        var cursor = text.startIndex
+        while cursor < text.endIndex {
+            let suffix = text[cursor...]
+            if suffix.hasPrefix("<image>") {
+                ids.append(18)
+                cursor = text.index(cursor, offsetBy: "<image>".count)
+            } else if suffix.hasPrefix("<so_embedding>") {
+                ids.append(27)
+                cursor = text.index(cursor, offsetBy: "<so_embedding>".count)
+            } else {
+                ids.append(7)
+                cursor = text.index(after: cursor)
+            }
+        }
+        if addSpecialTokens { ids.append(2) }
+        return ids
+    }
+
+    func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String {
+        tokenIds.map(String.init).joined(separator: " ")
+    }
+
+    func convertTokenToId(_ token: String) -> Int? {
+        switch token {
+        case "<image>": 18
+        case "<so_embedding>": 27
+        default: nil
+        }
+    }
+
+    func convertIdToToken(_ id: Int) -> String? {
+        switch id {
+        case 18: "<image>"
+        case 27: "<so_embedding>"
+        default: String(id)
+        }
+    }
+
+    func applyChatTemplate(
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?
+    ) throws -> [Int] {
+        try applyChatTemplate(
+            messages: messages,
+            tools: tools,
+            additionalContext: additionalContext,
+            addGenerationPrompt: true)
+    }
+
+    func applyChatTemplate(
+        messages: [[String: any Sendable]],
+        tools _: [[String: any Sendable]]?,
+        additionalContext _: [String: any Sendable]?,
+        addGenerationPrompt: Bool
+    ) throws -> [Int] {
+        lock.lock()
+        _messages = messages
+        lock.unlock()
+        var text = messages.compactMap { $0["content"].map(String.init(describing:)) }
+            .joined(separator: "\n")
+        let historyTokens = [1] + encode(text: text, addSpecialTokens: false)
+        if addGenerationPrompt {
+            text += "\n<assistant>"
+            let promptTokens = [1] + encode(text: text, addSpecialTokens: false)
+            lock.lock()
+            _historyTokenCount = historyTokens.count
+            lock.unlock()
+            return promptTokens
+        }
+        return historyTokens
+    }
+}
+
 @Suite("Nemotron H Omni pre-encoded audio")
 struct NemotronHOmniPreEncodedAudioTests {
     @Test("live audio buffer keeps full snapshot while streaming chunks")
@@ -189,6 +287,39 @@ struct NemotronHOmniPreEncodedAudioTests {
             #expect(tokens.contains(29))
             #expect(tokens.filter { $0 == 27 }.count == 5)
             #expect(!tokens.contains(95_690))
+        }
+    }
+
+    @Test("chat media placeholders stay on the media-bearing user turn")
+    func chatMediaPlaceholdersStayOnMediaBearingTurn() async throws {
+        try await FocusedMLXTestSupport.withLock {
+            let tokenizer = RecordingOmniMediaTokenizer()
+            let processor = NemotronHOmniProcessor(
+                NemotronHOmniProcessorConfiguration(),
+                tokenizer: tokenizer)
+            let image = CIImage(color: .red).cropped(
+                to: CGRect(x: 0, y: 0, width: 16, height: 16))
+            let input = UserInput(
+                chat: [
+                    .user("Describe the image.", images: [.ciImage(image)]),
+                    .assistant("It is a red square."),
+                    .user("What color did it have?"),
+                ],
+                additionalContext: ["enable_thinking": false])
+
+            let lmInput = try await processor.prepare(input: input)
+            let messages = tokenizer.messages
+
+            #expect(lmInput.image != nil)
+            #expect(messages.count == 3)
+            let firstUser = String(describing: messages[0]["content"] ?? "")
+            let finalUser = String(describing: messages[2]["content"] ?? "")
+            #expect(firstUser.contains("<img>"))
+            #expect(firstUser.contains("<image>"))
+            #expect(firstUser.contains("Describe the image."))
+            #expect(!finalUser.contains("<image>"))
+            #expect(finalUser == "What color did it have?")
+            #expect(lmInput.cachePrefixTokenCounts == [tokenizer.historyTokenCount])
         }
     }
 

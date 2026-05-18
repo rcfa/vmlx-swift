@@ -1435,6 +1435,18 @@ docs/local/live-model-matrix/20260517T170614Z_omni_live_voice_fresh_recheck/
   the simple beep as guitar/voice/drum. Cache-on repeated live audio therefore
   remains PARTIAL for semantic quality/termination, not because of missing
   cache writes or hidden sampler policy.
+- Follow-up 2026-05-18 JANGTQ structured media-cache row:
+  `docs/local/live-model-matrix/20260518T_nemotron_omni_jangtq_current_turnmatrix/omni_max128_seed0_cache_vs_cold_control.out`.
+  The processor now keeps media placeholder runs on the original chat turn and
+  publishes a canonical history cache boundary. Focused
+  `NemotronHOmniPreEncodedAudioTests` pass with the new per-turn media row, and
+  release `RunBench` builds. Live image chat T1 stores `disk 293/293`, the
+  text-only follow-up prefetches `disk 285/339`, and cached TTFT/prompt time is
+  substantially lower than cold. This proves media-salted cache reuse, but does
+  not clear the model row: cold and cached no-thinking VL follow-ups both repeat
+  `Orange and light blue`, and audio media-salt still repeats `bass note`.
+  Treat the remaining issue as a Nemotron Omni template/decode investigation,
+  not as a permission to add hidden sampler guards.
 
 ## Required Proof Per Active Bundle
 

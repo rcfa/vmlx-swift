@@ -479,6 +479,19 @@ weights.
   63.6-71.5 tok/s, but every row reaches the 32-token cap and several samples
   repeat phrases or mislabel the simple beep. Cache-on live audio remains
   PARTIAL for semantic quality/termination, not cache write coverage.
+- 2026-05-18 structured chat cache follow-up: `NemotronHOmniProcessor` now
+  preserves per-message media placement for chat prompts and publishes canonical
+  history cache boundaries when the tokenizer can render with
+  `addGenerationPrompt=false`. Focused unit proof is
+  `NemotronHOmniPreEncodedAudioTests`, including
+  `chat media placeholders stay on the media-bearing user turn`. Live proof in
+  `docs/local/live-model-matrix/20260518T_nemotron_omni_jangtq_current_turnmatrix/omni_max128_seed0_cache_vs_cold_control.out`
+  shows image T1 cache HIT `disk 293/293` and follow-up prefetch HIT
+  `disk 285/339`; cached TTFT/prompt time is much lower than the cold control.
+  The same artifact keeps this row PARTIAL because the cold and cached
+  no-thinking VL follow-ups both loop on "Orange and light blue", and the audio
+  media-salt row still repeats "bass note". This is not a cache-hit failure and
+  must not be hidden with sampler or stop-token guards.
 
 ### Kimi K2.6
 

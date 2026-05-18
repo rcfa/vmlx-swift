@@ -163,22 +163,16 @@ enum OmniBench {
             })
         }
 
-        // Row 4: Image multi-turn (cache reuse + MediaSalt)
+        // Row 4: Image multi-turn (structured chat + cache reuse + MediaSalt)
         results.append(await runRow("4. image multi-turn x2", maxNew: maxNewTokens) {
-            let img = try synthesiseGradient(side: 224)
-            let cache = context.model.newCache(parameters: .init())
-            let r1 = try await runImageTurn(
-                prompt: "Describe this image briefly.",
-                image: img, context: context, cache: cache,
-                maxNewTokens: maxNewTokens)
-            let r2 = try await runImageTurn(
-                prompt: "What two colors are most prominent?",
-                image: img, context: context, cache: cache,
+            let r = try await runStructuredImageChatTurn(
+                modelDir: modelDir,
+                context: context,
                 maxNewTokens: maxNewTokens)
             return TurnResult(
-                shortText: "T1: \(r1.shortText.prefix(80)) || T2: \(r2.shortText.prefix(80))",
-                tokens: r1.tokens + r2.tokens,
-                secs: r1.secs + r2.secs)
+                shortText: r.shortText,
+                tokens: r.tokens,
+                secs: r.secs)
         })
 
         // Row 5: Video encoder smoke — validate
@@ -842,6 +836,222 @@ enum OmniBench {
             shortText: details.joined(separator: " || "),
             tokens: totalTokens,
             secs: totalSecs)
+    }
+
+    private static func runStructuredImageChatTurn(
+        modelDir: URL,
+        context: ModelContext,
+        maxNewTokens: Int
+    ) async throws -> TurnResult {
+        let params = makeOmniParameters(
+            context: context,
+            maxNewTokens: maxNewTokens)
+        let coordinator = makeOmniProofCoordinator(
+            modelDir: modelDir,
+            context: context,
+            parameters: params,
+            label: "omni-chat")
+        nonisolated(unsafe) let ctx = context
+        let engine = BatchEngine(
+            context: ctx,
+            maxBatchSize: 1,
+            cacheCoordinator: coordinator)
+        let image = try synthesiseGradient(side: 224)
+        let firstChat: [Chat.Message] = [
+            .system("Answer briefly and do not mention hidden reasoning."),
+            .user("Describe this image briefly.", images: [.ciImage(image)]),
+        ]
+        let firstInput = try await prepareStructuredChat(firstChat, context: context)
+        guard firstInput.hasMediaContent,
+              let firstSalt = computeCacheSalt(for: firstInput, parameters: params)
+        else {
+            throw NSError(
+                domain: "OmniBench", code: 110,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "structured image chat did not produce media content/salt"])
+        }
+        let firstTokens = firstInput.text.tokens.reshaped(-1).asArray(Int.self)
+        let first = await collectGeneration(
+            label: "image chat T1",
+            engine: engine,
+            input: firstInput,
+            parameters: params)
+        try validateVisibleOmniText(first.text, row: "structured image chat T1")
+
+        switch coordinator.fetch(tokens: firstTokens, mediaSalt: firstSalt) {
+        case .hit(let matched, _, let detail, _, _, _):
+            print("  structured image T1 cache probe: HIT \(detail.rawValue) \(matched)/\(firstTokens.count)")
+        case .miss:
+            throw NSError(
+                domain: "OmniBench", code: 111,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "structured image T1 cache probe missed after generation"])
+        }
+
+        let followChat: [Chat.Message] = [
+            .system("Answer briefly and do not mention hidden reasoning."),
+            .user("Describe this image briefly.", images: [.ciImage(image)]),
+            .assistant(first.text.isEmpty ? "It is a red and blue gradient." : first.text),
+            .user("What two colors are most prominent?"),
+        ]
+        let followInput = try await prepareStructuredChat(followChat, context: context)
+        let followTokens = followInput.text.tokens.reshaped(-1).asArray(Int.self)
+        guard let followSalt = computeCacheSalt(for: followInput, parameters: params),
+              followSalt == firstSalt
+        else {
+            throw NSError(
+                domain: "OmniBench", code: 112,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "structured image follow-up did not preserve media/cache scope salt"])
+        }
+        switch coordinator.fetch(tokens: followTokens, mediaSalt: followSalt) {
+        case .hit(let matched, _, let detail, _, _, _):
+            print("  structured image follow-up prefetch: HIT \(detail.rawValue) \(matched)/\(followTokens.count)")
+        case .miss:
+            throw NSError(
+                domain: "OmniBench", code: 113,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "structured image follow-up missed the media-salted prompt cache"])
+        }
+
+        let coldEngine = BatchEngine(context: ctx, maxBatchSize: 1)
+        let coldFollow = await collectGeneration(
+            label: "image chat T2 cold-control",
+            engine: coldEngine,
+            input: followInput,
+            parameters: params)
+        let coldValidation = Result {
+            try validateVisibleOmniText(
+                coldFollow.text,
+                row: "structured image chat T2 cold-control")
+        }
+
+        let follow = await collectGeneration(
+            label: "image chat T2 cached",
+            engine: engine,
+            input: followInput,
+            parameters: params)
+        let cachedValidation = Result {
+            try validateVisibleOmniText(follow.text, row: "structured image chat T2 cached")
+        }
+        if follow.text.contains("<image>") || follow.text.contains("<so_embedding>") {
+            throw NSError(
+                domain: "OmniBench", code: 114,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "structured image follow-up leaked raw media placeholders"])
+        }
+        switch (coldValidation, cachedValidation) {
+        case (.success, .success):
+            break
+        case (.success, .failure(let cachedError)):
+            throw NSError(
+                domain: "OmniBench", code: 115,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "structured image cached follow-up failed while cold control passed: \(cachedError.localizedDescription)"])
+        case (.failure(let coldError), .success):
+            throw NSError(
+                domain: "OmniBench", code: 116,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "structured image cold control failed while cached follow-up passed: \(coldError.localizedDescription)"])
+        case (.failure(let coldError), .failure(let cachedError)):
+            throw NSError(
+                domain: "OmniBench", code: 117,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "structured image cold and cached follow-ups failed; cold=\(coldError.localizedDescription); cached=\(cachedError.localizedDescription)"])
+        }
+
+        let cacheStats = coordinator.snapshotStats()
+        let diskStats = cacheStats.diskStats.map {
+            "disk(hits=\($0.hits),misses=\($0.misses),stores=\($0.stores))"
+        } ?? "disk(off)"
+        let ssmStats = "ssm(hits=\(cacheStats.ssmStats.hits),misses=\(cacheStats.ssmStats.misses),reDerives=\(cacheStats.ssmStats.reDerives))"
+        let detail = "T1: \(first.text.prefix(80)) || cold: \(coldFollow.text.prefix(80)) || cached: \(follow.text.prefix(80)) || \(diskStats) \(ssmStats)"
+        return TurnResult(
+            shortText: detail,
+            tokens: first.tokens + coldFollow.tokens + follow.tokens,
+            secs: first.secs + coldFollow.secs + follow.secs)
+    }
+
+    private static func makeOmniProofCoordinator(
+        modelDir: URL,
+        context: ModelContext,
+        parameters: GenerateParameters,
+        label: String
+    ) -> CacheCoordinator {
+        let probeCache = context.model.newCache(parameters: parameters)
+        let needsDiskBackedRestore =
+            cacheRequiresDiskBackedCoordinatorRestore(probeCache)
+
+        var cfg = CacheCoordinatorConfig()
+        cfg.usePagedCache = true
+        cfg.enableDiskCache = needsDiskBackedRestore
+        cfg.pagedBlockSize = 64
+        cfg.maxCacheBlocks = 512
+        cfg.modelKey = modelDir.lastPathComponent
+        if needsDiskBackedRestore {
+            cfg.diskCacheDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent(
+                    "vmlx-omnibench-\(label)-\(ProcessInfo.processInfo.processIdentifier)-\(UUID().uuidString)")
+        }
+
+        let coordinator = CacheCoordinator(config: cfg)
+        if needsDiskBackedRestore {
+            coordinator.setPagedIncompatible(true)
+        }
+        coordinator.setHybrid(cacheContainsPathDependentState(probeCache))
+        print("  cache proof: " +
+              (needsDiskBackedRestore
+                ? "disk-backed path-dependent restore"
+                : "paged media-salted restore"))
+        return coordinator
+    }
+
+    private static func prepareStructuredChat(
+        _ chat: [Chat.Message],
+        context: ModelContext
+    ) async throws -> LMInput {
+        try await context.processor.prepare(input: UserInput(
+            chat: chat,
+            additionalContext: ["enable_thinking": false]))
+    }
+
+    private static func collectGeneration(
+        label: String,
+        engine: BatchEngine,
+        input: LMInput,
+        parameters: GenerateParameters
+    ) async -> (text: String, tokens: Int, secs: Double) {
+        nonisolated(unsafe) let sendable = input
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let stream = await engine.generate(input: sendable, parameters: parameters)
+        var text = ""
+        var reasoning = ""
+        var tokenCount = 0
+        var promptTime = 0.0
+        var ttft: Double?
+        for await event in stream {
+            switch event {
+            case .chunk(let chunk):
+                if ttft == nil { ttft = CFAbsoluteTimeGetCurrent() - t0 }
+                text += chunk
+            case .reasoning(let chunk):
+                if ttft == nil { ttft = CFAbsoluteTimeGetCurrent() - t0 }
+                reasoning += chunk
+            case .info(let info):
+                promptTime = info.promptTime
+                tokenCount = info.generationTokenCount
+            case .toolCall:
+                break
+            }
+        }
+        let secs = CFAbsoluteTimeGetCurrent() - t0
+        let visible = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let preview = visible.count > 180 ? String(visible.prefix(180)) + "..." : visible
+        print(String(format:
+            "  %@: tokens=%d TTFT=%dms prompt=%.3fs reasoning=%d text=\"%@\"",
+            label, tokenCount, Int((ttft ?? 0) * 1000), promptTime,
+            reasoning.count, preview))
+        return (visible, tokenCount, secs)
     }
 
     private static func rewriteAssistantTail(

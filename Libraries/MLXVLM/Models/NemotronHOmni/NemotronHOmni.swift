@@ -603,11 +603,16 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
     /// Decode video resources to the (groups, T*3, 512, 512) channel-stack
     /// tensor that NemotronH RADIO's `video_embedder` consumes.
     public func preprocess(videos: [UserInput.Video]) async throws -> (MLXArray, Int) {
+        let (pixelValues, groupsPerVideo) = try await preprocessVideoClips(videos: videos)
+        return (pixelValues, groupsPerVideo.reduce(0, +))
+    }
+
+    private func preprocessVideoClips(videos: [UserInput.Video]) async throws -> (MLXArray, [Int]) {
         // Concatenate all video pixel-tensors into a single (totalGroups,
         // T*3, H, W) tensor and return the total post-pixel-shuffle token
         // count for placeholder budgeting (256 tokens per group × N groups).
         var groupTensors: [MLXArray] = []
-        var totalGroups = 0
+        var groupsPerVideo: [Int] = []
         for v in videos {
             let url: URL
             switch v {
@@ -626,12 +631,12 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
             // pixels shape: (groups, T*3, H, W). Flatten group axis so we
             // can stack across multiple videos.
             groupTensors.append(pixels)
-            totalGroups += pixels.dim(0)
+            groupsPerVideo.append(pixels.dim(0))
         }
         let pixelValues = groupTensors.count == 1
             ? groupTensors[0]
             : MLX.concatenated(groupTensors, axis: 0)
-        return (pixelValues, totalGroups)
+        return (pixelValues, groupsPerVideo)
     }
 
     public func prepare(input: UserInput) async throws -> LMInput {
@@ -650,6 +655,13 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
         var totalVideoTokens = 0
         var totalAudioTokens = 0
         let tokensPerTile = 256
+        let chatMessages: [Chat.Message]?
+        if case .chat(let messages) = input.prompt {
+            chatMessages = messages
+        } else {
+            chatMessages = nil
+        }
+        var mediaByChatMessage: [Int: String] = [:]
 
         if !input.images.isEmpty {
             let ciImages = try input.images.map { try $0.asCIImage() }
@@ -659,10 +671,25 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
                 frames: counts.map { THW($0, config.imageSize, config.imageSize) })
             let totalTiles = counts.reduce(0, +)
             totalImageTokens = totalTiles * tokensPerTile
+            if let chatMessages {
+                var imageIndex = 0
+                for (messageIndex, message) in chatMessages.enumerated() where !message.images.isEmpty {
+                    var messageTokens = 0
+                    for _ in message.images where imageIndex < counts.count {
+                        messageTokens += counts[imageIndex] * tokensPerTile
+                        imageIndex += 1
+                    }
+                    if messageTokens > 0 {
+                        mediaByChatMessage[messageIndex, default: ""] +=
+                            "<img>" + String(repeating: "<image>", count: messageTokens) + "</img>\n"
+                    }
+                }
+            }
         }
 
         if !input.videos.isEmpty {
-            let (pixels, groups) = try await preprocess(videos: input.videos)
+            let (pixels, groupsPerVideo) = try await preprocessVideoClips(videos: input.videos)
+            let groups = groupsPerVideo.reduce(0, +)
             // Each group emits 256 post-pixel-shuffle tokens before EVS.
             // The source runtime applies EVS, then builds the prompt from
             // the pruned embedding count. Match that contract here so the
@@ -676,6 +703,23 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
                 frames: [THW(groups, config.imageSize, config.imageSize)],
                 embeddingTokenCount: videoTokens)
             totalVideoTokens = videoTokens
+            if let chatMessages {
+                var videoIndex = 0
+                for (messageIndex, message) in chatMessages.enumerated() where !message.videos.isEmpty {
+                    var messageTokens = 0
+                    for _ in message.videos where videoIndex < groupsPerVideo.count {
+                        messageTokens += Self.videoTokenCountAfterEVS(
+                            groups: groupsPerVideo[videoIndex],
+                            tokensPerGroup: tokensPerTile,
+                            pruningRate: config.videoPruningRate)
+                        videoIndex += 1
+                    }
+                    if messageTokens > 0 {
+                        mediaByChatMessage[messageIndex, default: ""] +=
+                            "<img>" + String(repeating: "<image>", count: messageTokens) + "</img>\n"
+                    }
+                }
+            }
         }
 
         if !input.audios.isEmpty {
@@ -716,33 +760,43 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
                 for _ in 0 ..< 3 { t = (t + 1) / 2 }
                 totalAudioTokens = t
             }
+            if let chatMessages,
+               let messageIndex = chatMessages.firstIndex(where: { !$0.audios.isEmpty }),
+               totalAudioTokens > 0
+            {
+                mediaByChatMessage[messageIndex, default: ""] +=
+                    "<so_start>" + String(repeating: "<so_embedding>", count: totalAudioTokens) + "<so_end>\n"
+            }
         }
 
         // Insert media placeholders into the user message before tokenization.
         // Source convention (bundled `processing.py`):
         //   "<img>" + N×"<image>" + "</img>\n"
         //   "<so_start>" + N×"<so_embedding>" + "<so_end>\n"
-        var media = ""
-        if totalImageTokens > 0 {
-            media += "<img>"
-            media += String(repeating: "<image>", count: totalImageTokens)
-            media += "</img>\n"
-        }
-        if totalVideoTokens > 0 {
-            // Video reuses `<image>` placeholders per Python convention
-            // (model.py § comment on img_context_token_id reuse). The
-            // model's prepare() runs the video tower and splices into
-            // the same token positions; image+video in one prompt
-            // serialize image-first then video-second by construction.
-            media += "<img>"
-            media += String(repeating: "<image>", count: totalVideoTokens)
-            media += "</img>\n"
-        }
-        if totalAudioTokens > 0 {
-            media += "<so_start>"
-            media += String(repeating: "<so_embedding>", count: totalAudioTokens)
-            media += "<so_end>\n"
-        }
+        let media = {
+            var media = ""
+            if totalImageTokens > 0 {
+                media += "<img>"
+                media += String(repeating: "<image>", count: totalImageTokens)
+                media += "</img>\n"
+            }
+            if totalVideoTokens > 0 {
+                // Video reuses `<image>` placeholders per Python convention
+                // (model.py § comment on img_context_token_id reuse). The
+                // model's prepare() runs the video tower and splices into
+                // the same token positions; image+video in one prompt
+                // serialize image-first then video-second by construction.
+                media += "<img>"
+                media += String(repeating: "<image>", count: totalVideoTokens)
+                media += "</img>\n"
+            }
+            if totalAudioTokens > 0 {
+                media += "<so_start>"
+                media += String(repeating: "<so_embedding>", count: totalAudioTokens)
+                media += "<so_end>\n"
+            }
+            return media
+        }()
 
         // Build text-only message dictionaries, then inject the expanded
         // NVLM placeholder run once. Using Qwen2VLMessageGenerator here
@@ -750,7 +804,11 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
         // messages and add the expanded run again, desynchronizing
         // placeholder count from the encoded media embeddings.
         var messages = Self.textOnlyMessages(from: input)
-        if !media.isEmpty {
+        if !mediaByChatMessage.isEmpty {
+            for (index, messageMedia) in mediaByChatMessage where messages.indices.contains(index) {
+                Self.prependMedia(messageMedia, toMessageAt: index, in: &messages)
+            }
+        } else if !media.isEmpty {
             Self.prependMedia(media, toLastUserIn: &messages)
         }
 
@@ -766,6 +824,12 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
                 promptTokens,
                 tokenizer: tokenizer)
         }
+        let cachePrefixTokenCounts = Self.canonicalHistoryCacheBoundaries(
+            tokenizer: tokenizer,
+            messages: messages,
+            tools: input.tools,
+            additionalContext: input.additionalContext,
+            promptTokens: promptTokens)
         let promptArray = MLXArray(promptTokens).expandedDimensions(axis: 0)
         let mask = ones(like: promptArray).asType(.int8)
 
@@ -777,7 +841,35 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
             mediaTokenIds: media.isEmpty
                 ? nil
                 : [Self.imageContextTokenId, Self.soundContextTokenId],
-            cacheScopeSalt: cacheScopeSalt(from: input.additionalContext))
+            cacheScopeSalt: cacheScopeSalt(from: input.additionalContext),
+            cachePrefixTokenCounts: cachePrefixTokenCounts)
+    }
+
+    private static func canonicalHistoryCacheBoundaries(
+        tokenizer: any MLXLMCommon.Tokenizer,
+        messages: [Message],
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?,
+        promptTokens: [Int]
+    ) -> [Int] {
+        guard let controllable = tokenizer as? any GenerationPromptControllableTokenizer else {
+            return []
+        }
+        guard let historyTokens = try? controllable.applyChatTemplate(
+            messages: messages,
+            tools: tools,
+            additionalContext: additionalContext,
+            addGenerationPrompt: false)
+        else {
+            return []
+        }
+        guard !historyTokens.isEmpty,
+              historyTokens.count < promptTokens.count,
+              promptTokens.prefix(historyTokens.count).elementsEqual(historyTokens)
+        else {
+            return []
+        }
+        return [historyTokens.count]
     }
 
     private static func textOnlyMessages(from input: UserInput) -> [Message] {
@@ -807,6 +899,16 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
         }
         let text = contentText(from: messages[0]["content"])
         messages[0]["content"] = media + text
+    }
+
+    private static func prependMedia(
+        _ media: String,
+        toMessageAt index: Int,
+        in messages: inout [Message]
+    ) {
+        guard messages.indices.contains(index) else { return }
+        let text = contentText(from: messages[index]["content"])
+        messages[index]["content"] = media + text
     }
 
     private static func canonicalizeNoThinkingMediaTail(

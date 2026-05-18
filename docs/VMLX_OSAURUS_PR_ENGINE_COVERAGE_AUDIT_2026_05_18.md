@@ -138,6 +138,21 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   inference source-backed for VL/Omni bundles; it is not a sampler, parser, or
   EOS workaround. `swift build -c release --product RunBench` passed after the
   change.
+- Nemotron Omni media-cache follow-up root cause is narrowed, not closed.
+  `NemotronHOmniProcessor` now assigns image/video/audio placeholder runs to
+  their original chat turns instead of flattening every media marker onto the
+  final user message, and it now emits canonical history cache boundaries for
+  `GenerationPromptControllableTokenizer` chat templates. Focused proof:
+  `swift test --filter NemotronHOmniPreEncodedAudioTests --jobs 2` passes the
+  new placeholder/cache-boundary row, and `swift build -c release --product
+  RunBench --jobs 2` passes. Live evidence:
+  `docs/local/live-model-matrix/20260518T_nemotron_omni_jangtq_current_turnmatrix/omni_max128_seed0_cache_vs_cold_control.out`
+  shows structured image T1 cache probe HIT `disk 293/293`, follow-up prefetch
+  HIT `disk 285/339`, and cached TTFT/prompt time improving from about
+  `535ms/0.520s` cold to `118ms/0.091s` cached. The same artifact also proves
+  cold and cached no-thinking VL follow-ups loop identically, so the remaining
+  failure is not cache-restore corruption. No repetition-penalty, temperature,
+  EOS, top-k, or parser clamp was added.
 - Release-mode Swift Testing initially failed before focused MLXLM tests because
   `MLXTests/WiredMemoryTests.swift` referenced DEBUG-only wired-memory event
   helpers. The tests are now explicitly DEBUG-gated with a release skip, keeping
@@ -365,9 +380,14 @@ promotion blockers:
   non-Kimi all-model rerun before Osaurus promotion.
 - GPT-OSS / GLM5 / Mistral4 / Pixtral: parser/unit coverage exists, but there
   are no local live decode rows in this pass.
-- Omni live voice: core text/image/audio/video rows pass. A focused 2026-05-18
-  cache-on repeat gate fixed the iterator bench cache-store evidence gap, but
-  repeated live audio still remains a semantic quality/termination gate.
+- Omni live voice / media: core text/image/audio/video rows exist, but the
+  current JANGTQ no-thinking media row is not production-clean. The 2026-05-18
+  media-cache fix proves per-turn media placement and disk-backed cache reuse,
+  but `omni_max128_seed0_cache_vs_cold_control.out` still fails image
+  follow-up coherency in both cold and cached paths, and the audio media-salt
+  row still repeats `bass note` to the cap. This remains an engine/template
+  decode investigation item, not a model-quality waiver and not a sampler-guard
+  candidate.
 - Qwen high-resolution video: bounded media resize rows pass; raw 1080p video
   is not production-clear because the pre-fix row peaked at 164.2 GiB physical
   footprint.
@@ -391,14 +411,14 @@ row below has current `vmlx-swift` live proof.
 | #944 `feat: jang_config.json chat metadata + vmlx bump` | merged | `jang_config.json` chat metadata, DSV4/Kimi/LFM routing, reasoning capability metadata. | DSV4 template/metadata rows and the non-Kimi config/template sweep are current. Kimi is deliberately excluded by user direction. | LFM is not live-cleared by this matrix; if Osaurus exposes it, add a live multi-turn/cache row. |
 | #946 `feat(model-picker): Performance filter` | merged | UI filtering based on model performance/fit. | Engine docs now record speed/RSS caveats by family, especially DSV4, MiniMax, ZAYA, Qwen, Gemma4, and Omni. | Osaurus UI must consume these as explicit capability/performance metadata, not infer from name or size alone. |
 | #953 `fix(preflight): detect mislabeled JANGTQ bundles + vmlx fa77575 auto-correct` | merged | Mislabeled JANGTQ detection, sidecar/family preflight, streaming/event mapping. | Current ledger keeps tensor/sidecar evidence separate from model names. ZAYA/MiniMax/Qwen CRACK rows explicitly state non-MTP unless tensor evidence exists. | Add switch-PR resolver tests that reject name-only MTP/JANGTQ claims. |
-| #967 `feat: Nemotron-3 Hybrid + storage fix + multimodal API` | merged | Nemotron hybrid, multimodal content parts, storage, early resolver skew. | Fresh Omni rows cover JANGTQ/JANGTQ4/MXFP4 core text/image/audio/video, media salt, hybrid SSM, and BatchEngine rows. | Repeated cache-on audio quality remains partial; resolver skew means the Osaurus switch PR must pin one path only. |
+| #967 `feat: Nemotron-3 Hybrid + storage fix + multimodal API` | merged | Nemotron hybrid, multimodal content parts, storage, early resolver skew. | Fresh Omni rows cover JANGTQ/JANGTQ4/MXFP4 core text/image/audio/video, media salt, hybrid SSM, and BatchEngine rows. The latest focused fix also proves structured image follow-up cache hits after per-turn media placeholder placement. | Repeated cache-on audio quality remains partial, and the current JANGTQ no-thinking VL follow-up loops in both cold and cached paths; resolver skew means the Osaurus switch PR must pin one path only. |
 | #990 `feat(api): OpenAI input_audio + video_url content parts` | closed/unmerged | API-surface context for audio/video content parts. | Do not treat as shipped resolver state. Its content is effectively covered later by #967/#1073 live voice/multimodal rows. | No direct switch blocker, but API route probes remain package-wide open. |
 | #993 `fix(preflight): reject JANGTQ Mistral 3 / Laguna before vmlx loads` | merged | Preflight/fail-fast behavior and converged Jinja identity. | Laguna is live-proven; Mistral3/Laguna parser and JANGTQ Hadamard fixes are represented in parser/cache refresh and ledger notes. | If Osaurus re-enables Mistral3 JANGTQ, require a current live row; do not rely on preflight-only proof. |
 | #998 `fix(quality): revert default KV mode .turboQuant(4,4) -> .none` | merged | Important no-fake-default precedent: global TQ caused degenerate repetition, real fix was to stop forcing it. | `vmlx-swift` now uses explicit TQ rows only. MiniMax strict TQ B=2 was fixed by preserving exact prompt tail in the TQ codec, not by forcing sampler policy. | Keep TQ off unless explicitly selected or model-compatible; never use global TQ as quality default. |
 | #1037 `Ling/ZAYA hardening + BatchEngine lifecycle` | merged | Ling/Bailing, ZAYA, BatchEngine lifecycle, topology-aware cache. | Ling JANGTQ2/MXFP4 pass; ZAYA text JANGTQ4/JANGTQ_K pass; ZAYA1-VL JANGTQ4 passes. Cache proof is topology-specific: disk/SSM/CCA, not generic prefix hit. | ZAYA1-VL JANGTQ_K remains partial; Hy3 K needs current rerun. |
 | #1057 `MiniMax speed fix` | merged | MiniMax speed/lifecycle, typed load config, VLM detection, tokenizer/Jinja compatibility. | Large MiniMax JANGTQ_K/JANG cache-off infer rows pass; production-shaped chat-cache row passes; strict TQ B=2 now passes after `6560879`. | Low-footprint active-routed MiniMax proof is still open. Shape-inferred 6-bit metadata repair in JANG_K should be corrected in bundle or explicitly accepted. |
 | #1066 `pin DSV4 vmlx update` | merged | DSV4 tokenizer/cache/runtime pin, local tokenizer fallback. | DSV4 separator fix and template kwargs rows pass; DSV4 live cache OFF/ON chat is coherent. | DSV4 remains partial until long-context/vector/API/speed/low-footprint gates pass. |
-| #1073 `Nemotron Omni live voice input path` | merged | Live voice, Parakeet/RADIO, media-cache token-aware restore, DSV4 pool/compressor fixes. | Omni JANGTQ/JANGTQ4/MXFP4 core matrices pass; current docs track Parakeet chunk concat caveat. Focused 2026-05-18 repeat-audio gate now proves block-L2 and `ssm_companion` writes for BatchEngine and manual TokenIterator paths after the bench store fix. DSV4 pool/compressor lineage is recorded. | Repeated cache-on audio semantic quality/termination and package-wide HTTP route proof remain open. |
+| #1073 `Nemotron Omni live voice input path` | merged | Live voice, Parakeet/RADIO, media-cache token-aware restore, DSV4 pool/compressor fixes. | Omni JANGTQ/JANGTQ4/MXFP4 core matrices pass; current docs track Parakeet chunk concat caveat. Focused 2026-05-18 repeat-audio gate now proves block-L2 and `ssm_companion` writes for BatchEngine and manual TokenIterator paths after the bench store fix. The structured image cache row now proves media-salted disk restore with real history-boundary hits. DSV4 pool/compressor lineage is recorded. | JANGTQ no-thinking VL follow-up and repeated audio semantic quality/termination remain open; package-wide HTTP route proof also remains open. |
 | #1110 `Harden DSV4 reasoning gates and runtime proof` | open, dirty | Native DSV4 chat encoder/tokenizer bridge, live DSV4 proof, runtime pin check. Current Osaurus head pins `vmlx-swift-lm 2cc64dd`. | `vmlx-swift` has DSV4 prompt-boundary fix and partial live proof, but it does not yet close the full #1110 bar. | Do not treat #1110 as merged release state; switch PR must resolve dirty state and rerun DSV4 release gates. |
 | #1118 `Add PocketTTS language selection` | open, behind | TTS language UI/config and resolver-pin churn. | No direct vmlx inference-engine change; keep Omni/Parakeet input-audio evidence separate from output TTS. | Re-run pin-integrity checks after any rebase/merge before the package switch. |
 | #1119 `Add model idle residency policy` | merged | Server idle residency, unload/sleep policy, runtime lifecycle hooks. | `VMLXServerRuntimeSettings.power` documents light/deep sleep settings and cache release/disable APIs exist. | Needs live Osaurus server deep-sleep/wake proof with loaded models before lifecycle readiness is claimed. |
