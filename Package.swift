@@ -410,13 +410,13 @@ let package = Package(
             path: "Vendors/Jinja/Sources/Jinja"
         ),
         .target(
-            name: "EventSource",
+            name: "VMLXEventSource",
             path: "Vendors/EventSource/Sources/EventSource"
         ),
         .target(
             name: "VMLXHuggingFace",
             dependencies: [
-                "EventSource",
+                "VMLXEventSource",
                 .product(name: "Crypto", package: "swift-crypto"),
             ],
             path: "Vendors/swift-huggingface/Sources/HuggingFace"
