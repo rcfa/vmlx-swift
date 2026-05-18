@@ -417,7 +417,7 @@ public class NemotronHOmni: Module, VLMModel, KVCacheDimensionProvider, LoRAMode
 
         // Build replacement-broadcast tensor: same shape as inputsEmbeds with
         // replacement[i] at the i-th placeholder slot, zeros elsewhere.
-        var replaceBuffer = MLXArray.zeros(inputsEmbeds.shape, dtype: inputsEmbeds.dtype)
+        let replaceBuffer = MLXArray.zeros(inputsEmbeds.shape, dtype: inputsEmbeds.dtype)
         var replIdx = 0
         let totalSlots = positions.count
         let B = inputsEmbeds.dim(0)
