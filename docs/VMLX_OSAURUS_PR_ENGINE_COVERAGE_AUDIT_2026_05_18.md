@@ -17,10 +17,10 @@ gh api 'repos/osaurus-ai/{repo}/commits?since=2026-04-24T00:00:00Z&until=2026-05
 gh api repos/osaurus-ai/{repo}/compare/{pin}...main
 ```
 
-Current `vmlx-swift` branch head at this refresh:
+Current `vmlx-swift` branch head after this refresh:
 
 ```text
-3889499 fix(mtp): use qwen tuning file for auto depth
+6af1096 fix(mtp): require tuning for qwen auto launch
 ```
 
 2026-05-18 continuation refresh:
