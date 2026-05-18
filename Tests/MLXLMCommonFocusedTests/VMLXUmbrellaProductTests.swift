@@ -28,6 +28,7 @@ struct VMLXUmbrellaProductTests {
         let _: MTPBundleStatusSnapshot.Type = MTPBundleStatusSnapshot.self
         let _: NativeMTPTuning.Type = NativeMTPTuning.self
         let _: NativeMTPTuningSnapshot.Type = NativeMTPTuningSnapshot.self
+        let _: ModelRuntimeCapabilitySnapshot.Type = ModelRuntimeCapabilitySnapshot.self
     }
 
     @Test("umbrella exposes MTP tuning snapshot JSON for Osaurus")
@@ -72,5 +73,126 @@ struct VMLXUmbrellaProductTests {
         #expect(tuning["best_depth"] as? Int == 2)
         #expect(tuning["usable_best_depth"] as? Int == 2)
         #expect(tuning["verifier_mode"] as? String == "chunk_commit")
+    }
+
+    @Test("umbrella exposes explicit Osaurus runtime capability snapshot")
+    func exposesExplicitRuntimeCapabilitySnapshot() throws {
+        let capabilities = JangCapabilities(
+            reasoningParser: "qwen3_6",
+            toolParser: "qwen",
+            thinkInTemplate: true,
+            supportsTools: true,
+            supportsThinking: true,
+            supportsText: true,
+            supportsVision: true,
+            supportsVideo: true,
+            supportsAudio: false,
+            family: "qwen3_6",
+            modality: "vision",
+            cacheType: "hybrid")
+        let status = MTPBundleStatus(
+            bundleHasMTP: true,
+            configuredLayers: 1,
+            tensorCount: 31,
+            visionTensorCount: 333,
+            mode: .preservedEnabled,
+            tensorSamples: ["model.layers.64.mtp_fc.weight"],
+            visionTensorSamples: ["vision_tower.blocks.0.attn.qkv.weight"],
+            configEvidence: ["tuning_file=vmlx_mtp_tuning.json"],
+            nativeMTPTuning: NativeMTPTuning(
+                bestDepth: 3,
+                verifierMode: "chunk_commit",
+                validated: true,
+                outputEquivalent: true,
+                blocked: false,
+                cacheMode: "paged+ssm",
+                artifact: "docs/internal/release-gates/qwen36_mxfp8/result.json"))
+        let configuration = ModelConfiguration(
+            directory: URL(fileURLWithPath: "/tmp/Qwen3.6-27B-MXFP8-MTP"),
+            toolCallFormat: .xmlFunction,
+            reasoningParserName: "qwen3_6",
+            generationDefaults: GenerationConfigFile(
+                temperature: 0.6,
+                topP: 0.95,
+                topK: 20,
+                repetitionPenalty: 1.0),
+            mtpStatus: status)
+
+        let snapshot = ModelRuntimeCapabilitySnapshot(
+            configuration: configuration,
+            capabilities: capabilities,
+            modelType: "qwen3_5_moe")
+
+        #expect(snapshot.supportsText == .supported)
+        #expect(snapshot.supportsVision == .supported)
+        #expect(snapshot.supportsVideo == .supported)
+        #expect(snapshot.supportsAudio == .unsupported)
+        #expect(snapshot.supportsTools == .supported)
+        #expect(snapshot.supportsReasoning == .supported)
+        #expect(snapshot.supportsNativeMTP == .supported)
+        #expect(snapshot.cacheType == "hybrid")
+        #expect(snapshot.nativeMTP?.tuning?.usableBestDepth == 3)
+        #expect(snapshot.generationDefaults?.topK == 20)
+
+        let data = try JSONEncoder().encode(snapshot)
+        let object = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["supports_text"] as? String == "supported")
+        #expect(object["supports_vision"] as? String == "supported")
+        #expect(object["supports_video"] as? String == "supported")
+        #expect(object["supports_audio"] as? String == "unsupported")
+        #expect(object["supports_native_mtp"] as? String == "supported")
+        #expect(object["cache_type"] as? String == "hybrid")
+
+        let resolved = ResolvedModelConfiguration(
+            modelDirectory: URL(fileURLWithPath: "/tmp/qwen36/weights"),
+            tokenizerDirectory: URL(fileURLWithPath: "/tmp/qwen36/tokenizer"),
+            name: "served-qwen36-mtp",
+            defaultPrompt: "",
+            extraEOSTokens: [],
+            eosTokenIds: [],
+            toolCallFormat: .xmlFunction,
+            reasoningParserName: "qwen3_6",
+            generationDefaults: configuration.generationDefaults,
+            mtpStatus: status)
+        let resolvedSnapshot = ModelRuntimeCapabilitySnapshot(
+            resolvedConfiguration: resolved,
+            capabilities: capabilities,
+            modelType: "qwen3_5_moe")
+        #expect(resolvedSnapshot.modelName == "served-qwen36-mtp")
+    }
+
+    @Test("jang capabilities parse explicit media support booleans")
+    func parsesExplicitMediaSupportBooleans() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vmlx-jang-capabilities-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let data = Data("""
+        {
+          "format": "jang",
+          "format_version": "1.0",
+          "capabilities": {
+            "family": "nemotron_h_omni",
+            "modality": "omni",
+            "cache_type": "hybrid",
+            "supports_tools": true,
+            "supports_thinking": true,
+            "supports_text": true,
+            "supports_vision": true,
+            "supports_video": true,
+            "supports_audio": true
+          }
+        }
+        """.utf8)
+        try data.write(to: root.appendingPathComponent("jang_config.json"))
+
+        let config = try JangLoader.loadConfig(at: root)
+        let capabilities = try #require(config.capabilities)
+        #expect(capabilities.supportsText == true)
+        #expect(capabilities.supportsVision == true)
+        #expect(capabilities.supportsVideo == true)
+        #expect(capabilities.supportsAudio == true)
     }
 }

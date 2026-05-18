@@ -134,6 +134,15 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   `JangCapabilities`, parser resolution/tool/reasoning parser types, and the
   `MTPBundleStatus.snapshot` JSON fields that tell Osaurus whether
   bundle-local `vmlx_mtp_tuning.json` permits native MTP auto-launch.
+- Follow-up implementation adds the status surface #1133 needs without changing
+  decode behavior: `JangCapabilities` now parses explicit
+  `supports_text` / `supports_vision` / `supports_video` / `supports_audio`
+  booleans, and `ModelRuntimeCapabilitySnapshot` emits a single Codable
+  support matrix (`supported` / `unsupported` / `unknown`) with parser stamps,
+  cache type, `generation_config.json` defaults, and native-MTP tuning status.
+  Focused umbrella tests cover the `VMLX` re-export, JSON keys, media support
+  parsing, native-MTP support, and served-name preservation for
+  `ResolvedModelConfiguration`.
 
 ## Current Switch Verdict
 

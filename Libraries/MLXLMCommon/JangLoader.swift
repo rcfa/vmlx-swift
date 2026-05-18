@@ -181,6 +181,21 @@ public struct JangCapabilities: Sendable {
     /// Whether the model is trained to emit reasoning blocks.
     public let supportsThinking: Bool?
 
+    /// Explicit text lane support. `nil` means older bundles did not stamp it.
+    public let supportsText: Bool?
+
+    /// Explicit still-image / vision lane support. `nil` means older bundles
+    /// should fall back to coarse `modality` and model-class evidence.
+    public let supportsVision: Bool?
+
+    /// Explicit video lane support. This is intentionally separate from
+    /// `supportsVision` because many VLMs accept images but not videos.
+    public let supportsVideo: Bool?
+
+    /// Explicit audio lane support. Only Omni-style bundles should stamp this
+    /// true; image/video support must not imply audio.
+    public let supportsAudio: Bool?
+
     /// Family bucket for UI/registry grouping (e.g. `qwen3_5`, `gemma4`).
     public let family: String?
 
@@ -223,6 +238,10 @@ public struct JangCapabilities: Sendable {
         thinkInTemplate: Bool? = nil,
         supportsTools: Bool? = nil,
         supportsThinking: Bool? = nil,
+        supportsText: Bool? = nil,
+        supportsVision: Bool? = nil,
+        supportsVideo: Bool? = nil,
+        supportsAudio: Bool? = nil,
         family: String? = nil,
         modality: String? = nil,
         cacheType: String? = nil,
@@ -236,6 +255,10 @@ public struct JangCapabilities: Sendable {
         self.thinkInTemplate = thinkInTemplate
         self.supportsTools = supportsTools
         self.supportsThinking = supportsThinking
+        self.supportsText = supportsText
+        self.supportsVision = supportsVision
+        self.supportsVideo = supportsVideo
+        self.supportsAudio = supportsAudio
         self.family = family
         self.modality = modality
         self.cacheType = cacheType
@@ -1081,6 +1104,10 @@ public struct JangLoader: Sendable {
                 thinkInTemplate: cDict["think_in_template"] as? Bool,
                 supportsTools: cDict["supports_tools"] as? Bool,
                 supportsThinking: cDict["supports_thinking"] as? Bool,
+                supportsText: cDict["supports_text"] as? Bool,
+                supportsVision: cDict["supports_vision"] as? Bool,
+                supportsVideo: cDict["supports_video"] as? Bool,
+                supportsAudio: cDict["supports_audio"] as? Bool,
                 family: cDict["family"] as? String,
                 modality: cDict["modality"] as? String,
                 cacheType: cDict["cache_type"] as? String,
