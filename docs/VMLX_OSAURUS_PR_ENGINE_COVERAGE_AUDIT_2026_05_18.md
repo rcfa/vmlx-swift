@@ -179,6 +179,31 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   markers into `.chunk`. This is parser/template evidence only; DSV4 remains
   partial until long-context/vector/API/speed/low-footprint rows close.
 
+2026-05-18 13:48 PDT Osaurus PR #1147 matrix expansion:
+
+- Osaurus PR #1147 head `67a24031` adds a per-family UI/API execution matrix to
+  `docs/VMLX_SWIFT_OSAURUS_LIVE_MATRIX_2026_05_18.md`. The matrix now names
+  exact real-user rows for DSV4, Qwen VL / Qwen3.6 MTP VL, Gemma4/Gemma VLM,
+  ZAYA/ZAYA-VL, Nemotron Omni / Parakeet / RADIO, MiniMax, Ling/Hy3 hybrid SSM,
+  and GLM/GPT-OSS/Mistral parser families.
+- The added rows make the remaining switch proof explicit: chat UI defaults,
+  server settings visuals, `/v1/chat/completions`, `/v1/responses`,
+  `/v1/messages`, Ollama routes, saved-setting isolation, native `top_k` and
+  `chat_template_kwargs`, tool/coding context injection, media salt, video
+  frame rows, Parakeet/RADIO facts, ZayaCCACache/path-dependent media state,
+  prefix/paged/L2/SSM/cache inverses, physical footprint, TTFT, token/s, and no
+  parser/tag leakage.
+- The same commit adds a "Settings Carryover and Cache-Key Failure Modes"
+  section requiring explicit inverse rows for Qwen thinking carryover, DSV4
+  `max` carryover, VLM-to-text media carryover, cache OFF/ON restoration,
+  tool/coding context carryover, and generation defaults from
+  `generation_config.json` / `jang_config.json`. This is still a live-test
+  checklist, not a production-clear claim.
+- Osaurus focused source policy verification after the change:
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
+  --package-path Packages/OsaurusCore --filter RuntimePolicySourceTests --jobs 2`
+  passes 28/28.
+
 2026-05-17 20:25 PDT live refresh:
 
 - `gh pr list --repo osaurus-ai/osaurus --state all --limit 20` shows the
