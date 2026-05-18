@@ -5,6 +5,9 @@ matter to the `vmlx-swift` consolidation work. It intentionally separates PR
 titles and intermediate bump commits from the package revisions that were
 actually resolved at the merge or current PR head.
 
+For the follow-on PR-to-engine proof crosswalk, see
+`docs/VMLX_OSAURUS_PR_ENGINE_COVERAGE_AUDIT_2026_05_18.md`.
+
 Source commands used for this pass:
 
 ```sh

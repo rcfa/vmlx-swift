@@ -129,6 +129,7 @@ Fresh Osaurus PR/pin lineage artifact:
 
 ```text
 docs/VMLX_OSAURUS_PR_PIN_LINEAGE_2026_05_17.md
+docs/VMLX_OSAURUS_PR_ENGINE_COVERAGE_AUDIT_2026_05_18.md
 ```
 
 ## Extended Family Status After PR/Pin Review
