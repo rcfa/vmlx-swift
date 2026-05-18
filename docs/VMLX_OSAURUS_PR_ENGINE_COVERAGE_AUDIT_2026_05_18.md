@@ -232,7 +232,12 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   from silently accepting negative or zero idle-residency values before the live
   deep-sleep/wake gate is run. Focused verification:
   `VMLINUXServerRuntimeSettingsTests|RuntimeMoETopKOverrideFocusedTests`
-  passes 18/18 with the Xcode framework path.
+  passes 19/19 with the Xcode framework path.
+- Follow-up native-MTP settings validation made the cache-boundary policy
+  non-optional: `keepDraftCacheSeparate=false` and
+  `acceptedTokensOnlyEnterBaseCache=false` are now validation errors. This keeps
+  Qwen MTP sidecar/private draft state out of the committed prefix/paged/SSM
+  cache unless the verifier accepted the tokens.
 
 ## Current Switch Verdict
 

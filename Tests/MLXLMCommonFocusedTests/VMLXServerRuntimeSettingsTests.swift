@@ -200,6 +200,18 @@ struct VMLXServerRuntimeSettingsTests {
         #expect(settings.validationIssues(mtpStatus: tuned).isEmpty)
     }
 
+    @Test("MTP cache boundary settings are not optional")
+    func mtpCacheBoundarySettingsAreNotOptional() {
+        var settings = VMLXServerRuntimeSettings()
+        settings.mtp.keepDraftCacheSeparate = false
+        settings.mtp.acceptedTokensOnlyEnterBaseCache = false
+
+        let fields = Set(settings.validationIssues().map(\.field))
+
+        #expect(fields.contains("mtp.keepDraftCacheSeparate"))
+        #expect(fields.contains("mtp.acceptedTokensOnlyEnterBaseCache"))
+    }
+
     @Test("MTP launch resolution uses config policy and draft limit")
     func mtpLaunchResolutionUsesConfigPolicyAndDraftLimit() {
         let config = """

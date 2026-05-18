@@ -218,6 +218,16 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
                 field: "mtp.draftTokenLimit",
                 message: "MTP draft token limit must be positive."))
         }
+        if !mtp.keepDraftCacheSeparate {
+            issues.append(.error(
+                field: "mtp.keepDraftCacheSeparate",
+                message: "Native MTP draft cache must stay separate from the verifier/base cache."))
+        }
+        if !mtp.acceptedTokensOnlyEnterBaseCache {
+            issues.append(.error(
+                field: "mtp.acceptedTokensOnlyEnterBaseCache",
+                message: "Native MTP may commit only accepted verifier tokens to the base cache."))
+        }
         if let defaultMaxKVSize = cache.defaultMaxKVSize, defaultMaxKVSize <= 0 {
             issues.append(.error(
                 field: "cache.defaultMaxKVSize",
