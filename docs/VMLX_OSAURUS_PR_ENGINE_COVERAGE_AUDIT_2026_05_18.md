@@ -316,6 +316,23 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   --package-path Packages/OsaurusCore --filter RuntimePolicySourceTests --jobs 2`
   passes 28/28.
 
+2026-05-18 14:24 PDT Osaurus PR #1147 keychain-safe launch helper:
+
+- Osaurus PR #1147 head `82c763eb` adds
+  `scripts/pr1147_keychain_safe_app_launch.sh`. The helper launches the debug
+  `.app` through LaunchServices, refuses fake `HOME`, sets `OSU_MODELS_DIR`
+  through `launchctl`, and restores the previous launchctl environment after
+  the LaunchServices request is accepted.
+- Local dry-run proof: the helper prints the expected real-home launch plan for
+  `build/XcodeDerivedData-codex-live-pr1147/Build/Products/Debug/osaurus.app`
+  and exits 64 when forced through `HOME=/tmp/osaurus-fake-home`, preventing
+  the Keychain error path from being used as live evidence.
+- Verification for the checkpoint: `bash -n
+  scripts/pr1147_keychain_safe_app_launch.sh`, real-home `--dry-run`,
+  fake-home refusal check, `git diff --check`, and focused
+  `RuntimePolicySourceTests` 28/28. Local `shellcheck` was not installed; the
+  GitHub `shellcheck` job is the authoritative shellcheck signal for this row.
+
 2026-05-17 20:25 PDT live refresh:
 
 - `gh pr list --repo osaurus-ai/osaurus --state all --limit 20` shows the
