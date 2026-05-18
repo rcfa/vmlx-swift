@@ -120,6 +120,21 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   pass `loadPreservedMTP: loadNativeMTP`, preserve `generationDefaults:
   generationConfig`, and carry `mtpStatus` into `ModelConfiguration`.
 
+2026-05-17 21:10 PDT live refresh:
+
+- Open Osaurus PR #1133 remains the relevant post-runtime watch item for the
+  package switch: it is draft/behind and its author comments explicitly frame
+  multimodal plugin contracts as spec-first because not every model supports
+  every modality. The `vmlx-swift` switch PR therefore needs explicit
+  per-model capability/status JSON for text, vision, audio, video, tools,
+  reasoning, native MTP, and cache topology, plus unsupported-modality error
+  shape and logging/redaction boundaries.
+- The single-package `VMLX` umbrella surface now has focused test coverage for
+  the Osaurus-facing runtime types it must expose: `GenerationConfigFile`,
+  `JangCapabilities`, parser resolution/tool/reasoning parser types, and the
+  `MTPBundleStatus.snapshot` JSON fields that tell Osaurus whether
+  bundle-local `vmlx_mtp_tuning.json` permits native MTP auto-launch.
+
 ## Current Switch Verdict
 
 Not ready to say "single `vmlx-swift` dependency is production-clear for all
