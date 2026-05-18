@@ -1178,9 +1178,32 @@ Recent dependency scan, 2026-05-04 through 2026-05-18:
 | Reasoning on/off | No fake close; reasoning off must affect template/runtime where supported, and visible output must remain coherent. | Gemma4 reasoning matrix, MiniMax rows, DSV4 reasoning kwargs, Ling/Bailing aliases. Fresh Gemma E2B no-guard red/green pair proves the harness now accepts coherent stellar equivalents instead of forcing decode behavior; fresh Ling row proves the Russian stress prompt with `temp=0.7` stops normally. | Covered for tested families; package-wide model matrix still open for absent local bundles. |
 | MTP autodetect | Only real tensor evidence plus usable tuning may enable MTP; model names and stale metadata are insufficient. Qwen auto-depth must come from bundle-local `vmlx_mtp_tuning.json`, not profile/name rules. | Non-Kimi MTP census and Qwen MTP settings docs; CRACK rows explicitly stay MTP off. Focused tests cover tuned D2, validated D3, missing tuning, blocked tuning rows, valid tuning without MTP tensors, `MTPBundleStatus.snapshot`, missing-tuning evidence, and LLM/VLM factory wiring into `ModelConfiguration`. | Correct fail-closed policy covered; full MTP speed target remains separate/open. |
 
+2026-05-18 15:53 PDT forced-behavior source audit mirror:
+
+- Osaurus PR #1147 head `713aa6b7` adds
+  `docs/internal/live-gates/pr1147/forced-behavior-audit-20260518T1545/REPORT.md`.
+  This source-level audit is explicitly not live model proof. It names each
+  output-shaping candidate, why it appears to exist, whether it is background,
+  request-driven, template-bridge, or red, and what live artifact is required
+  before release.
+- The audit rows cover background `no_think` calls in preflight/greetings,
+  explicit OpenAI `frequency_penalty` to repetition-penalty mapping,
+  DSV4/Hy3 reasoning-template bridges, Ling `enable_thinking=false` plus
+  reasoning-to-content merge, MiniMax no-thinking template fallback,
+  family UI defaults for Qwen/Nemotron/ZAYA/Laguna/Hy3/Ling/Venice, metadata
+  fallback sampler resolution, and template/JANG-config reasoning detection.
+- The important red row is Ling: Osaurus currently force-sets
+  `enable_thinking=false` and maps Ling `.reasoning` deltas to visible content.
+  That cannot count as model correctness until live vmlx evidence proves the
+  actual Ling template/parser/decode path is coherent without UI-side repair.
+- Focused Osaurus verification after the audit:
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
+  --package-path Packages/OsaurusCore --filter RuntimePolicySourceTests --jobs 2`
+  passes 28/28.
+
 ## Osaurus PR #1147 Function-Level Gate
 
-The Osaurus package-switch PR now carries an F1-F11 live checklist in
+The Osaurus package-switch PR now carries an F1-F12 live checklist in
 `docs/VMLX_SWIFT_OSAURUS_LIVE_MATRIX_2026_05_18.md`. Treat those rows as the
 engine-facing contract for any new `vmlx-swift` runtime proof:
 
@@ -1197,6 +1220,7 @@ engine-facing contract for any new `vmlx-swift` runtime proof:
 | F9 Parser/channel separation | Reasoning, tools, and visible content split by family; no leaked `<think>`, DSML, Harmony, Gemma4, Qwen XML, MiniMax XML, GLM/Hunyuan, Nemotron, JSON tool schema, or tool-result markers in visible chunks. |
 | F10 Old-library sweep | Consolidated modules only: `MLX`, `MLXLLM`, `MLXVLM`, `MLXLMCommon`, `VMLINUXTokenizers`, and `VMLINUXJinja`; no active dependency on old `vmlx-swift-lm`, standalone `mlx-swift`, standalone `swift-transformers`, or standalone `Jinja`. |
 | F11 No fake runtime guards | Red rows stay red until root-caused. No forced repetition penalties, hidden sampler floors, forced reasoning close tags, parser repairs, fake cache fallbacks, name-only MTP, permanent overlays, or length-cap-only success. |
+| F12 Forced behavior audit | Source, prompt dumps, settings previews, and live outputs must search for forced sampler defaults, forced repetition penalties, forced reasoning rail rewrites, forced `</think>` close tokens, token/logit shaping, parser repair, and template fallback behavior. Every hit must be background-only, explicit-user/API-driven, or fixed at the real template/tokenizer/decode/cache root cause before the model row can pass. |
 
 ## Production-Quality Checklist Still Required
 
