@@ -226,6 +226,32 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   --package-path Packages/OsaurusCore --filter RuntimePolicySourceTests --jobs 2`
   passes 28/28.
 
+2026-05-18 14:05 PDT Osaurus PR #1147 bundle census gate:
+
+- Osaurus PR #1147 head `2705ab08` adds
+  `scripts/pr1147_collect_bundle_census.py` and the generated artifact folder
+  `docs/internal/live-gates/pr1147/bundle-census/`. The helper reads
+  `config.json`, `generation_config.json`, `jang_config.json`,
+  processor configs, `model.safetensors.index.json`, and
+  `vmlx_mtp_tuning.json` without loading model weights.
+- The generated census covers 29 local model rows across DSV4, Qwen3.6
+  MTP/VL and CRACK, Gemma, ZAYA/ZAYA-VL, Nemotron Omni, MiniMax, Ling, and Hy3.
+  It records generation defaults including native `top_k`, VLM processor/token
+  evidence, safetensors MTP tensor counts, and the conservative MTP
+  `auto_enable` reason.
+- Important MTP results: Qwen3.6 27B JANG_4M has 31 MTP tensors and D3;
+  27B MXFP4 has 23 MTP tensors and D2; 27B MXFP8 has 23 MTP tensors and D3;
+  35B MXFP4 has 42 MTP tensors and D3; 35B MXFP8 has 31 MTP tensors and D3.
+  Qwen3.6 35B JANG_2K has MTP tensor evidence but tuning blocks native MTP, and
+  Qwen3.6 CRACK rows have no MTP tensor evidence, so they stay off.
+- This is file-level proof only. It does not prove Osaurus UI defaults, HTTP
+  route behavior, cache hits, media turn coherency, parser separation, or
+  memory footprint.
+- Verification for the checkpoint: `python3 -m py_compile
+  scripts/pr1147_collect_bundle_census.py`, JSON validation of
+  `bundle_census.json`, `git diff --check`, and focused
+  `RuntimePolicySourceTests` 28/28.
+
 2026-05-17 20:25 PDT live refresh:
 
 - `gh pr list --repo osaurus-ai/osaurus --state all --limit 20` shows the
