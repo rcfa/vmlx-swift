@@ -288,9 +288,16 @@ PY
 }
 
 classify_profile() {
-  local dir="$1" arch="$2"
+  local dir="$1" arch="$2" model_type="${3:-}"
   if [[ "$arch" == NemotronHForCausalLM* ]]; then
     printf "omni"; return
+  fi
+  # Gemma 3n conditional-generation bundles carry image/audio preprocessors,
+  # but the current native Swift dispatch is Gemma3nTextModel and intentionally
+  # drops media towers. Treat them as text until a real Gemma3n VLM processor
+  # lands, so media rows are not counted as fake passes.
+  if [[ "$model_type" == "gemma3n" || "$model_type" == "gemma3n_text" ]]; then
+    printf "text"; return
   fi
   if [[ "$arch" == *VL* ]] || has_file_named "$dir" preprocessor_config.json; then
     printf "vl"; return
@@ -324,7 +331,7 @@ write_inventory() {
     size="$(model_size_gb "$bytes")"
     arch="$(json_value "$dir/config.json" '.architectures?[0]' unknown)"
     model_type="$(json_value "$dir/config.json" '.model_type // .text_config.model_type' unknown)"
-    profile="$(classify_profile "$dir" "$arch")"
+    profile="$(classify_profile "$dir" "$arch" "$model_type")"
     mtp_tensors="no"
     mtp_auto="no"
     if contains_mtp_evidence "$dir"; then

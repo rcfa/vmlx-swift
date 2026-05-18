@@ -1049,8 +1049,12 @@ private struct LLMUserInputProcessor: UserInputProcessor {
             additionalContext: additionalContext
         )
         do {
-            let promptTokens = try tokenizer.applyChatTemplate(
+            var promptTokens = try tokenizer.applyChatTemplate(
                 messages: messages, tools: input.tools, additionalContext: additionalContext)
+            promptTokens = Self.applyModelSpecificPromptTokenFixups(
+                promptTokens,
+                tokenizer: tokenizer,
+                modelType: modelType)
             let cachePrefixTokenCounts = canonicalHistoryCacheBoundaries(
                 messages: messages,
                 tools: input.tools,
@@ -1074,6 +1078,27 @@ private struct LLMUserInputProcessor: UserInputProcessor {
                 tokens: MLXArray(promptTokens),
                 cacheScopeSalt: cacheScopeSalt(from: additionalContext))
         }
+    }
+
+    private static func applyModelSpecificPromptTokenFixups(
+        _ promptTokens: [Int],
+        tokenizer: any Tokenizer,
+        modelType: String?
+    ) -> [Int] {
+        let normalizedModelType = modelType?.lowercased()
+        guard normalizedModelType == "gemma3n" || normalizedModelType == "gemma3n_text",
+              let bos = tokenizer.bosToken.flatMap({ tokenizer.convertTokenToId($0) }),
+              promptTokens.first == bos
+        else {
+            return promptTokens
+        }
+        guard promptTokens.dropFirst().first != bos else {
+            return promptTokens
+        }
+        // Gemma 3n MLX checkpoints are coherent under the mlx_lm generation
+        // contract where the fallback chat template contributes one BOS and
+        // tokenizer add_bos_token contributes the leading BOS as well.
+        return [bos] + promptTokens
     }
 
     private func mergedAdditionalContext(

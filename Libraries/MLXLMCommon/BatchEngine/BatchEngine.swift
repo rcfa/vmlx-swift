@@ -1508,8 +1508,12 @@ public actor BatchEngine {
         case .tokens(let remainingText):
             // LLM path: prepare() consumed all but the last chunk, returned remaining tokens.
             // Run the last chunk through the model to get logits for the first decode token.
+            let remainingTokens = remainingText.tokens
+            let modelTokens = remainingTokens.ndim == 1
+                ? remainingTokens[.newAxis]
+                : remainingTokens
             let result = context.model(
-                remainingText[text: .newAxis], cache: slot.cache, state: nil)
+                LMInput.Text(tokens: modelTokens), cache: slot.cache, state: nil)
             MLX.eval(slot.cache)
             let logits = result.logits[0 ..< 1, -1, 0...]
             firstToken = slot.sampleToken(from: logits)
@@ -2234,8 +2238,12 @@ public actor BatchEngine {
                         // ZAYA CCA reads B/T from activation rank and traps
                         // on a 1D token tensor during coordinator-only
                         // history-boundary cache rederive.
+                        let remainingTokens = remaining.tokens
+                        let modelTokens = remainingTokens.ndim == 1
+                            ? remainingTokens[.newAxis]
+                            : remainingTokens
                         _ = context.model(
-                            remaining[text: .newAxis],
+                            LMInput.Text(tokens: modelTokens),
                             cache: cache,
                             state: nil)
                     case .logits:

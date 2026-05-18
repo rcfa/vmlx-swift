@@ -258,6 +258,8 @@ class Gemma3nAttention: Module {
         cache: KVCache? = nil
     ) -> MLXArray {
         let (B, L, _) = (x.dim(0), x.dim(1), x.dim(2))
+        var ropeOffset = cache?.offset ?? 0
+        let ropeOffsetArray = graphOffsetArray(for: cache).map { $0 + MLXArray(0) }
 
         var queries = qProj(x)
         queries = queries.reshaped(B, L, -1, headDim)
@@ -268,6 +270,7 @@ class Gemma3nAttention: Module {
 
         if isKvSharedLayer && cache != nil {
             let state = cache!.state
+            ropeOffset = cache!.offset
             if state.count >= 2 {
                 keys = state[0]
                 values = state[1]
@@ -275,7 +278,11 @@ class Gemma3nAttention: Module {
                 keys = kProj(x).reshaped(B, L, -1, headDim)
                 keys = kNorm(keys)
                 keys = keys.transposed(0, 2, 1, 3)
-                keys = applyRotaryPosition(rope, to: keys, cache: cache)
+                if let ropeOffsetArray {
+                    keys = rope(keys, offset: ropeOffsetArray)
+                } else {
+                    keys = rope(keys, offset: ropeOffset)
+                }
 
                 values = vProj(x).reshaped(B, L, -1, headDim)
                 values = vNorm(values)
@@ -286,10 +293,15 @@ class Gemma3nAttention: Module {
                 }
             }
         } else {
+            ropeOffset = cache?.offset ?? 0
             keys = kProj(x).reshaped(B, L, -1, headDim)
             keys = kNorm(keys)
             keys = keys.transposed(0, 2, 1, 3)
-            keys = applyRotaryPosition(rope, to: keys, cache: cache)
+            if let ropeOffsetArray {
+                keys = rope(keys, offset: ropeOffsetArray)
+            } else {
+                keys = rope(keys, offset: ropeOffset)
+            }
 
             values = vProj(x).reshaped(B, L, -1, headDim)
             values = vNorm(values)
@@ -301,7 +313,11 @@ class Gemma3nAttention: Module {
         }
 
         queries = queries.transposed(0, 2, 1, 3)
-        queries = applyRotaryPosition(rope, to: queries, cache: cache)
+        if let ropeOffsetArray {
+            queries = rope(queries, offset: ropeOffsetArray)
+        } else {
+            queries = rope(queries, offset: ropeOffset)
+        }
 
         var adjustedMask = mask
         if case .array(let maskArray) = mask {
@@ -477,10 +493,10 @@ class Gemma3nAltUp: Module {
         let activeX = predictions[config.altupActiveIdx]
         let innovation = activated - activeX
 
-        let allCoefsTransposed = allCoefs.transposed(2, 1, 0)
+        let allCoefsTransposed = allCoefs.transposed(2, 0, 1)
         let corrected =
             expandedDimensions(innovation, axis: 0)
-            * expandedDimensions(allCoefsTransposed, axis: 1)
+            * expandedDimensions(allCoefsTransposed, axis: 3)
         let finalCorrected = corrected + predictions
 
         return finalCorrected.asType(activated.dtype)
@@ -1000,18 +1016,33 @@ public class Gemma3nTextModel: Module, LLMModel {
 
         for (key, value) in weights {
             if key.hasPrefix("model.language_model.") {
-                // Remove "model." prefix for VLM-style weights
-                let newKey = key.replacingOccurrences(
-                    of: "model.language_model.", with: "language_model.")
+                // Conditional-generation bundles may wrap text weights as
+                // `model.language_model.model.*`; the text-only Swift model
+                // owns the subtree at `language_model.*`.
+                var suffix = String(key.dropFirst("model.language_model.".count))
+                if suffix.hasPrefix("model.") {
+                    suffix = String(suffix.dropFirst("model.".count))
+                }
+                let newKey = "language_model.\(suffix)"
                 processedWeights[newKey] = value
-            } else {
-                // Keep other weights as-is
+            } else if key.hasPrefix("language_model.model.") {
+                // MLX-community Gemma3n conditional-generation bundles place
+                // text weights under `language_model.model.*`. Strip only the
+                // extra text-model wrapper. Audio/vision towers are dropped
+                // below for this LLM-only model.
+                let suffix = String(key.dropFirst("language_model.model.".count))
+                let newKey = "language_model.\(suffix)"
+                processedWeights[newKey] = value
+            } else if key.hasPrefix("language_model.") {
                 processedWeights[key] = value
             }
         }
 
         let expectedVocab = config.vocabSize
         let keysToCheck = [
+            "language_model.embed_tokens.weight",
+            "language_model.embed_tokens.scales",
+            "language_model.embed_tokens.biases",
             "language_model.model.embed_tokens.weight",
             "language_model.model.embed_tokens.scales",
             "language_model.model.embed_tokens.biases",

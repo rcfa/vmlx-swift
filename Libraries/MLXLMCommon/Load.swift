@@ -409,8 +409,11 @@ public func loadWeights(
         var remappedPerLayer = perLayerQuantization.perLayerQuantization
         for (key, value) in perLayerQuantization.perLayerQuantization {
             if key.hasPrefix("language_model.model.") {
-                let stripped = String(key.dropFirst("language_model.".count))
-                remappedPerLayer[stripped] = value
+                let modelStripped = String(key.dropFirst("language_model.".count))
+                remappedPerLayer[modelStripped] = value
+                let textStripped = "language_model."
+                    + String(key.dropFirst("language_model.model.".count))
+                remappedPerLayer[textStripped] = value
             } else if key.hasPrefix("language_model.") {
                 let stripped = String(key.dropFirst("language_model.".count))
                 remappedPerLayer[stripped] = value

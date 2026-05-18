@@ -4178,10 +4178,11 @@ func runZayaTopK(modelPath: String) async throws {
     let rawPrompt = env["BENCH_ZAYA_TOPK_RAW"] == "1"
     let enableThinking = env["BENCH_ZAYA_TOPK_THINKING"] == "1"
     let topK = Int(env["BENCH_ZAYA_TOPK_K"] ?? "10") ?? 10
+    let useCache = (env["BENCH_ZAYA_TOPK_CACHE"] ?? "1") != "0"
 
     print("\n=== BENCH_ZAYA_TOPK: next-token parity probe ===")
     print("Model: \(modelPath)")
-    print("Mode: \(rawPrompt ? "raw" : "chat") enableThinking=\(enableThinking)")
+    print("Mode: \(rawPrompt ? "raw" : "chat") enableThinking=\(enableThinking) cache=\(useCache)")
 
     let loadStart = CFAbsoluteTimeGetCurrent()
     let context = try await MLXLMCommon.loadModel(
@@ -4206,7 +4207,7 @@ func runZayaTopK(modelPath: String) async throws {
 
     let promptIds = MLXArray(promptTokens.map { Int32($0) })
         .reshaped(1, promptTokens.count)
-    let cache = context.model.newCache(parameters: nil)
+    let cache = useCache ? context.model.newCache(parameters: nil) : nil
     let logits = context.model(promptIds, cache: cache)
     let last = logits[0, promptTokens.count - 1, 0...]
     let order = argSort(-last)
@@ -4656,22 +4657,36 @@ func runTemplateSmoke(modelPath: String) async throws {
     let (tokenizer, tokenizerDir) = try await loadBenchTokenizer(from: modelDir)
     print("Tokenizer dir: \(tokenizerDir.path)")
     print("Tokenizer: bos=\(tokenizer.bosToken ?? "nil") eos=\(tokenizer.eosToken ?? "nil")")
-    let directTemplate: Template? = {
+    let templateSource: String? = {
         let candidate = tokenizerDir.appendingPathComponent("chat_template.jinja")
-        let source: String?
         if let fileSource = try? String(contentsOf: candidate, encoding: .utf8) {
-            source = fileSource
+            return fileSource
         } else {
             let configURL = tokenizerDir.appendingPathComponent("tokenizer_config.json")
             if let data = try? Data(contentsOf: configURL),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let configSource = json["chat_template"] as? String {
-                source = configSource
+                return configSource
             } else {
-                source = nil
+                return nil
             }
         }
-        guard let source else { return nil }
+    }()
+    let templateSupportsTools: Bool = {
+        guard let templateSource else {
+            // Fallback templates may be model-family aware, so keep tool rows strict.
+            return true
+        }
+        let lower = templateSource.lowercased()
+        return lower.contains("tools")
+            || lower.contains("tool_call")
+            || lower.contains("function_call")
+            || lower.contains("<function=")
+    }()
+    print("Template source: \(templateSource == nil ? "fallback" : "bundle") supportsTools=\(templateSupportsTools)")
+
+    let directTemplate: Template? = {
+        guard let source = templateSource else { return nil }
         return try? Template(source, with: .init(lstripBlocks: true, trimBlocks: true))
     }()
 
@@ -4842,7 +4857,8 @@ func runTemplateSmoke(modelPath: String) async throws {
                 let encodeStart = CFAbsoluteTimeGetCurrent()
                 let directIds = tokenizer.encode(text: rendered, addSpecialTokens: false)
                 let encodeMs = Int((CFAbsoluteTimeGetCurrent() - encodeStart) * 1000)
-                let directToolMention = testCase.tools == nil
+                let directRequiresToolMention = testCase.tools != nil && templateSupportsTools
+                let directToolMention = !directRequiresToolMention
                     || rendered.contains("get_weather")
                     || rendered.contains("get_time")
                     || rendered.contains("osaurus_probe_tool_0")
@@ -4853,13 +4869,17 @@ func runTemplateSmoke(modelPath: String) async throws {
                 || text.contains("<channel>analysis") || text.contains("[MODEL_SETTINGS]")
             let hasThinkClose = text.contains("</think>") || text.contains("<|end|>")
                 || text.contains("</channel>")
-            let toolMention = testCase.tools == nil
+            let requiresToolMention = testCase.tools != nil && templateSupportsTools
+            let toolMention = !requiresToolMention
                 || text.contains("get_weather")
                 || text.contains("get_time")
                 || text.contains("osaurus_probe_tool_0")
             let ok = !ids.isEmpty && !text.isEmpty && !hasJinjaLeak && toolMention
+            let status = ok
+                ? (testCase.tools != nil && !templateSupportsTools ? "N-A" : "PASS")
+                : "FAIL"
             print(
-                "TEMPLATE_SMOKE label=\(testCase.label) status=\(ok ? "PASS" : "FAIL") ms=\(renderMs) \(directProfile) ids=\(ids.count) chars=\(text.count) tools=\(testCase.tools?.count ?? 0) thinkOpen=\(hasThinkOpen) thinkClose=\(hasThinkClose) toolMention=\(toolMention) tail=\"\(clippedTail(text))\""
+                "TEMPLATE_SMOKE label=\(testCase.label) status=\(status) ms=\(renderMs) \(directProfile) ids=\(ids.count) chars=\(text.count) tools=\(testCase.tools?.count ?? 0) toolsApplicable=\(requiresToolMention) thinkOpen=\(hasThinkOpen) thinkClose=\(hasThinkClose) toolMention=\(toolMention) tail=\"\(clippedTail(text))\""
             )
             if !ok {
                 var reasons: [String] = []
@@ -8200,6 +8220,7 @@ func runProdMatrix(modelPath: String, maxNew: Int) async throws {
         context: ctx, maxBatchSize: 1, cacheCoordinator: coordinator)
     let greedy = (env["BENCH_PROD_GREEDY"] ?? "0") == "1"
     let randomSeed = env["BENCH_PROD_SEED"].flatMap(UInt64.init)
+    let dumpPrompt = (env["BENCH_PROD_DUMP_PROMPT"] ?? "0") == "1"
     var params: GenerateParameters
     if greedy {
         params = GenerateParameters(
@@ -8292,6 +8313,14 @@ func runProdMatrix(modelPath: String, maxNew: Int) async throws {
         }
         let t0 = CFAbsoluteTimeGetCurrent()
         let input = try await ctx.processor.prepare(input: userInput)
+        if dumpPrompt {
+            let ids = input.text.tokens.reshaped(-1).asArray(Int32.self).map { Int($0) }
+            let head = Array(ids.prefix(16))
+            let tail = ctx.tokenizer.decode(
+                tokenIds: Array(ids.suffix(96)),
+                skipSpecialTokens: false)
+            print("  Prompt \(label): tokens=\(ids.count) head=\(head) tail=\(tail.suffix(120).debugDescription)")
+        }
         nonisolated(unsafe) let send = input
         let stream = await engine.generate(input: send, parameters: params)
         var r = TurnResult()

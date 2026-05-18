@@ -151,7 +151,16 @@ public final class BatchKVCache: BaseKVCache {
     // BatchKVCache is a transient view — it is not serializable, trimmable, or copyable.
 
     public override var state: [MLXArray] {
-        get { [] }
+        get {
+            let states = slotCaches.map { $0.state }
+            guard states.allSatisfy({ $0.count >= 2 }) else { return [] }
+            let keys = states.map { $0[0] }
+            let values = states.map { $0[1] }
+            return [
+                padAndConcatenate(keys, along: 2),
+                padAndConcatenate(values, along: 2),
+            ]
+        }
         set { }
     }
 

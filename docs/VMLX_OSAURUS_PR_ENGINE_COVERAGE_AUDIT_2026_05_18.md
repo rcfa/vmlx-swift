@@ -28,11 +28,46 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
 
 2026-05-18 continuation refresh:
 
+- 2026-05-17 23:40 PDT Osaurus package-switch checkpoint:
+  vmlx-swift PR #1 is open/draft at
+  `c57903adf7677b699041d9ce2c6a6058e271973e` after prefixing the vendored
+  product names `VMLXJinja`, `VMLXHub`, `VMLXTokenizers`, and
+  `VMLXTransformers`. This directly targets the Osaurus PR #1147 CI failure
+  whose first actionable line was Xcode PIF duplicate product
+  `PRODUCTREF-PACKAGE-PRODUCT:Hub-1DE28832-dynamic`.
+- Osaurus PR #1147 is open/draft at
+  `74cac1196103f8d894e6af793d76270b2522b89b` and now pins vmlx-swift
+  `c57903adf7677b699041d9ce2c6a6058e271973e` with the prefixed
+  `VMLXTokenizers` / `VMLXJinja` products. Local verification for that
+  pin:
+  `xcrun swift build --package-path Packages/OsaurusCore --target OsaurusCore --jobs 2`
+  passed; focused
+  `RuntimePolicySourceTests|JinjaTemplateCompatibilityTests|MLXBatchAdapterTests|GenerationEventMapperTests|ModelRuntimeMappingTests`
+  passed 65/65; `xcodebuild -resolvePackageDependencies` with the CI
+  `-clonedSourcePackagesDirPath .spm-cache` shape passed; and a narrow
+  `xcodebuild test ... -only-testing:OsaurusCoreTests/RuntimePolicySourceTests`
+  passed. The local Xcode target graph explicitly showed `VMLXTokenizers`
+  and `VMLXJinja`, so the prior duplicate unprefixed `Hub` product path was
+  not reproduced.
+- Osaurus PR #1147 CI is still running for the pushed checkpoint at the time of
+  this note. Do not call the PR green until GitHub reports `test-core`,
+  `test-cli`, `swiftlint`, and `shellcheck` complete successfully.
+- Gemma 3n E2B looping follow-up is now closed for the native Swift text path,
+  not by a sampler guard. The live bundle
+  `/Users/eric/models/mlx-community/gemma-3n-E2B-it-4bit` passes the regenerated
+  turnmatrix at
+  `docs/local/live-model-matrix/20260518T072325Z_gemma3n_e2b_4bit_turnmatrix_after_batchstate_pr1/`.
+  Applicable rows pass for config, template, production defaults with tiered
+  cache off/on, multi-turn BatchEngine chat, growing chat cache, disk restore,
+  B=2 concurrent decode, and B=2 per-slot sampler. The row uses bundle defaults
+  (`temp=0.600 topP=0.950 topK=64 rep=nil`) and records ~120 tok/s short
+  decode with ~2.7 GiB RSS in the production smoke. Older ledger references to
+  a `20260518T_gemma4_e2b_refresh_no_fake_guards/` artifact are stale.
 - Single-package Osaurus switch status, current checkpoint:
   package/wiring readiness is high but still draft-gated; full runtime
-  production readiness remains partial until the live model matrix closes the
-  family-specific rows below. Current rough split is package wiring ~90%,
-  overall Osaurus production readiness ~60-65%.
+  production readiness remains partial until the remaining family-specific
+  rows below close. Current rough split after the Gemma 3n E2B text-path fix is
+  package wiring ~90%, overall Osaurus production readiness ~65-70%.
 - Consolidated package graph proof now exists on the vmlx-swift PR lane:
   `swift package describe --type json`, focused target builds for Hub,
   HuggingFace, and Tokenizers, focused runtime tests, and release
@@ -88,11 +123,15 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   `swift-transformers` pin `087a66b` is still fork-diverged from tokenizer
   speed commits on default `main`, and `mlx-swift` pin `0a56f904` is still an
   Osaurus fork lane with stream/wired-limit work rather than upstream parity.
-- Fresh `vmlx-swift` evidence added after the first audit:
-  `20260518T_gemma4_e2b_refresh_no_fake_guards/` and
-  `20260518T_ling_jangtq2_no_guard_refresh/`. Both prove no hidden sampler
-  guard behavior; failures, where present, were harness/product-budget issues,
-  not decode fixes.
+- Fresh `vmlx-swift` evidence added after the first audit includes the
+  Ling/JANGTQ no-guard refresh referenced elsewhere in the ledger and the
+  Gemma 3n E2B no-guard/live-cache regeneration. Root causes fixed for Gemma 3n:
+  conditional-generation text weights now remap into the text module, extra
+  audio/vision towers are dropped for the text dispatch, text vocab tables are
+  trimmed, the Gemma 3n BOS duplication matches the real tokenizer/template
+  path, query RoPE uses the pre-update cache offset, and `BatchKVCache.state`
+  returns batched shared-KV state so B=2 shared attention does not append stale
+  K/V.
 - VLM JANG weight loading now matches the LLM factory and passes the real
   `quantizationContainer?.quantization` value into `loadWeights` instead of the
   deprecated `baseConfig.quantization` alias. This keeps MXFP4/MXFP8 group-size
@@ -401,10 +440,10 @@ Recent dependency scan, 2026-05-04 through 2026-05-18:
 | Jinja parser and compact tool JSON | DSV4/Kimi/Gemma4/ZAYA/Laguna tool templates render without broken syntax or bloated separators. | `docs/local/production-readiness/20260517T2200_jinja_pin_parity/` and parser/cache refresh rows. | Covered for non-Kimi; Kimi excluded by instruction. |
 | Swift-transformers unused placeholder skip | Added-token delimiter regex must not include thousands of unused placeholders and must preserve special wrapper tokens. | Vendored tokenizer static check plus MiniMax/DSV4/Qwen/Omni live template rows. | Covered for pinned behavior; later speed commits not yet part of Osaurus pin. |
 | Generation defaults | Bundle defaults are source of truth before explicit request override. | Ledger rows print temp/topP/topK/minP/rep per family. | Covered for tested rows; require same telemetry for new rows. |
-| Hybrid SSM / CCA / SWA cache | Cache proof must be topology-specific, not generic prefix-hit. | Qwen/Ling/ZAYA/Gemma4 rows record disk L2, SSM companion, CCA, SWA incompatibility, and media salt where applicable. Fresh Gemma E2B refresh records disk hits/stores plus VL media-salt restore; fresh Ling no-guard refresh confirms Bailing template/decode stress without fake sampler fixes. | Covered for listed PASS rows; DSV4 long-context and ZAYA1-VL K remain open. |
+| Hybrid SSM / CCA / SWA cache | Cache proof must be topology-specific, not generic prefix-hit. | Qwen/Ling/ZAYA/Gemma4 rows record disk L2, SSM companion, CCA, SWA incompatibility, and media salt where applicable. Fresh Ling no-guard refresh confirms Bailing template/decode stress without fake sampler fixes. Gemma 3n E2B now proves text-path tiered cache off/on, disk restore, growing chat cache, and B=2 shared-KV cache state in `20260518T072325Z_gemma3n_e2b_4bit_turnmatrix_after_batchstate_pr1`. | Covered for listed PASS rows; DSV4 long-context and ZAYA1-VL K remain open. |
 | TurboQuant KV | Explicit TQ mode must preserve coherency and prove actual compression. | `20260518T_minimax_m27_jangtqk_tq_tail_fix_exact/` proves actual TQ transitions and exact outputs after tail preservation. | Fixed for MiniMax strict row; keep family-by-family gates. |
-| VL/media salt | Image/video/audio state must be isolated across turns and cache hits. | Qwen, ZAYA1-VL, Gemma4, and Omni rows prove same/different media behavior where implemented. | Raw Qwen high-res video and repeated Omni cache-on audio remain open. |
-| Reasoning on/off | No fake close; reasoning off must affect template/runtime where supported, and visible output must remain coherent. | Gemma4 reasoning matrix, MiniMax rows, DSV4 reasoning kwargs, Ling/Bailing aliases. Fresh Gemma E2B no-guard red/green pair proves the harness now accepts coherent stellar equivalents instead of forcing decode behavior; fresh Ling row proves the Russian stress prompt with `temp=0.7` stops normally. | Covered for tested families; package-wide model matrix still open for absent local bundles. |
+| VL/media salt | Image/video/audio state must be isolated across turns and cache hits. | Qwen, ZAYA1-VL, Gemma4, and Omni rows prove same/different media behavior where implemented. Gemma 3n conditional-generation bundles are now classified text-only in the matrix because current Swift dispatch is `Gemma3nTextModel` and intentionally drops media towers. | Raw Qwen high-res video, repeated Omni cache-on audio, and native Gemma 3n VLM remain open. No Gemma 3n media row is claimed. |
+| Reasoning on/off | No fake close; reasoning off must affect template/runtime where supported, and visible output must remain coherent. | Gemma4 reasoning matrix, MiniMax rows, DSV4 reasoning kwargs, Ling/Bailing aliases. Fresh Ling row proves the Russian stress prompt with `temp=0.7` stops normally. Gemma 3n E2B production matrix flips `enable_thinking` on/off under bundle defaults and remains coherent with no reasoning-only output. | Covered for tested families; package-wide model matrix still open for absent local bundles. |
 | MTP autodetect | Only real tensor evidence plus usable tuning may enable MTP; model names and stale metadata are insufficient. Qwen auto-depth must come from bundle-local `vmlx_mtp_tuning.json`, not profile/name rules. | Non-Kimi MTP census and Qwen MTP settings docs; CRACK rows explicitly stay MTP off. Focused tests cover tuned D2, validated D3, missing tuning, blocked tuning rows, valid tuning without MTP tensors, `MTPBundleStatus.snapshot`, missing-tuning evidence, and LLM/VLM factory wiring into `ModelConfiguration`. | Correct fail-closed policy covered; full MTP speed target remains separate/open. |
 
 ## Production-Quality Checklist Still Required
