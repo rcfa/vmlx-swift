@@ -126,7 +126,8 @@ public struct ModelConfiguration: Sendable {
     ///
     /// This is a capability/status surface only. `preserved_enabled` means the
     /// artifact has MTP tensors preserved; it does not enable speculative MTP
-    /// decode unless ``MTPBundleStatus/speculativeDecodeEnabled`` is true.
+    /// decode unless tensor evidence and usable bundle-local MTP tuning make
+    /// ``MTPBundleStatus/speculativeDecodeEnabled`` true.
     public var mtpStatus: MTPBundleStatus?
 
     public init(

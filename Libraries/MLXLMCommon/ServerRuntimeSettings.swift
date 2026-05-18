@@ -237,9 +237,9 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
     /// ``validationIssues(mtpStatus:)`` intentionally stays status-only for
     /// cheap UI checks. Osaurus should use this overload before launching a
     /// session when it has `config.json` bytes and optional `jang_config.json`
-    /// metadata, because a bundle can be generally `speculative_verified` while
-    /// a specific profile, such as Qwen3.6 JANG_2K, is still blocked by the
-    /// verified runtime policy.
+    /// metadata, because a bundle can have complete MTP tensors while a
+    /// specific profile, such as Qwen3.6 JANG_2K, is still blocked by missing
+    /// or unusable bundle-local tuning.
     public func validationIssues(
         configData: Data?,
         jangConfig: JangConfig?,

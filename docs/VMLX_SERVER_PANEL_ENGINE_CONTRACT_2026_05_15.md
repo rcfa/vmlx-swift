@@ -26,7 +26,7 @@ fallbacks.
 | Performance & Generation | `VMLXServerGenerationDefaults` | `nil` means bundle metadata first, then documented engine fallback. Do not write hidden default sampling guards here. |
 | Tool Integration | `VMLXServerToolSettings` | MCP config, auto tool choice, parser overrides, reasoning parser override, optional custom template. |
 | Multimodal Support | `VMLXServerMultimodalSettings` | Auto/force off/force on VLM mode plus video/audio toggles and media-salt cache requirement. |
-| Speculative Decoding / MTP | `VMLXServerMTPSettings` | Auto launches native MTP only when real tensor evidence plus the supported Qwen profile policy resolve a D3 launch. Force-on errors for metadata-only or unsupported profiles. |
+| Speculative Decoding / MTP | `VMLXServerMTPSettings` | Auto launches native MTP only when real tensor evidence plus usable bundle-local `vmlx_mtp_tuning.json` resolve a launch depth. Force-on errors for metadata-only, missing-tuning, blocked-tuning, or unsupported profiles. |
 
 ## Gateway Runtime States
 
@@ -129,10 +129,11 @@ For Qwen3.6/Qwen3.5 MTP-capable bundles, the server should call
 `resolvedLoadConfiguration(base:configData:jangConfig:status:)`, and
 `resolvedMTPDraftStrategy(configData:jangConfig:status:)` from the same
 evidence snapshot. A real supported MTP bundle resolves to
-`LoadConfiguration.nativeMTP=true` plus `.nativeMTP(depth: 3)`. A non-MTP CRACK
-bundle, metadata-only bundle, or unsupported profile resolves with native MTP
-off. This avoids the broken middle state where the request asks for MTP but the
-loader scrubbed the sidecar weights.
+`LoadConfiguration.nativeMTP=true` plus `.nativeMTP(depth:)` using the
+bundle-local `vmlx_mtp_tuning.json` best depth. A non-MTP CRACK bundle,
+metadata-only bundle, missing/unusable tuning row, or unsupported profile
+resolves with native MTP off. This avoids the broken middle state where the
+request asks for MTP but the loader scrubbed the sidecar weights.
 
 MTP cache rules:
 
