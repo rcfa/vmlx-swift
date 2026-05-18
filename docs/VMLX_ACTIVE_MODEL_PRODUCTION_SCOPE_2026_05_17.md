@@ -159,6 +159,32 @@ forced thinking closure, or name-based MTP activation.
 | Qwen3.6 35B A3B JANGTQ non-MTP | Fresh `20260518T_qwen36_35b_jangtq_crack_turnmatrix/` passes config/template, production defaults cache OFF/ON, BatchEngine single/chat/disk/B=2/per-slot/TurboQuant rows, VL batch chat, structured VL cache, media-salt isolation, and mixed text/image/video. Bundle defaults apply as `temp=1.000 topP=0.950 topK=20 rep=nil`; MTP depth is `off`; production decode is about `84-89 tok/s`; peak RSS is about `11.8 GiB`; `PROD_CACHE_STATS` records `pagedIncompatible=true`, disk hit/store counts, and SSM companion hit; disk L2 writes real `.safetensors` blocks; bounded video logs `BENCH_VL_VIDEO_RESIZE=224` and `video pixels shape: [560, 1536]`. | PASS for implemented bounded text/image/video/cache surfaces; high-res video scaling remains PARTIAL | Same CRACK boundary: no native-MTP auto-enable without tensor evidence, no fake sampler guard, and raw high-resolution video still needs explicit media budget policy. |
 | Qwen3.5 35B non-MTP | `20260517T164940Z_release_turnmatrix_qwen35_35b_4bit_after_compat_split/` passes config/template, production cache off/on, BatchEngine, TQ B=2 compatibility split, VL cache, media salt, and mixed text/image/video. | PASS with throughput watch | High-resolution video can be very slow; Qwen hybrid SSM cache restore must stay topology-specific. |
 
+### 2026-05-18 MiniMax JANG_K Refresh
+
+`docs/local/live-model-matrix/20260518T_minimax_m27_jangk_crack_turnmatrix_after_quant_diag_fix/`
+supersedes the earlier infer-only MiniMax JANG_K status. The large
+`MiniMax-M2.7-JANG_K-CRACK` bundle now passes config/template, production cache
+OFF/ON, BatchEngine single/chat, disk restore, B=2 concurrent, per-slot
+sampler, and TurboQuant-KV B=2 rows. Bundle defaults remain
+`temp=1.000 topP=0.950 topK=40 rep=nil`; MTP depth is `off`; cache ON records
+`PROD_CACHE_STATS hybrid=false paged{hits=1,misses=6} disk{stores=21}`; and
+the growing-chat row hits the canonical history boundary (`47/83`) and returns
+`vmlx-cache-green` with `finish=stop`.
+
+The JANG loader diagnostic was corrected in this pass: explicit per-layer
+2/4/6/8 affine quantization in `config.json` is now treated as declared
+metadata, so the row no longer emits the misleading
+`config-metadata mismatch patched in-memory` warning. It still prints the
+shape-authoritative override count, which is expected for mixed-bit JANG.
+
+The raw token-prefix `batch_cache_hit` diagnostic remains a failed diagnostic
+for MiniMax. A 512-token rerun shows the raw Q/A prompt continues the pattern
+until max tokens; this is prompt-shape, not a cache-store miss. Production chat
+cache proof comes from the growing-chat and disk-restore rows. Do not hide this
+with repetition penalty, top-k, temperature, forced stop, or looser validators;
+replace the raw diagnostic with a MiniMax chat-template cache probe before
+full promotion.
+
 ## No-Fake-Guard Invariants For The Remaining Rows
 
 - `generation_config.json` values are the default source before any explicit

@@ -342,7 +342,8 @@ public func loadWeights(
             hiddenSizeHint: hiddenHint,
             linearAttnValueDimHint: linearAttnValueDimHint,
             validInDims: validInDims,
-            declaredDefaultQuantization: declaredAffineQuantization ?? quantization)
+            declaredDefaultQuantization: declaredAffineQuantization ?? quantization,
+            declaredPerLayerQuantization: perLayerQuantization)
 
         if !inferred.perLayerQuantization.isEmpty {
             let b = inferred.quantization?.bits ?? -1

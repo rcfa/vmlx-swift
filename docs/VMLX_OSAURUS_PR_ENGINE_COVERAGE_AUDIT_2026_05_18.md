@@ -48,6 +48,17 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   `20260518T_ling_jangtq2_no_guard_refresh/`. Both prove no hidden sampler
   guard behavior; failures, where present, were harness/product-budget issues,
   not decode fixes.
+- MiniMax JANG_K evidence was refreshed under
+  `20260518T_minimax_m27_jangk_crack_turnmatrix_after_quant_diag_fix/`.
+  The row upgrades the large JANG_K CRACK bundle from infer-only to
+  production-shaped chat/cache proof: cache OFF/ON, BatchEngine chat, disk
+  restore, B=2, per-slot sampler, and TurboQuant-KV B=2 pass with bundle
+  defaults and MTP off. The JANG loader diagnostic now distinguishes expected
+  explicit mixed-bit per-layer metadata from real config drift, so this bundle
+  no longer reports a false `config-metadata mismatch patched in-memory`.
+  The raw token-prefix `batch_cache_hit` diagnostic still fails by prompt
+  shape and remains non-promotable for MiniMax; the chat-template growing-cache
+  row is the production proof.
 - VLM JANG weight loading now matches the LLM factory and passes the real
   `quantizationContainer?.quantization` value into `loadWeights` instead of the
   deprecated `baseConfig.quantization` alias. This keeps MXFP4/MXFP8 group-size

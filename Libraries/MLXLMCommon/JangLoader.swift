@@ -1356,7 +1356,8 @@ public struct JangLoader: Sendable {
         hiddenSizeHint: Int? = nil,
         linearAttnValueDimHint: Int? = nil,
         validInDims: Set<Int> = [],
-        declaredDefaultQuantization: BaseConfiguration.Quantization? = nil
+        declaredDefaultQuantization: BaseConfiguration.Quantization? = nil,
+        declaredPerLayerQuantization: BaseConfiguration.PerLayerQuantization? = nil
     ) -> BaseConfiguration.PerLayerQuantization {
         // JANGTQ bundles use two independent bit namespaces:
         //   - `mxtq_bits` / `routed_expert_bits` for tq_packed routed experts.
@@ -1382,6 +1383,44 @@ public struct JangLoader: Sendable {
                 let basePath = String(key.dropLast(".scales".count))
                 quantizedLayers.insert(basePath)
             }
+        }
+
+        func declaredQuantization(for basePath: String) -> BaseConfiguration.Quantization? {
+            func variants(_ key: String) -> [String] {
+                var out = [key]
+                if key.contains(".attn.") || key.hasSuffix(".attn") {
+                    out.append(key.replacingOccurrences(of: ".attn.", with: ".self_attn."))
+                    if key.hasSuffix(".attn") {
+                        out.append(String(key.dropLast(".attn".count)) + ".self_attn")
+                    }
+                }
+                if key.hasPrefix("language_model.model.") {
+                    out.append(String(key.dropFirst("language_model.".count)))
+                } else if key.hasPrefix("language_model.") {
+                    out.append(String(key.dropFirst("language_model.".count)))
+                } else {
+                    out.append("model.\(key)")
+                    out.append("language_model.\(key)")
+                    out.append("language_model.model.\(key)")
+                }
+                return Array(Set(out))
+            }
+
+            guard let declaredPerLayerQuantization else {
+                return declaredDefaultQuantization
+            }
+            for key in variants(basePath) {
+                if let declared = declaredPerLayerQuantization.perLayerQuantization[key] {
+                    switch declared {
+                    case .quantize(let quantization):
+                        return quantization
+                    case .skip:
+                        return nil
+                    }
+                }
+            }
+            return declaredPerLayerQuantization.quantization
+                ?? declaredDefaultQuantization
         }
 
         var disagreementCount = 0
@@ -1551,10 +1590,22 @@ public struct JangLoader: Sendable {
                     bitWidthsUsed: bitWidthsUsed)
             }
 
-            if bits != defaultBits || inferredGroupSize != groupSize {
+            let declaredForLayer = declaredQuantization(for: basePath)
+            let declaredMatches =
+                declaredForLayer?.bits == bits
+                && declaredForLayer?.groupSize == inferredGroupSize
+                && (declaredForLayer?.mode ?? defaultMode) == defaultMode
+            let layerHasMetadataDrift =
+                declaredForLayer == nil
+                || !declaredMatches
+
+            if layerHasMetadataDrift {
                 disagreementCount += 1
                 if sampleDeclared == nil {
-                    sampleDeclared = (defaultBits, groupSize)
+                    sampleDeclared = (
+                        declaredForLayer?.bits ?? defaultBits,
+                        declaredForLayer?.groupSize ?? groupSize
+                    )
                     sampleInferred = (bits, inferredGroupSize)
                 }
             }
