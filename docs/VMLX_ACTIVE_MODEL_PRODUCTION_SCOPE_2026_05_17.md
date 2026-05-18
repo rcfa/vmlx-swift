@@ -154,7 +154,7 @@ forced thinking closure, or name-based MTP activation.
 | Gemma3n E2B | Current `20260518T_current_gemma3n_e2b_prod_default_vs_greedy/` re-runs the local `/Users/eric/models/mlx-community/gemma-3n-E2B-it-4bit` text path after rebuilding `RunBench`. Fresh-cache bundle defaults pass 7/7 with `temp=0.600 topP=0.950 topK=64 rep=nil`, S2 TTFT `65ms -> 23ms`, about `123-125 tok/s`, peak RSS `2771 MiB`, and disk L2 `hits=1,misses=21,stores=21`. Fresh-cache explicit greedy also passes 7/7 with `temp=0.000 topP=1.000 topK=0 rep=nil`, about `129-131 tok/s`, peak RSS `2753 MiB`, and disk L2 `hits=1,misses=21,stores=20`. Earlier Gemma3n loop artifacts are superseded by the prompt/RoPE/embedding-scale fixes recorded in the coverage audit. | PASS / TEXT-ONLY | The Swift path intentionally sanitizes the conditional-generation bundle to text keys and drops Gemma3n vision/audio towers. Do not claim Gemma3n VLM/audio support until a native processor and media-cache row exists. |
 | GPT-OSS / GLM5 / Mistral4 / Pixtral parsers | `20260517T2148_nonexcluded_parser_cache_refresh/` covers GPT-OSS Harmony, GLM5 aliases, Mistral4/Pixtral aliases, and marker leak prevention in the current tree. | UNIT ONLY / OPEN for runtime | No local GPT-OSS, GLM5, Mistral4, or Pixtral bundle has a live decode row in this pass. Parser coverage is not model production readiness. |
 | Laguna XS.2 | Current refresh `20260518T_current_laguna_xs_turnmatrix_after_compile_gate/` passes release rows after the pre-fix `20260518T_current_laguna_xs_turnmatrix/` exposed a Laguna compiled-decode loop in the 3-turn chat row. Production decode is about `33 tok/s`, bundle defaults are `temp=0.700 topP=0.900 topK=0 rep=nil`, disk L2 hits, and TurboQuant B=2 isolation passes. | PASS for text; compiled decode disabled until parity | Paged prefix hit is `N-A` by topology; disk-backed restore is the accepted cache proof. The compile gate is an engine capability gate for an unsafe optional acceleration path, not a sampler/repetition/reasoning guard. |
-| ZAYA text | Fresh current `20260517T_zaya_jangtq4_current_non_kimi_turnmatrix/` passes JANGTQ4 config/template, production defaults cache OFF/ON, BatchEngine single/chat/disk/B=2/per-slot/TurboQuant rows; generic prefix cache hit is correctly `N-A`. Fresh current `20260518T001613Z_zaya_jangtqk_current_turnmatrix/` now passes the same implemented JANGTQ_K text rows, with `temp=0.600 topP=1.000 topK=0 rep=nil`, cache-on speed about `61-63 tok/s`, peak RSS about `3.8 GiB`, and `PROD_CACHE_STATS` recording disk L2 plus SSM companion state. Earlier `20260517T_release_turnmatrix_zaya_scope/` also passes JANGTQ4 and MXFP4 text rows. | PASS for current JANGTQ4, current JANGTQ_K, and prior MXFP4 | Keep the 50+ tok/s watch active. Do not treat the ZAYA CCA path as generic paged cache; it is path-dependent and disk/SSM-backed. The JANGTQ_K tokenizer/effective-EOS warning remains visible and is not handled by a sampler guard. |
+| ZAYA text | Earlier `20260517T_zaya_jangtq4_current_non_kimi_turnmatrix/` passes JANGTQ4 config/template, production defaults cache OFF/ON, BatchEngine single/chat/disk/B=2/per-slot/TurboQuant rows; generic prefix cache hit is correctly `N-A`. Fresh current `20260518T001613Z_zaya_jangtqk_current_turnmatrix/` passes the same implemented JANGTQ_K text rows, with `temp=0.600 topP=1.000 topK=0 rep=nil`, cache-on speed about `61-63 tok/s`, peak RSS about `3.8 GiB`, and `PROD_CACHE_STATS` recording disk L2 plus SSM companion state. New stricter live reruns `20260518T_zaya_jangtq4_fresh_prod_cache/`, `20260518T_zaya_jangtq4_seed0_compare/`, and `20260518T_zaya_jangtq4_math_rootcause/` keep the speed/cache path green at about 66-68 tok/s, but expose a direct-mode reasoning-off quality blocker: JANGTQ4 returns `2` for `2 + 2` under bundle defaults, seed 0, and explicit greedy. Top-k probes show both JANGTQ4 and MXFP4 rank `2` above `4` on the identical thinking-off prompt, and the no-hidden-guard story row stays inside reasoning at 256 and 768 tokens. | PARTIAL / CURRENT STRICT-PROMPT BLOCKER | Keep the 50+ tok/s watch active, but do not promote ZAYA text as fully reasoning/direct-mode production-clear from stale blue-sky rows. Do not treat the ZAYA CCA path as generic paged cache; it is path-dependent and disk/SSM-backed. The current blocker must not be hidden with temperature, top-k, repetition penalty, forced reasoning closure, or a looser validator. |
 | ZAYA1-VL | Fresh current `20260517T_zaya_vl_jangtq4_current_non_kimi_turnmatrix/` passes JANGTQ4 config/template, production defaults cache OFF/ON, BatchEngine text rows, disk restore, B=2 concurrent/per-slot/TurboQuant rows, VL batch chat, structured VL chat cache, and media-salt isolation. The VL row grounds the image with compile OFF/ON, answers the follow-up color as `blue`, hits disk restore for same-media prompts (`97/97`), and correctly misses when the image changes. Fresh current `20260518T_zaya_vl_jangtqk_current_turnmatrix/` improves the K lane by passing config/template, BatchEngine single/chat/disk/B=2/per-slot/TurboQuant, VL batch chat, media-salt, and text/image mixed rows, with video `N-A`. Root-cause refresh `20260518T_zaya_vl_jangtqk_rootcause_topk/` proves the K failure is first-token logits on identical rendered prompt IDs; K ranks `6,7,8,4`, while JANGTQ4 ranks `4` first. It also proves the reflected Swift modules use the real intended K plan, and the K/JANGTQ4 systematic tensor-plan delta is gate/up 2-bit versus 4-bit while sampled regular/down tensors are byte-identical. Earlier targeted rows also prove MXFP4 image/text/cache surfaces. | PASS for current JANGTQ4 and prior MXFP4 implemented image/text/cache; PARTIAL current for JANGTQ_K | JANGTQ_K still fails production defaults S1/S2 by returning `8` for `7+8-11`, and structured VL chat cache exhausts the 512-token cold-image budget. Current evidence points at a ZAYA1-VL K-profile fidelity blocker, not sampler/cache/parser/EOS. Do not promote this K lane or mask it with temperature, top-k, repetition, forced-stop, or reasoning-closure guards. Video is `N-A` because the processor does not implement video input. |
 | Nemotron Omni / Parakeet / RADIO | JANGTQ4 core artifacts under `20260517T170614Z_omni_live_voice_fresh_recheck/` and related Omni rows prove wrapper-token parity, pre-encoded Parakeet shape, raw PCM/pre-encoded paths, and 65-76 tok/s cache-off streaming rows without literal sound-marker leaks. Fresh `20260517T214045Z_nemotron_jangtq_omni_recheck/` passes the JANGTQ 48-token Omni matrix 18/18 with text, image, video/audio LMInput, media salt, hybrid SSM, and BatchEngine rows. Fresh `20260517T2215_nemotron_mxfp4_omni_recheck/` passes the MXFP4 48-token Omni matrix 18/18 with the same core surfaces. | PASS for JANGTQ, JANGTQ4, and MXFP4 core; PARTIAL for repeated cache-on audio | Independently encoded Parakeet chunks are not concat-safe. Live voice must retain PCM and submit full-snapshot pre-encoded audio or raw PCM at endpoint. Repeated cache-on live audio still needs a focused quality/root-cause gate before full live-voice production promotion. |
 | MiniMax M2.7 | Small JANGTQ rows prove generation config (`temp=1.000 topP=0.950 topK=40 rep=nil`), greedy/no-guard behavior, coherent thinking on/off alternation, and no loops/leaks at 38-47 tok/s depending on row. Fresh `20260518T001219Z_minimax_m27_jangtqk_crack_infer/` proves the large JANGTQ_K CRACK bundle passes config/template plus 7/7 `BENCH_PROD` cache-off with `temp=1.000 topP=0.950 topK=40 rep=nil`, MTP off, no reasoning leak on OFF rows, about `48-49 tok/s`, and peak RSS about `55.9 GiB`. Fresh `20260518T001257Z_minimax_m27_jangk_crack_infer/` proves the large JANG_K CRACK bundle passes the same infer gate at about `45-50 tok/s`, peak RSS about `41.0 GiB`, with an in-memory shape-inferred 6-bit metadata repair logged. Fresh `20260518T_minimax_m27_jangtqk_crack_turnmatrix_strict_tq_gate/` proves the large JANGTQ_K production-shaped growing-chat cache path; final focused `20260518T_minimax_m27_jangtqk_growing_chat_cache_fail_loud_macro/` re-proves corrected MiniMax `enable_thinking=false` template parity after removing the silent fallback escape: canonical history-boundary cache hit `[47]`, disk hit `47/83`, warm turn `finish=stop`, and `vmlx-cache-green` recall at prompt-time ratio `0.08`. Fresh `20260518T_minimax_m27_jangtqk_tq_tail_fix_exact/` proves strict TurboQuant(4,4) B=2 after the cache-codec fix: plain+TQ and TQ+TQ both stop normally with exact five-item outputs, and diagnostics show real compression (`tqCompressionsA=1`, `tqCompressionsB=2`). | PARTIAL / CACHE-CHAT + TQ B=2 PASS | CRACK models are not MTP models unless tensor evidence proves otherwise. Raw token-prefix `batch_cache_hit` remains a failed diagnostic because the raw Q/A prompt length-stops for this template; it is not production chat proof. The preserved pre-fix TQ artifact `20260518T_minimax_m27_jangtqk_tq_b2_strict_fail_loud_macro/` showed active-tail KV compression causing length-stop drift; the fix preserves sink and recent prompt/decode tail exactly and compresses only the older middle span. Low-footprint active-routed proof is still open; no hidden sampler guard is allowed to compensate for any failure. |
@@ -222,6 +222,36 @@ After rebuilding release `RunBench`, three fresh rows were run on this checkout:
   3173 MiB, and the same disk-backed Gemma4 cache topology. This is not a
   reason to add a hidden sampler guard; it is a default-sampling/validator
   caveat that should stay visible.
+- DSV4 JANGTQ-K:
+  `docs/local/live-model-matrix/20260518T_dsv4_fresh_no_fake_rep_coherence/dsv4_no_fake_rep_coherence.log`
+  passes chat, reasoning off/on/max, and 5.5k-token semantic recall with both
+  DSV4 repetition-penalty knobs forced to `1.0`, so the result is not relying
+  on the harness's historical max-reasoning repetition default. The paired
+  cache artifact
+  `docs/local/live-model-matrix/20260518T_dsv4_fresh_growing_chat_cache/dsv4_growing_chat_cache.log`
+  proves disk restore at the post-answer boundary (`25/43`), prompt-time
+  reduction `4.329s -> 0.215s`, and generic paged counters held at zero under
+  `pagedIncompatible=true`.
+- Ling JANGTQ2, MiniMax Small JANGTQ, and Hy3 JANGTQ:
+  `20260518T_ling_jangtq2_fresh_prod_cache/` passes 7/7 with disk L2 and SSM
+  hits; `20260518T_minimax_small_jangtq_fresh_prod_cache/` passes 7/7 with
+  MiniMax reasoning ON/OFF routing and about 48-50 tok/s; and
+  `20260518T_hy3_jangtq_fresh_prod_cache/` passes 7/7 with bundle defaults,
+  though the cold S1 prompt takes about 61.8s TTFT before the cache hit drops
+  to 183ms. These rows broaden live process coverage but do not close the
+  remaining package-wide API/UI/MTP/VL matrix.
+- ZAYA JANGTQ4:
+  `20260518T_zaya_jangtq4_fresh_prod_cache/` is a new red artifact under the
+  current stricter production prompts. It records healthy speed and cache
+  (`66-68 tok/s`, `disk{hits=1,misses=26,stores=21}`, `ssm{hits=1}`), but
+  reasoning-off direct math returns `2` for `2 + 2`. Seed-0 and explicit-greedy
+  reruns reproduce the failure. Top-k root-cause probes under
+  `20260518T_zaya_jangtq4_math_rootcause/` show JANGTQ4 and MXFP4 both rank
+  token `2` above token `4` on the same rendered prompt; this is not a cache
+  or JANGTQ-only sampler artifact. The same folder contains no-hidden-guard
+  rows where thinking-on story generation does not close at 256 or 768 tokens.
+  Keep this red and fix/characterize the real direct-mode behavior before
+  marking ZAYA text fully production-ready.
 
 ## No-Fake-Guard Invariants For The Remaining Rows
 
@@ -683,7 +713,7 @@ remain useful for correctness while debugging, but they are not production
 speed gates. Speed claims must use `.build/release/RunBench` or an equivalent
 release-built server binary.
 
-ZAYA1-8B-JANGTQ4 also passed the release `BENCH_PROD` cache-on multi-turn row:
+ZAYA1-8B-JANGTQ4 passed the older release `BENCH_PROD` cache-on multi-turn row:
 
 - 7/7 rows passed with reasoning on/off flips, visible answers, no loop/leak,
   and normal stop reasons;
@@ -692,6 +722,17 @@ ZAYA1-8B-JANGTQ4 also passed the release `BENCH_PROD` cache-on multi-turn row:
 - cache stats showed `disk{hits=1,stores=21}` and `ssm{hits=1,reDerives=0}`;
 - ZAYA remains `pagedIncompatible=true` by topology, so generic paged-prefix
   hits must not be advertised for this family.
+
+2026-05-18 stricter prompt update: the current `BENCH_PROD` prompt set exposes
+a ZAYA text direct-mode blocker that the older blue-sky row did not cover.
+Fresh artifacts `20260518T_zaya_jangtq4_fresh_prod_cache/`,
+`20260518T_zaya_jangtq4_seed0_compare/`, and
+`20260518T_zaya_jangtq4_math_rootcause/` show that reasoning-off direct math
+returns `2` for `2 + 2` under bundle defaults, seed 0, and explicit greedy.
+Top-k probes show the same ranking on JANGTQ4 and MXFP4, so this is not a
+JANGTQ-only cache/sampler issue. Treat ZAYA text as speed/cache green but
+strict-prompt partial until the direct-mode behavior is fixed or explicitly
+documented as a product capability boundary.
 
 ## Nemotron Omni Live Voice Reverify
 

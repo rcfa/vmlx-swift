@@ -96,6 +96,39 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   The old hardcoded Qwen profile/depth rules are removed; local 27B MXFP4 proves
   `best_depth=2` is honored, and local 35B JANG_2K proves a blocked tuning row
   keeps auto-launch off.
+- Fresh live process rows after explicit user approval to load models:
+  `20260518T_dsv4_fresh_no_fake_rep_coherence/` passes DSV4 JANGTQ-K chat,
+  reasoning off/on/max, and 5.5k-token semantic recall with
+  `BENCH_DSV4_REPETITION_PENALTY=1.0` and
+  `BENCH_DSV4_MAX_REPETITION_PENALTY=1.0`, so the row does not rely on a hidden
+  repetition guard. `20260518T_dsv4_fresh_growing_chat_cache/` proves DSV4
+  post-answer disk restore: turn 2 hits disk at `25/43`, prompt time drops
+  `4.329s -> 0.215s`, and generic paged counters remain zero because
+  `pagedIncompatible=true` is the correct DSV4 topology.
+- Fresh Ling, MiniMax, and Hy3 rows were re-run from this checkout:
+  `20260518T_ling_jangtq2_fresh_prod_cache/` passes 7/7 with bundle defaults
+  (`temp=0.600 topP=1.000 topK=0 rep=nil`) and disk/SSM stats
+  `disk{hits=1,misses=23,stores=21}` plus `ssm{hits=1}`.
+  `20260518T_minimax_small_jangtq_fresh_prod_cache/` passes 7/7 with
+  MiniMax reasoning ON routed to `.reasoning`, reasoning OFF producing zero
+  reasoning deltas, about 48-50 tok/s, and a paged hit; the bundle still logs
+  shape-inferred mixed JANG metadata repair and that remains visible.
+  `20260518T_hy3_jangtq_fresh_prod_cache/` passes 7/7 with bundle defaults
+  (`temp=0.900 topP=1.000 topK=-1 rep=nil`), but cold S1 TTFT is about
+  61.8s before the cache hit drops to 183ms, so performance remains a watch item.
+- Fresh ZAYA text strict rerun is an honest regression/capability boundary, not
+  a sampler issue. `20260518T_zaya_jangtq4_fresh_prod_cache/`,
+  `20260518T_zaya_jangtq4_seed0_compare/`, and the paired greedy row under
+  `20260518T_zaya_jangtq4_math_rootcause/` all fail the current stricter
+  reasoning-off math row: direct-mode first token is `2` for `2 + 2` even with
+  `temp=0 topP=1 topK=0 rep=nil`. Top-k probes show both JANGTQ4 and MXFP4 rank
+  token `2` above token `4` on the same rendered thinking-off prompt, so this is
+  a ZAYA direct-mode/template boundary rather than cache contamination or a
+  JANGTQ-only decode bug. The same no-hidden-guard artifact shows thinking-on
+  story generation remains inside reasoning at 256 and 768 tokens. Do not
+  promote ZAYA text as fully reasoning/direct-mode production-clear from stale
+  blue-sky rows, and do not hide this with repetition, temperature, forced
+  thinking closure, or top-k policy.
 
 2026-05-17 20:25 PDT live refresh:
 
