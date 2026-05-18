@@ -207,6 +207,26 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   touches resolver pins; the switch PR must re-run pin-integrity checks after
   rebasing any open voice/runtime PRs.
 
+2026-05-17 21:23 PDT support-matrix validator refresh:
+
+- The #1133 unsupported-modality/error-shape gap now has a concrete
+  `vmlx-swift` API, not just descriptive JSON. `ModelRuntimeCapabilityRequest`
+  summarizes requested `text`, `vision`, `video`, `audio`, `tools`,
+  `reasoning`, and `native_mtp` lanes without retaining prompt text, paths,
+  image bytes, or audio samples. `ModelRuntimeCapabilitySnapshot.validate`
+  returns deterministic `unsupported_modality` and `unknown_modality_support`
+  issue rows with redacted log fields. This lets Osaurus fail closed before
+  routing multimodal plugin requests to a model/provider that has not proven the
+  requested lane.
+- Focused verification for this refresh:
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test
+  --filter 'VMLXUmbrellaProductTests' --jobs 2 -Xswiftc -F -Xswiftc
+  /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks`
+  passes 7/7. The suite covers VMLX re-export of the validator types,
+  unsupported-lane JSON shape, unknown-lane fail-closed/default behavior,
+  `.allowUnknown`, and UserInput-derived request summaries that do not leak
+  prompt content.
+
 ## Current Switch Verdict
 
 Not ready to say "single `vmlx-swift` dependency is production-clear for all

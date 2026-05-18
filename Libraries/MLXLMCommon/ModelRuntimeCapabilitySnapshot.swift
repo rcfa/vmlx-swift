@@ -125,6 +125,208 @@ public struct ModelRuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
         case generationDefaults = "generation_defaults"
         case nativeMTP = "native_mtp"
     }
+
+    public func validate(
+        request: ModelRuntimeCapabilityRequest,
+        unknownPolicy: ModelRuntimeCapabilityValidationPolicy = .rejectUnknown
+    ) -> ModelRuntimeCapabilityValidationResult {
+        var issues: [ModelRuntimeCapabilityIssue] = []
+        for modality in request.sortedModalities {
+            let support = support(for: modality)
+            switch support {
+            case .supported:
+                continue
+            case .unsupported:
+                issues.append(.unsupported(modality: modality, support: support))
+            case .unknown:
+                if unknownPolicy == .rejectUnknown {
+                    issues.append(.unknown(modality: modality, support: support))
+                }
+            }
+        }
+        return ModelRuntimeCapabilityValidationResult(
+            requestedModalities: request.sortedModalities,
+            issues: issues)
+    }
+
+    private func support(
+        for modality: ModelRuntimeRequestModality
+    ) -> ModelRuntimeCapabilitySupport {
+        switch modality {
+        case .text:
+            supportsText
+        case .vision:
+            supportsVision
+        case .video:
+            supportsVideo
+        case .audio:
+            supportsAudio
+        case .tools:
+            supportsTools
+        case .reasoning:
+            supportsReasoning
+        case .nativeMTP:
+            supportsNativeMTP
+        }
+    }
+}
+
+public enum ModelRuntimeRequestModality: String, Codable, Sendable, Equatable, CaseIterable {
+    case text
+    case vision
+    case video
+    case audio
+    case tools
+    case reasoning
+    case nativeMTP = "native_mtp"
+}
+
+public struct ModelRuntimeCapabilityRequest: Codable, Sendable, Equatable {
+    public let modalities: Set<ModelRuntimeRequestModality>
+
+    public init(modalities: Set<ModelRuntimeRequestModality>) {
+        self.modalities = modalities
+    }
+
+    public init(
+        input: UserInput,
+        usesReasoning: Bool = false,
+        usesNativeMTP: Bool = false
+    ) {
+        var modalities: Set<ModelRuntimeRequestModality> = [.text]
+        if !input.images.isEmpty {
+            modalities.insert(.vision)
+        }
+        if !input.videos.isEmpty {
+            modalities.insert(.video)
+        }
+        if !input.audios.isEmpty {
+            modalities.insert(.audio)
+        }
+        if input.tools?.isEmpty == false {
+            modalities.insert(.tools)
+        }
+        if usesReasoning {
+            modalities.insert(.reasoning)
+        }
+        if usesNativeMTP {
+            modalities.insert(.nativeMTP)
+        }
+        self.modalities = modalities
+    }
+
+    public var sortedModalities: [ModelRuntimeRequestModality] {
+        modalities.sorted { lhs, rhs in
+            Self.sortIndex(lhs) < Self.sortIndex(rhs)
+        }
+    }
+
+    private static func sortIndex(_ modality: ModelRuntimeRequestModality) -> Int {
+        switch modality {
+        case .text:
+            0
+        case .vision:
+            1
+        case .video:
+            2
+        case .audio:
+            3
+        case .tools:
+            4
+        case .reasoning:
+            5
+        case .nativeMTP:
+            6
+        }
+    }
+}
+
+public enum ModelRuntimeCapabilityValidationPolicy: String, Codable, Sendable, Equatable {
+    case rejectUnknown = "reject_unknown"
+    case allowUnknown = "allow_unknown"
+}
+
+public struct ModelRuntimeCapabilityIssue: Codable, Sendable, Equatable {
+    public let code: String
+    public let modality: ModelRuntimeRequestModality
+    public let support: ModelRuntimeCapabilitySupport
+    public let message: String
+    public let redactedLogFields: [String: String]
+
+    public init(
+        code: String,
+        modality: ModelRuntimeRequestModality,
+        support: ModelRuntimeCapabilitySupport,
+        message: String,
+        redactedLogFields: [String: String]
+    ) {
+        self.code = code
+        self.modality = modality
+        self.support = support
+        self.message = message
+        self.redactedLogFields = redactedLogFields
+    }
+
+    public static func unsupported(
+        modality: ModelRuntimeRequestModality,
+        support: ModelRuntimeCapabilitySupport
+    ) -> Self {
+        Self(
+            code: "unsupported_modality",
+            modality: modality,
+            support: support,
+            message: "Model capability snapshot reports \(modality.rawValue) as unsupported.",
+            redactedLogFields: [
+                "code": "unsupported_modality",
+                "modality": modality.rawValue,
+                "support": support.rawValue,
+            ])
+    }
+
+    public static func unknown(
+        modality: ModelRuntimeRequestModality,
+        support: ModelRuntimeCapabilitySupport
+    ) -> Self {
+        Self(
+            code: "unknown_modality_support",
+            modality: modality,
+            support: support,
+            message: "Model capability snapshot does not prove \(modality.rawValue) support.",
+            redactedLogFields: [
+                "code": "unknown_modality_support",
+                "modality": modality.rawValue,
+                "support": support.rawValue,
+            ])
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case code
+        case modality
+        case support
+        case message
+        case redactedLogFields = "redacted_log_fields"
+    }
+}
+
+public struct ModelRuntimeCapabilityValidationResult: Codable, Sendable, Equatable {
+    public let allowed: Bool
+    public let requestedModalities: [ModelRuntimeRequestModality]
+    public let issues: [ModelRuntimeCapabilityIssue]
+
+    public init(
+        requestedModalities: [ModelRuntimeRequestModality],
+        issues: [ModelRuntimeCapabilityIssue]
+    ) {
+        self.allowed = issues.isEmpty
+        self.requestedModalities = requestedModalities
+        self.issues = issues
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case allowed
+        case requestedModalities = "requested_modalities"
+        case issues
+    }
 }
 
 private extension ModelRuntimeCapabilitySnapshot {

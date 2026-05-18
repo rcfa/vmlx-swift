@@ -28,6 +28,13 @@ fallbacks.
 | Multimodal Support | `VMLXServerMultimodalSettings` | Auto/force off/force on VLM mode plus video/audio toggles and media-salt cache requirement. |
 | Speculative Decoding / MTP | `VMLXServerMTPSettings` | Auto launches native MTP only when real tensor evidence plus usable bundle-local `vmlx_mtp_tuning.json` resolve a launch depth. Force-on errors for metadata-only, missing-tuning, blocked-tuning, or unsupported profiles. |
 
+The panel/server should validate each request against
+`ModelRuntimeCapabilitySnapshot.validate(request:unknownPolicy:)` before it
+routes plugin or multimodal traffic. The default validator is fail-closed:
+explicitly unsupported lanes return `unsupported_modality`, unknown lanes return
+`unknown_modality_support`, and the JSON/log fields contain only lane/support
+metadata rather than prompt text, media bytes, or local paths.
+
 ## Gateway Runtime States
 
 The server panel should expose each loaded model as a gateway session with at

@@ -29,6 +29,9 @@ struct VMLXUmbrellaProductTests {
         let _: NativeMTPTuning.Type = NativeMTPTuning.self
         let _: NativeMTPTuningSnapshot.Type = NativeMTPTuningSnapshot.self
         let _: ModelRuntimeCapabilitySnapshot.Type = ModelRuntimeCapabilitySnapshot.self
+        let _: ModelRuntimeCapabilityRequest.Type = ModelRuntimeCapabilityRequest.self
+        let _: ModelRuntimeCapabilityValidationResult.Type =
+            ModelRuntimeCapabilityValidationResult.self
     }
 
     @Test("umbrella exposes MTP tuning snapshot JSON for Osaurus")
@@ -194,5 +197,102 @@ struct VMLXUmbrellaProductTests {
         #expect(capabilities.supportsVision == true)
         #expect(capabilities.supportsVideo == true)
         #expect(capabilities.supportsAudio == true)
+    }
+
+    @Test("capability snapshot rejects unsupported modalities with redacted error shape")
+    func rejectsUnsupportedModalitiesWithRedactedErrorShape() throws {
+        let capabilities = JangCapabilities(
+            supportsTools: false,
+            supportsThinking: nil,
+            supportsText: true,
+            supportsVision: true,
+            supportsVideo: nil,
+            supportsAudio: false,
+            family: "gemma4",
+            modality: "vision",
+            cacheType: "swa")
+        let configuration = ModelConfiguration(
+            directory: URL(fileURLWithPath: "/tmp/private/Gemma4-E2B"),
+            generationDefaults: GenerationConfigFile(temperature: 1.0, topK: 64))
+        let snapshot = ModelRuntimeCapabilitySnapshot(
+            configuration: configuration,
+            capabilities: capabilities,
+            modelType: "gemma4")
+
+        let request = ModelRuntimeCapabilityRequest(
+            modalities: [.text, .vision, .video, .audio, .tools, .reasoning])
+        let result = snapshot.validate(request: request)
+
+        #expect(!result.allowed)
+        #expect(result.requestedModalities == [.text, .vision, .video, .audio, .tools, .reasoning])
+        #expect(result.issues.map(\.code) == [
+            "unknown_modality_support",
+            "unsupported_modality",
+            "unsupported_modality",
+            "unknown_modality_support",
+        ])
+        #expect(result.issues.map(\.modality) == [.video, .audio, .tools, .reasoning])
+        #expect(result.issues.first?.redactedLogFields["modality"] == "video")
+
+        let data = try JSONEncoder().encode(result)
+        let object = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["allowed"] as? Bool == false)
+        let encoded = String(decoding: data, as: UTF8.self)
+        #expect(encoded.contains("unsupported_modality"))
+        #expect(!encoded.contains("/tmp/private"))
+        #expect(!encoded.contains("Gemma4-E2B"))
+    }
+
+    @Test("capability validator can allow unknown lanes while rejecting explicit unsupported lanes")
+    func capabilityValidatorCanAllowUnknownLanes() throws {
+        let snapshot = ModelRuntimeCapabilitySnapshot(
+            configuration: ModelConfiguration(
+                directory: URL(fileURLWithPath: "/tmp/private/TextModel")),
+            capabilities: JangCapabilities(
+                supportsText: true,
+                supportsVision: false,
+                supportsVideo: nil,
+                supportsAudio: nil,
+                family: "unknown",
+                modality: nil),
+            modelType: "qwen3")
+        let request = ModelRuntimeCapabilityRequest(modalities: [.video, .audio, .vision])
+
+        let strict = snapshot.validate(request: request)
+        #expect(!strict.allowed)
+        #expect(strict.issues.map(\.code) == [
+            "unsupported_modality",
+            "unknown_modality_support",
+            "unknown_modality_support",
+        ])
+
+        let permissive = snapshot.validate(request: request, unknownPolicy: .allowUnknown)
+        #expect(!permissive.allowed)
+        #expect(permissive.issues.map(\.code) == ["unsupported_modality"])
+        #expect(permissive.issues.first?.modality == .vision)
+    }
+
+    @Test("capability request from UserInput records media without prompt content")
+    func capabilityRequestFromUserInputRecordsMediaWithoutPromptContent() throws {
+        let image = UserInput.Image.array(MLXArray.zeros([1, 1, 3]))
+        let audio = UserInput.Audio.samples([0.0, 0.1], sampleRate: 16_000)
+        let input = UserInput(
+            prompt: "private prompt text that must not enter capability logs",
+            images: [image],
+            audios: [audio])
+
+        let request = ModelRuntimeCapabilityRequest(
+            input: input,
+            usesReasoning: true,
+            usesNativeMTP: true)
+
+        #expect(request.sortedModalities == [.text, .vision, .audio, .reasoning, .nativeMTP])
+        let data = try JSONEncoder().encode(request)
+        let encoded = String(decoding: data, as: UTF8.self)
+        #expect(encoded.contains("vision"))
+        #expect(encoded.contains("audio"))
+        #expect(encoded.contains("native_mtp"))
+        #expect(!encoded.contains("private prompt text"))
     }
 }
