@@ -347,6 +347,40 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
 - Boundary: this is Gemma4 image/text proof only. Audio/video-specific Gemma4
   plugin behavior remains separate until a dedicated media lane is run.
 
+2026-05-18 11:25 PDT fresh process rows after explicit model-load approval:
+
+- Release `RunBench` was rebuilt on the current checkout with
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift build
+  -c release --product RunBench --jobs 2`. The build completed; warnings were
+  pre-existing bench cleanup warnings and not release blockers for these rows.
+- Fresh DSV4 DSML row:
+  `docs/local/live-model-matrix/20260518T_fresh_user_allowed_process_rows/dsv4_dsml_toolcall_fresh.log`
+  loads `DeepSeek-V4-Flash-JANGTQ-K`, reports `Tool format: dsml`,
+  `Reasoning stamp: think_xml`, emits one structured
+  `get_weather({"location":"Tokyo"})` tool call, stops normally after 43
+  generated tokens, and leaks no raw DSML or reasoning markers into `.chunk`.
+- Fresh Gemma3n E2B text/cache row:
+  `docs/local/live-model-matrix/20260518T_fresh_user_allowed_process_rows/gemma3n_e2b_prod_default_cache_fresh.log`
+  passes 7/7 with bundle defaults from `generation_config.json`
+  (`temp=0.600 topP=0.950 topK=64 minP=0.000 rep=nil`), no reasoning rail,
+  about 122 tok/s, peak RSS 2772 MiB, and L2 disk stats
+  `hits=1,misses=21,stores=21`. The row remains text-only; Gemma3n image/audio
+  towers are still intentionally not claimed.
+- Fresh Gemma4 E2B bundle-default row:
+  `docs/local/live-model-matrix/20260518T_fresh_user_allowed_process_rows/gemma4_e2b_prod_default_cache_fresh.log`
+  is an honest red artifact at 6/7. It does not loop or crash, and cache stats
+  record `disk{hits=1,misses=17,stores=14}`, but at bundle defaults
+  (`temp=1.000 topP=0.950 topK=64 rep=nil`) the UTF-8 prompt produced coherent
+  Chinese text containing `你好` and a Chinese cafe word while omitting the
+  literal token `cafe`/`café` requested by the harness.
+- Fresh Gemma4 E2B explicit-greedy row:
+  `docs/local/live-model-matrix/20260518T_fresh_user_allowed_process_rows/gemma4_e2b_prod_greedy_cache_fresh.log`
+  passes 7/7 with no repetition penalty (`temp=0.000 topP=1.000 topK=0
+  rep=nil`), about 184-205 tok/s, peak RSS 3173 MiB, and the same L2 disk
+  topology (`hits=1,misses=17,stores=14`). This is a runtime/cache coherence
+  proof and a validator/default-sampling caveat, not permission to add a hidden
+  sampler guard in Osaurus or vMLX.
+
 2026-05-18 07:00 PDT clean consumer package repair:
 
 - Osaurus PR #1147 pin testing exposed a clean-resolve package failure at

@@ -76,12 +76,16 @@ docs/local/live-model-matrix/20260517T210417Z_gemma4_vl_chat_cache/
 docs/local/live-model-matrix/20260517T212204Z_gemma4_batch_toolcall_real_schema/
 docs/local/live-model-matrix/20260517T_reasoning_turn_matrix_harness/
 docs/local/live-model-matrix/20260517T_gemma4_e2b_osaurus_loop_report/
+docs/local/live-model-matrix/20260518T_fresh_user_allowed_process_rows/gemma3n_e2b_prod_default_cache_fresh.log
+docs/local/live-model-matrix/20260518T_fresh_user_allowed_process_rows/gemma4_e2b_prod_default_cache_fresh.log
+docs/local/live-model-matrix/20260518T_fresh_user_allowed_process_rows/gemma4_e2b_prod_greedy_cache_fresh.log
 ```
 
 Fresh live DSV4 artifacts:
 
 ```text
 docs/local/live-model-matrix/20260517T_dsv4_current_non_kimi_scope/
+docs/local/live-model-matrix/20260518T_fresh_user_allowed_process_rows/dsv4_dsml_toolcall_fresh.log
 ```
 
 Fresh live Qwen artifacts:
@@ -191,6 +195,33 @@ rerun showed the raw Q/A prompt continues the pattern until max tokens; this is
 prompt-shape, not a cache-store miss. Production chat cache proof comes from
 the growing-chat and disk-restore rows. Do not hide this with repetition
 penalty, top-k, temperature, forced stop, or looser validators.
+
+### 2026-05-18 Fresh Process Refresh
+
+The user explicitly allowed and required live model processes for confirmation.
+After rebuilding release `RunBench`, three fresh rows were run on this checkout:
+
+- DSV4 DSML tool calling:
+  `docs/local/live-model-matrix/20260518T_fresh_user_allowed_process_rows/dsv4_dsml_toolcall_fresh.log`
+  passes with one structured `get_weather({"location":"Tokyo"})` event, stop
+  after 43 generated tokens, no raw DSML marker in `.chunk`, and no reasoning
+  leak. This keeps the DSML parser fix tied to real model output rather than a
+  source-only parser assertion.
+- Gemma3n E2B:
+  `docs/local/live-model-matrix/20260518T_fresh_user_allowed_process_rows/gemma3n_e2b_prod_default_cache_fresh.log`
+  passes 7/7 with bundle defaults (`temp=0.600 topP=0.950 topK=64 rep=nil`),
+  no reasoning parser, S2 TTFT `81ms -> 24ms`, about 122 tok/s, peak RSS
+  2772 MiB, and L2 disk stats `hits=1,misses=21,stores=21`.
+- Gemma4 E2B:
+  `docs/local/live-model-matrix/20260518T_fresh_user_allowed_process_rows/gemma4_e2b_prod_default_cache_fresh.log`
+  is retained as a red bundle-default artifact. It passes 6/7 without looping
+  or crashing, but the stochastic UTF-8 row answers coherently in Chinese and
+  omits the literal `cafe`/`café` token. The paired explicit-greedy row
+  `gemma4_e2b_prod_greedy_cache_fresh.log` passes 7/7 with
+  `temp=0.000 topP=1.000 topK=0 rep=nil`, about 184-205 tok/s, peak RSS
+  3173 MiB, and the same disk-backed Gemma4 cache topology. This is not a
+  reason to add a hidden sampler guard; it is a default-sampling/validator
+  caveat that should stay visible.
 
 ## No-Fake-Guard Invariants For The Remaining Rows
 
