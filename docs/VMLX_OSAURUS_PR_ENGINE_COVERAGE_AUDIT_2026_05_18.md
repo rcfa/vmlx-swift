@@ -302,6 +302,27 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
 - The repeated-video row again reports `raw=4028`, `effective=1382`,
   `disk matched=1382/1382 remaining=0`, and replay hits `1->2`.
 
+2026-05-18 08:02 PDT Gemma 4 E4B gap closure:
+
+- The previously unlisted Osaurus-local E4B bundle
+  `/Users/eric/osaurus_models/finished/gemma-4-e4b-it-4bit` now has current
+  text/cache, reasoning, and image-cache proof under
+  `docs/local/live-model-matrix/20260518T_current_gemma4_e4b_prod_text_cache/`.
+- `prod_default_cache.log` passes 7/7 through the production BatchEngine row
+  with real bundle defaults
+  `temp=1.000 topP=0.950 topK=64 minP=0.000 rep=nil`, Harmony parser, S2 TTFT
+  `73ms -> 29ms`, about `118-129 tok/s`, peak RSS `4727 MiB`, and L2 stats
+  `disk{hits=1,misses=17,stores=14,maxBytes=4294967296}`.
+- `reasoning_turn_matrix.log` passes one loaded transcript with reasoning
+  OFF/ON/OFF/ON plus efforts `low,medium,high,max`. The ON recall turn routes
+  `527` reasoning chars, all turns stop normally, and cache stats report
+  `disk{hits=1,misses=24,stores=16,...}`.
+- `vl_chat_cache.log` proves structured chat image cache behavior: same image
+  HITs `disk 301/301` and drops TTFT `168ms -> 26ms`, a different image MISSes,
+  and the follow-up remains grounded in `red, white, and blue`.
+- Boundary: this is Gemma4 image/text proof only. Audio/video-specific Gemma4
+  plugin behavior remains separate until a dedicated media lane is run.
+
 2026-05-18 07:00 PDT clean consumer package repair:
 
 - Osaurus PR #1147 pin testing exposed a clean-resolve package failure at
