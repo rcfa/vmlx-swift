@@ -1243,6 +1243,45 @@ Recent dependency scan, 2026-05-04 through 2026-05-18:
   hit/store counters. This is still vmlx proof only; Osaurus app/API route,
   UI, cache, memory, tool-result, and saved-setting artifacts remain open.
 
+2026-05-18 16:23 PDT Osaurus PR #1147 no-fake-guard release contract:
+
+- Osaurus PR #1147 head `dc2684e0` adds a pinned
+  `No-Fake-Guard Release Contract` to
+  `docs/internal/live-gates/20260518T_pr1147_completion_audit.md` and locks it
+  with `RuntimePolicySourceTests`.
+- The contract mirrors the engine-side release rule: VL, MTP, JANG, JANGTQ,
+  MXFP, MLX, dense, MoE, hybrid SSM, sliding-window, DSV4-native cache, ZAYA
+  CCA, and omni/media rows must be coherent through the real runtime path. A
+  model cannot pass because Osaurus or vmlx hid the symptom with a family clamp,
+  parser repair, forced stop token, or output rewrite.
+- Every fix after a red model run now requires a before/after live proof pair:
+  the pre-fix failure artifact, a root-cause note naming the real template,
+  tokenizer/BOS/EOS, native `top_k`, generation metadata, attention
+  architecture, cache restore, SSM rederive, media preprocessing, MTP
+  verification/commit, parser, or scheduler issue, and a post-fix artifact with
+  coherent visible output, normal stop, no loop, no marker leak, cache stats,
+  TTFT, tok/s, RSS, and physical-footprint context.
+- MTP remains fail-closed: auto-launch requires real `mtp.*` tensor evidence
+  plus an unblocked `vmlx_mtp_tuning.json`; CRACK or display-name-only rows
+  stay MTP-disabled with the reason recorded. Do not force D3 when tuning says
+  D2, and do not enable a blocked tuning row.
+- Reasoning must be proven by family: Qwen/QwQ/MiniMax-style
+  `enable_thinking`, DSV4 `instruct`/high/`reasoning_effort=max`, Hy3 native
+  `reasoning_effort`, Ling default-off plus explicit opt-in, and unsupported
+  families with hidden/ignored controls and no stale cache-key component.
+- VLM/omni rows must send real media and prove processor/runtime agreement.
+  Image+text, text-only follow-up with media salt nil/absent, different-media,
+  repeated-media, unsupported-media inverse, and cache-salt behavior are
+  required before any media family can pass.
+- Cache and batching rows must prove single-batch and feasible multi-batch
+  behavior with prefix, paged, block-L2 disk, TurboQuant KV encode/decode, SSM
+  companion, DSV4 native cache/pool, ZAYA CCA, media cache, sleep/wake, and L2
+  max-GB enforcement as topology-valid ON/OFF or N-A rows.
+- Verification for the Osaurus gate update:
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
+  --package-path Packages/OsaurusCore --filter RuntimePolicySourceTests
+  --jobs 2` passes 28/28, and `git diff --check` passes.
+
 ## Osaurus PR #1147 Function-Level Gate
 
 The Osaurus package-switch PR now carries an F1-F12 live checklist in
