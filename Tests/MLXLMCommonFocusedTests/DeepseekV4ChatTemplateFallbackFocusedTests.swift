@@ -132,7 +132,9 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         #expect(rendered.contains("<\u{FF5C}DSML\u{FF5C}parameter name=\"city\" string=\"true\">Paris</\u{FF5C}DSML\u{FF5C}parameter>"))
         #expect(rendered.contains("<\u{FF5C}DSML\u{FF5C}parameter name=\"units\" string=\"true\">metric</\u{FF5C}DSML\u{FF5C}parameter>"))
         #expect(rendered.contains("<tool_result>{\"temp_c\":18}</tool_result>"))
-        #expect(rendered.hasSuffix("<\u{FF5C}User\u{FF5C}>Summarize.<\u{FF5C}Assistant\u{FF5C}></think>"))
+        #expect(rendered.contains("<tool_result>{\"temp_c\":18}</tool_result>\n\nSummarize."))
+        #expect(!rendered.contains("<tool_result>{\"temp_c\":18}</tool_result><\u{FF5C}User\u{FF5C}>Summarize."))
+        #expect(rendered.hasSuffix("Summarize.<\u{FF5C}Assistant\u{FF5C}></think>"))
     }
 
     @Test("default message generator preserves explicit tool-call ids")

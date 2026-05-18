@@ -330,7 +330,12 @@ public enum ChatTemplateFallbacks {
 {{- '\n' -}}
 {%- endif -%}
 {%- elif message['role'] == 'user' or message['role'] == 'developer' -%}
+{%- set prev_role = messages[loop.index0 - 1]['role'] if loop.index0 > 0 else none -%}
+{%- if prev_role == 'tool' -%}
+{{- '\n\n' -}}{{- message['content'] -}}
+{%- else -%}
 {{- user_token -}}{{- message['content'] -}}
+{%- endif -%}
 {%- if tools and not (messages|length > 0 and messages[0]['role'] == 'system') and loop.index0 == ns.last_user_index -%}
 {{- render_tools(tools) -}}
 {%- endif -%}
@@ -353,7 +358,13 @@ public enum ChatTemplateFallbacks {
 {%- endif -%}
 {{- eos -}}
 {%- elif message['role'] == 'tool' -%}
-{{- user_token -}}{{- '<tool_result>' -}}{{- message['content'] -}}{{- '</tool_result>' -}}
+{%- set prev_role = messages[loop.index0 - 1]['role'] if loop.index0 > 0 else none -%}
+{%- if prev_role == 'tool' -%}
+{{- '\n\n' -}}
+{%- else -%}
+{{- user_token -}}
+{%- endif -%}
+{{- '<tool_result>' -}}{{- message['content'] -}}{{- '</tool_result>' -}}
 {%- set next_role = messages[loop.index0 + 1]['role'] if loop.index0 + 1 < messages|length else none -%}
 {%- if next_role == 'assistant' or loop.last and add_generation_prompt -%}
 {{- asst_token -}}

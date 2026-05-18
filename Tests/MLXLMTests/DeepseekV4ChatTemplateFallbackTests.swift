@@ -83,4 +83,58 @@ final class DeepseekV4ChatTemplateFallbackTests: XCTestCase {
             rendered.debugDescription)
     }
 
+    func testMinimalFallbackMatchesCanonicalToolResultMerge() throws {
+        let template = try Template(ChatTemplateFallbacks.dsv4Minimal)
+        let rendered = try template.renderDSV4([
+            "messages": [
+                ["role": "user", "content": "Check Paris weather."],
+                [
+                    "role": "assistant",
+                    "content": "Checking.",
+                    "tool_calls": [[
+                        "id": "call_weather",
+                        "type": "function",
+                        "name": "get_weather",
+                        "arguments": ["city": "Paris"],
+                        "function": [
+                            "name": "get_weather",
+                            "arguments": ["city": "Paris"],
+                        ],
+                    ]],
+                ],
+                ["role": "tool", "tool_call_id": "call_weather", "content": "{\"temp_c\":18}"],
+                ["role": "user", "content": "Summarize."],
+            ],
+            "add_generation_prompt": true,
+            "enable_thinking": false,
+        ])
+
+        let canonical = DeepseekV4ChatEncoder().encode(
+            messages: [
+                .init(role: .user, content: "Check Paris weather."),
+                .init(
+                    role: .assistant,
+                    content: "Checking.",
+                    toolCalls: [
+                        .init(
+                            id: "call_weather",
+                            name: "get_weather",
+                            arguments: "{\"city\":\"Paris\"}")
+                    ]),
+                .init(role: .tool, content: "{\"temp_c\":18}", toolCallId: "call_weather"),
+                .init(role: .user, content: "Summarize."),
+            ],
+            thinkingMode: .chat)
+
+        XCTAssertEqual(rendered, canonical)
+        XCTAssertTrue(
+            rendered.contains(
+                "<tool_result>{\"temp_c\":18}</tool_result>\n\nSummarize."),
+            rendered.debugDescription)
+        XCTAssertFalse(
+            rendered.contains(
+                "<tool_result>{\"temp_c\":18}</tool_result><\u{FF5C}User\u{FF5C}>Summarize."),
+            rendered.debugDescription)
+    }
+
 }
