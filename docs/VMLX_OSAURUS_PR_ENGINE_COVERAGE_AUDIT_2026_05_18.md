@@ -411,6 +411,17 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
     `24ms`; cache stats report `pagedIncompatible=true`,
     `disk{hits=1,misses=21,stores=21,maxBytes=4294967296}`, and no SSM
     rederive because this text path is non-hybrid.
+- 2026-05-18 07:58 PDT current rerun:
+  `docs/local/live-model-matrix/20260518T_current_gemma3n_e2b_prod_default_vs_greedy/`
+  re-runs the same row after the latest `RunBench` rebuild. Fresh-cache
+  `default_fresh_cache.log` passes 7/7 with real bundle defaults
+  `temp=0.600 topP=0.950 topK=64 rep=nil`, about `123-125 tok/s`, peak RSS
+  `2771 MiB`, S2 TTFT `65ms -> 23ms`, and L2 stats
+  `disk{hits=1,misses=21,stores=21,maxBytes=4294967296}`. Fresh-cache
+  `greedy_fresh_cache.log` also passes 7/7 with explicit
+  `temp=0.000 topP=1.000 topK=0 rep=nil`, about `129-131 tok/s`, peak RSS
+  `2753 MiB`, and L2 stats `disk{hits=1,misses=21,stores=20,...}`. Both rows
+  wrote real `.safetensors` cache blocks under fresh `/tmp` cache roots.
 - Boundary: this clears the current Gemma3n text-only loading/decode/cache row.
   It does not claim Gemma3n vision or audio towers are wired in Swift; those
   towers are intentionally dropped in the text sanitizer until the VLM/audio
