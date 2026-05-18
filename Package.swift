@@ -273,6 +273,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-collections.git", from: "1.5.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.24.0"),
+        .package(url: "https://github.com/ibireme/yyjson.git", exact: "0.12.0"),
     ],
     targets: [
         cmlx,
@@ -367,12 +368,6 @@ let package = Package(
             path: "Vendors/swift-huggingface/Sources/HuggingFace"
         ),
         .target(
-            name: "VMLXYYJSON",
-            path: "Vendors/yyjson",
-            sources: ["src"],
-            publicHeadersPath: "src"
-        ),
-        .target(
             name: "VMLXGeneration",
             dependencies: ["VMLXTokenizers"],
             path: "Vendors/swift-transformers/Sources/Generation"
@@ -384,7 +379,7 @@ let package = Package(
                 "VMLXHuggingFace",
                 .product(name: "OrderedCollections", package: "swift-collections"),
                 .product(name: "Crypto", package: "swift-crypto"),
-                "VMLXYYJSON",
+                .product(name: "yyjson", package: "yyjson"),
             ],
             path: "Vendors/swift-transformers/Sources/Hub",
             resources: [.process("Resources")],

@@ -400,7 +400,9 @@ Before claiming this engine is production-ready for Osaurus, the minimum
 behavioral subset is:
 
 1. Package graph and vendor proof: no remote Jinja, swift-transformers,
-   HuggingFace, EventSource, or yyjson package dependency remains.
+   HuggingFace, or EventSource package dependency remains; yyjson is the one
+   shared C package dependency so Osaurus does not link two copies of the same
+   public `yyjson_*` symbols when another package also uses swift-transformers.
 2. Build proof for Jinja, Hub, Tokenizers, Generation, Models, MLXLMCommon,
    MLXLLM, MLXVLM, MLXEmbedders, RunBench, TPRankWorker, and distributed tools.
 3. Runtime status proof from package APIs, focused tests, and RunBench metrics.
