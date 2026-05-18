@@ -14,8 +14,9 @@ Key changes since this plan was first written:
 
 - All six local Qwen3.6 MTP/VL bundles are now present:
   27B JANG_4M, 27B MXFP4, 27B MXFP8, 35B JANG_2K, 35B MXFP4, and 35B MXFP8.
-- MTP activation is tensor-gated. Supported Qwen MXFP/JANG_4M MTP bundles now
-  resolve auto native D3 from real weight evidence; JANG_2K remains blocked.
+- MTP activation is tensor- and tuning-gated. Supported Qwen MXFP/JANG_4M MTP
+  bundles now resolve auto native depth from real weight evidence plus the
+  bundle-local `vmlx_mtp_tuning.json`; JANG_2K remains blocked by its tuning row.
 - Text MTP speed rows now clear the target for the MXFP artifacts where the
   current gate selected MTP: 27B MXFP4 D3, 35B MXFP4 D3, and 35B MXFP8 D3.
   27B MXFP8 currently prefers D2 on the count prompt. 35B JANG_2K remains
@@ -106,8 +107,9 @@ tensor-proven runtime eligibility from metadata-only claims:
 ```text
 mode=preserved_enabled
 hasCompleteMTPArtifact=true
-speculativeDecodeEnabled=true for supported Qwen native-MTP profiles
-canAutoLaunchMTP=true for supported Qwen native-MTP profiles
+hasUsableNativeMTPTuning=true when vmlx_mtp_tuning.json validates the artifact
+speculativeDecodeEnabled=true only after tensor evidence plus usable tuning
+canAutoLaunchMTP=true only after tensor evidence plus usable tuning
 requiresAcceptRejectBeforeEnable=false
 ```
 
@@ -136,6 +138,12 @@ Directory names are not MTP evidence. `jang_config.runtime.bundle_has_mtp`,
 weights are present. Metadata without tensor evidence is reported as
 `metadata_only_missing_weights`.
 
+For Qwen native MTP, tensor evidence is still not enough to auto-launch. The
+inspector also reads `vmlx_mtp_tuning.json` from the bundle root. Auto launch is
+allowed only when that file's `native_mtp` row is validated, output-equivalent,
+unblocked, and carries a positive `best_depth`. Missing or blocked tuning keeps
+`canAutoLaunchMTP=false`, even if the MTP tensors are present.
+
 It detects VL tensors separately from:
 
 - `vision_tower.*`
@@ -162,10 +170,18 @@ loaded. Suggested capability/health shape:
     "tensor_count": 31,
     "vision_tensor_count": 333,
     "has_complete_artifact": true,
+    "has_usable_native_mtp_tuning": true,
     "speculative_decode_enabled": true,
     "can_auto_launch": true,
     "requires_accept_reject_before_enable": false,
-    "status_line": "mtp: preserved_enabled, layers=1, tensors=31, speculative=on"
+    "status_line": "mtp: preserved_enabled, layers=1, tensors=31, tuning=d3, speculative=on",
+    "tuning": {
+      "file": "vmlx_mtp_tuning.json",
+      "best_depth": 3,
+      "validated": true,
+      "output_equivalent": true,
+      "blocked": false
+    }
   }
 }
 ```
@@ -178,9 +194,10 @@ Osaurus launch policy must be:
 - `mode=preserved_disabled`: run normal autoregressive decode; report MTP
   preserved but disabled.
 - `mode=preserved_enabled`, `enabled`, or `speculative_verified`: call the
-  full-evidence resolver. Supported Qwen profiles with real MTP tensors
-  auto-launch native MTP; unsupported profiles, such as current JANG_2K, remain
-  off or blocked if force-on is requested.
+  full-evidence resolver. Supported Qwen profiles with real MTP tensors and a
+  usable `vmlx_mtp_tuning.json` row auto-launch native MTP at that row's
+  `best_depth`; unsupported, missing-tuning, or blocked profiles remain off or
+  blocked if force-on is requested.
 
 If a caller explicitly requests MTP while the full-evidence resolver returns
 `.off` or `.blocked`, Osaurus should return a clear unsupported/error response.
@@ -192,7 +209,9 @@ Swift now exposes a full-evidence settings bridge for this policy:
 - `VMLXServerRuntimeSettings.resolvedMTPLaunch(configData:jangConfig:status:)`
   combines server settings, raw `config.json`, optional `jang_config.json`, and
   `MTPBundleStatus`. It blocks profiles with generic `speculative_verified`
-  status but no supported native-MTP recommendation, such as Qwen3.6 JANG_2K.
+  status but no supported native-MTP recommendation, such as Qwen3.6 JANG_2K,
+  and blocks tensor-proven Qwen bundles when `vmlx_mtp_tuning.json` is missing
+  or unusable.
 - `VMLXServerRuntimeSettings.resolvedMTPDraftStrategy(...)` returns
   `.nativeMTP(depth:)` only when the full-evidence launch decision is
   `.speculative`.
@@ -204,16 +223,18 @@ Swift now exposes a full-evidence settings bridge for this policy:
 - `mtp.draftTokenLimit` must be positive when set. If it is below the
   recommended depth, the resolver caps the native-MTP depth and records
   `server_draft_token_limit=<n>` in the recommendation evidence.
-- `effectiveMTPLaunchMode(for:)` remains status-only. It is useful for display,
-  but Osaurus should use the full-evidence resolver before launch because
+- `effectiveMTPLaunchMode(for:)` is still a cheap display helper, but it now
+  requires usable tuning before reporting `.speculative`. Osaurus should still
+  use the full-evidence resolver before launch because model-type and
   profile-specific blocks require `config.json` and optional `jang_config.json`.
 
 ## Explicit Swift Runtime Activation
 
 The package has an automatic Qwen3.6 native-MTP path for supported bundles with
-real MTP tensor evidence. The concrete runtime still uses
-`LoadConfiguration.nativeMTP=true` plus `DraftStrategy.nativeMTP(depth:)`; the
-server settings resolver now derives both from the same evidence snapshot.
+real MTP tensor evidence and a usable bundle-local `vmlx_mtp_tuning.json`. The
+concrete runtime still uses `LoadConfiguration.nativeMTP=true` plus
+`DraftStrategy.nativeMTP(depth:)`; the server settings resolver now derives both
+from the same evidence snapshot.
 `ModelFactory.loadModel` passes that load-time decision through a task-local
 activation override so concurrent loads do not share a process-global MTP env
 flag. The `VMLINUX_NATIVE_MTP=1` environment knob remains compatibility-only
@@ -223,6 +244,7 @@ and is not inferred from `mtp_num_hidden_layers` alone. It requires:
 
 - supported Qwen3.5/Qwen3.6 text, VL, or Qwen3.5 MoE model type;
 - complete MTP tensor evidence from the index or safetensors headers;
+- usable `vmlx_mtp_tuning.json` metadata for the exact bundle;
 - an active Swift model exposing `NativeMTPModel`;
 - resolved load-time and request-time runtime selection from
   `VMLXServerRuntimeSettings`;

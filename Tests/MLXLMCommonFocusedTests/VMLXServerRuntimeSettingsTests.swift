@@ -139,21 +139,32 @@ struct VMLXServerRuntimeSettingsTests {
         #expect(!source.contains("baseConfig.quantization : nil"))
     }
 
-    @Test("MTP auto launches complete tensor-proven artifacts")
-    func mtpAutoLaunchesCompleteTensorProvenArtifacts() {
+    @Test("MTP auto helper requires bundle tuning file")
+    func mtpAutoHelperRequiresBundleTuningFile() {
         let settings = VMLXServerRuntimeSettings()
-        let status = MTPBundleStatus(
+        let missingTuning = MTPBundleStatus(
             bundleHasMTP: true,
             configuredLayers: 4,
             tensorCount: 31,
             mode: .preservedEnabled)
+        let tuned = MTPBundleStatus(
+            bundleHasMTP: true,
+            configuredLayers: 4,
+            tensorCount: 31,
+            mode: .preservedEnabled,
+            nativeMTPTuning: NativeMTPTuning(
+                bestDepth: 3,
+                validated: true,
+                outputEquivalent: true,
+                artifact: "docs/internal/release-gates/qwen-depth3/result.json"))
 
-        #expect(settings.effectiveMTPLaunchMode(for: status) == .speculative)
-        #expect(settings.validationIssues(mtpStatus: status).isEmpty)
+        #expect(settings.effectiveMTPLaunchMode(for: missingTuning) == .off)
+        #expect(settings.effectiveMTPLaunchMode(for: tuned) == .speculative)
+        #expect(settings.validationIssues(mtpStatus: tuned).isEmpty)
     }
 
-    @Test("MTP force-on requires complete tensor evidence")
-    func mtpForceOnRequiresCompleteTensorEvidence() {
+    @Test("MTP force-on requires complete tensor evidence and tuning")
+    func mtpForceOnRequiresCompleteTensorEvidenceAndTuning() {
         var settings = VMLXServerRuntimeSettings()
         settings.mtp.mode = .forceOn
         let tensorProven = MTPBundleStatus(
@@ -161,6 +172,16 @@ struct VMLXServerRuntimeSettingsTests {
             configuredLayers: 4,
             tensorCount: 31,
             mode: .preservedEnabled)
+        let tuned = MTPBundleStatus(
+            bundleHasMTP: true,
+            configuredLayers: 4,
+            tensorCount: 31,
+            mode: .preservedEnabled,
+            nativeMTPTuning: NativeMTPTuning(
+                bestDepth: 3,
+                validated: true,
+                outputEquivalent: true,
+                artifact: "docs/internal/release-gates/qwen-depth3/result.json"))
         let metadataOnly = MTPBundleStatus(
             bundleHasMTP: false,
             configuredLayers: 4,
@@ -171,8 +192,12 @@ struct VMLXServerRuntimeSettingsTests {
         #expect(settings.validationIssues(mtpStatus: metadataOnly).contains {
             $0.severity == .error && $0.field == "mtp.mode"
         })
-        #expect(settings.effectiveMTPLaunchMode(for: tensorProven) == .speculative)
-        #expect(settings.validationIssues(mtpStatus: tensorProven).isEmpty)
+        #expect(settings.effectiveMTPLaunchMode(for: tensorProven) == .blocked)
+        #expect(settings.validationIssues(mtpStatus: tensorProven).contains {
+            $0.severity == .error && $0.field == "mtp.mode"
+        })
+        #expect(settings.effectiveMTPLaunchMode(for: tuned) == .speculative)
+        #expect(settings.validationIssues(mtpStatus: tuned).isEmpty)
     }
 
     @Test("MTP launch resolution uses config policy and draft limit")
@@ -304,7 +329,7 @@ struct VMLXServerRuntimeSettingsTests {
                 architecture: JangArchitecture(hasMoE: true)),
             status: verified)
 
-        #expect(settings.effectiveMTPLaunchMode(for: verified) == .speculative)
+        #expect(settings.effectiveMTPLaunchMode(for: verified) == .blocked)
         #expect(launch.launchMode == .blocked)
         #expect(launch.recommendation == nil)
         #expect(settings.validationIssues(

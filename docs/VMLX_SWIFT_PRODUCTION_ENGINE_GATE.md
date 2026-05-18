@@ -462,7 +462,9 @@ Current package surface added on 2026-05-15:
 
 - `MTPBundleInspector`, `MTPBundleStatus`, and `MTPRuntimeMode` provide no-load
   detection from config metadata, JANG runtime metadata, safetensors indexes, and
-  safetensors headers.
+  safetensors headers. Qwen native-MTP auto depth is additionally read from
+  bundle-local `vmlx_mtp_tuning.json`; missing, unvalidated, non-equivalent, or
+  blocked tuning keeps auto-launch off.
 - `ModelConfiguration` / `ResolvedModelConfiguration` carry `mtpStatus` so
   Osaurus can expose truthful capabilities after model load.
 - `preserved_enabled` is status only: it means the artifact has MTP tensors
@@ -473,7 +475,8 @@ Current package surface added on 2026-05-15:
 Required gates:
 
 - MTP must be off by default unless the model bundle explicitly declares a valid
-  MTP head/path and the request or launch config enables it.
+  MTP head/path, has usable bundle-local tuning for its native-MTP depth, and
+  the request or launch config enables it.
 - The runtime must expose `mtp_available`, `mtp_enabled`, draft depth, accepted
   token count, rejected token count, acceptance rate, fallback count, and speed
   delta in metrics/status.

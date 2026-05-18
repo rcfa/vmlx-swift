@@ -219,7 +219,7 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
                 if !status.canAutoLaunchMTP {
                     issues.append(.error(
                         field: "mtp.mode",
-                        message: "MTP cannot be forced on until the bundle has complete tensor evidence for a supported native-MTP runtime."))
+                        message: "MTP cannot be forced on until the bundle has complete tensor evidence and usable vmlx_mtp_tuning.json metadata for a supported native-MTP runtime."))
                 }
             } else {
                 issues.append(.warning(

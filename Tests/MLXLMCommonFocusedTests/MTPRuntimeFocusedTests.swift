@@ -67,6 +67,14 @@ struct MTPRuntimeFocusedTests {
                 "model.layers.0.self_attn.q_proj.weight": "model-00001-of-00029.safetensors",
             ] as [String: Any],
         ], to: root.appendingPathComponent("model.safetensors.index.json"))
+        try writeJSON([
+            "native_mtp": [
+                "best_depth": 3,
+                "validated": true,
+                "output_equivalent": true,
+                "artifact": "docs/internal/release-gates/qwen-depth3/result.json",
+            ] as [String: Any],
+        ], to: root.appendingPathComponent("vmlx_mtp_tuning.json"))
 
         let status = try MTPBundleInspector.inspect(modelDirectory: root)
 
@@ -79,6 +87,7 @@ struct MTPRuntimeFocusedTests {
         #expect(!status.requiresAcceptRejectBeforeEnable)
         #expect(status.speculativeDecodeEnabled)
         #expect(status.configEvidence.contains("text_config.mtp_num_hidden_layers=1"))
+        #expect(status.configEvidence.contains("tuning_file=vmlx_mtp_tuning.json"))
         #expect(status.statusLine.contains("speculative=on"))
     }
 
@@ -137,6 +146,45 @@ struct MTPRuntimeFocusedTests {
         #expect(recommendation?.verifierMode == "sequential_repair")
         #expect(recommendation?.evidence.contains("tuning_file=vmlx_mtp_tuning.json") == true)
         #expect(recommendation?.reason.contains("vmlx_mtp_tuning.json") == true)
+    }
+
+    @Test("complete MTP tensors without tuning stay non auto launch")
+    func completeMTPTensorsWithoutTuningStayNonAutoLaunch() throws {
+        let root = try makeTemporaryBundle(name: "qwen-mtp-missing-tuning")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try writeJSON([
+            "model_type": "qwen3_vl",
+            "text_config": [
+                "model_type": "qwen3_5_moe_text",
+                "num_hidden_layers": 48,
+                "mtp_num_hidden_layers": 1,
+            ] as [String: Any],
+            "quantization": [
+                "mode": "mxfp4",
+                "bits": 4,
+            ] as [String: Any],
+        ], to: root.appendingPathComponent("config.json"))
+        try writeJSON([
+            "runtime": [
+                "bundle_has_mtp": true,
+                "mtp_layers": 1,
+                "mtp_mode": "preserved_enabled",
+            ] as [String: Any],
+        ], to: root.appendingPathComponent("jang_config.json"))
+        try writeJSON([
+            "weight_map": [
+                "mtp.fc.weight": "model-00029-of-00029.safetensors",
+                "mtp.layers.0.self_attn.q_proj.weight": "model-00029-of-00029.safetensors",
+                "model.layers.0.self_attn.q_proj.weight": "model-00001-of-00029.safetensors",
+            ] as [String: Any],
+        ], to: root.appendingPathComponent("model.safetensors.index.json"))
+
+        let status = try MTPBundleInspector.inspect(modelDirectory: root)
+
+        #expect(status.hasCompleteMTPArtifact)
+        #expect(!status.canAutoLaunchMTP)
+        #expect(status.statusLine.contains("tuning required"))
     }
 
     @Test("MTP config without tensors is reported as metadata-only")
@@ -369,7 +417,12 @@ struct MTPRuntimeFocusedTests {
             mode: .preservedEnabled,
             tensorSamples: ["mtp.fc.weight"],
             visionTensorSamples: ["vision_tower.blocks.0.attn.qkv.weight"],
-            configEvidence: ["text_config.mtp_num_hidden_layers=1"])
+            configEvidence: ["text_config.mtp_num_hidden_layers=1"],
+            nativeMTPTuning: NativeMTPTuning(
+                bestDepth: 3,
+                validated: true,
+                outputEquivalent: true,
+                artifact: "docs/internal/release-gates/qwen-depth3/result.json"))
         let configuration = ModelConfiguration(
             directory: root,
             mtpStatus: status)

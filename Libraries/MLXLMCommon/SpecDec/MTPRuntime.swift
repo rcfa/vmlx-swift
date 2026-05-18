@@ -211,8 +211,20 @@ public struct MTPBundleStatus: Codable, Sendable, Equatable {
         bundleHasMTP && configuredLayers > 0 && tensorCount > 0
     }
 
+    public var hasUsableNativeMTPTuning: Bool {
+        nativeMTPTuning?.usableBestDepth != nil
+    }
+
+    public var runtimeCanSpeculativelyDecodeMTP: Bool {
+        mode.hasSpeculativeAcceptReject || mode == .preservedEnabled
+    }
+
+    public var requiresNativeMTPTuningBeforeAutoLaunch: Bool {
+        hasCompleteMTPArtifact && runtimeCanSpeculativelyDecodeMTP && !hasUsableNativeMTPTuning
+    }
+
     public var speculativeDecodeEnabled: Bool {
-        hasCompleteMTPArtifact && (mode.hasSpeculativeAcceptReject || mode == .preservedEnabled)
+        hasCompleteMTPArtifact && runtimeCanSpeculativelyDecodeMTP && hasUsableNativeMTPTuning
     }
 
     public var canAutoLaunchMTP: Bool {
@@ -220,7 +232,7 @@ public struct MTPBundleStatus: Codable, Sendable, Equatable {
     }
 
     public var requiresAcceptRejectBeforeEnable: Bool {
-        hasCompleteMTPArtifact && !canAutoLaunchMTP
+        hasCompleteMTPArtifact && !runtimeCanSpeculativelyDecodeMTP
     }
 
     public var bundleHasVision: Bool {
@@ -232,6 +244,9 @@ public struct MTPBundleStatus: Codable, Sendable, Equatable {
         let tuned = nativeMTPTuning?.usableBestDepth.map { ", tuning=d\($0)" } ?? ""
         if speculativeDecodeEnabled {
             return "\(base)\(tuned), speculative=on"
+        }
+        if requiresNativeMTPTuningBeforeAutoLaunch {
+            return "\(base), speculative=off (\(NativeMTPTuning.fileName) tuning required)"
         }
         if requiresAcceptRejectBeforeEnable {
             return "\(base)\(tuned), speculative=off (accept/reject required)"

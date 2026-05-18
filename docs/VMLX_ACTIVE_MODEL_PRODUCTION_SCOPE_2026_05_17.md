@@ -170,8 +170,9 @@ forced thinking closure, or name-based MTP activation.
   make incoherent output look coherent.
 - Native MTP is tensor-evidence gated. Metadata rows and model names are not
   sufficient; CRACK or metadata-only bundles stay fail-closed. Supported Qwen
-  bundles with real MTP tensors now auto-resolve native D3 through the settings
-  bridge.
+  bundles with real MTP tensors now also require a usable bundle-local
+  `vmlx_mtp_tuning.json`; auto depth comes from that file rather than a
+  hardcoded D3 profile rule.
 - Generic paged/prefix cache hits are not accepted for path-dependent families.
   ZAYA CCA, Ling/Bailing linear attention, Qwen hybrid SSM, Gemma4 SWA, Omni
   media, and VL media salts require their family-specific cache proof.
@@ -194,7 +195,7 @@ Rows marked historical are useful targets, not current release proof.
 
 | Bundle | Historical best MTP tok/s | Fresh current Swift row | Current decision |
 |---|---:|---|---|
-| Qwen3.6 27B JANG_4M | 48.9 D2 | not part of the current MXFP-only verifier recheck | Tensor-proven supported Qwen target; auto-resolves native D3, but re-run speed/coherency before release claim. |
+| Qwen3.6 27B JANG_4M | 48.9 D2 | not part of the current MXFP-only verifier recheck | Tensor-proven supported Qwen target; auto-depth comes from `vmlx_mtp_tuning.json`, but re-run speed/coherency before release claim. |
 | Qwen3.6 27B MXFP4 | 50.5 D3 | 26.1 tok/s D3 `chunk_commit`, exact `1..50`, no diagnostics | Correctness fixed; 45 tok/s target remains open in current Swift. |
 | Qwen3.6 27B MXFP8 | 31.7 D2 | not re-run after the prefix-snapshot fix in this artifact | Correctness/speed recheck still required. |
 | Qwen3.6 35B JANG_2K | n-a | not in current scope | Excluded from the current MXFP-only MTP focus. |
@@ -229,10 +230,10 @@ temperature clamp, repetition penalty, or forced reasoning close.
 This resolves the earlier short-budget visible-answer failures for the MXFP
 variants. The 35B MXFP4 VL+MTP row also passes with the larger budget: cold
 red/blue image, same-media disk hit, different-media miss, and text-only
-follow-up are coherent. The current default policy is tensor-gated auto-launch
-for supported Qwen MXFP/JANG_4M bundles only; native MTP remains non-batched
-until the server scheduling gates are proven, and blocked profiles such as
-35B JANG_2K stay off.
+follow-up are coherent. The current default policy is tensor-plus-tuning-gated
+auto-launch for supported Qwen MXFP/JANG_4M bundles only; native MTP remains
+non-batched until the server scheduling gates are proven, and blocked profiles
+or missing/unusable tuning rows such as 35B JANG_2K stay off.
 
 Current hybrid-SSM verifier policy update: stochastic exact-pq native MTP does
 not use the fast chunk verifier unless an explicit verifier env requests it. A
@@ -563,7 +564,7 @@ Open boundary:
 
 | Family | Local bundles | Engine surfaces to prove | Current MTP policy |
 |---|---|---|---|
-| Qwen3.6/Qwen3.5 text+VL MXFP/JANG/JANGTQ | Qwen3.6 MTP, Qwen3.6 CRACK, Qwen3.5 A3B 4-bit | Qwen chat template, `generation_config.json`, GatedDelta/hybrid SSM cache, disk L2 + SSM companion, VL media salt, explicit video resize/token budget, text-only continuation after media, reasoning on/off | Supported Qwen bundles with real MTP tensor evidence auto-resolve native D3; CRACK/no-tensor bundles stay off; JANG_2K remains blocked. |
+| Qwen3.6/Qwen3.5 text+VL MXFP/JANG/JANGTQ | Qwen3.6 MTP, Qwen3.6 CRACK, Qwen3.5 A3B 4-bit | Qwen chat template, `generation_config.json`, GatedDelta/hybrid SSM cache, disk L2 + SSM companion, VL media salt, explicit video resize/token budget, text-only continuation after media, reasoning on/off | Supported Qwen bundles with real MTP tensor evidence and usable `vmlx_mtp_tuning.json` auto-resolve native depth from that file; CRACK/no-tensor/no-tuning bundles stay off; JANG_2K remains blocked. |
 | ZAYA text/VL JANGTQ/MXFP | JANGQ and Osaurus ZAYA1 text/VL | Zaya CCA cache, JANGTQ/MXFP decode, VL adapters, media salt, Hadamard/matmul shape coverage, multi-turn cache hit. Text JANGTQ4 and JANGTQ_K are current; VL JANGTQ_K is current partial with production math and structured VL cache blockers. | No native MTP. |
 | MiniMax M2.7 JANG/JANGTQ | Small JANGTQ plus large CRACK JANG and JANGTQ_K infer/cache rows | MiniMax template, reasoning on/off, JANGTQ streaming experts, low-footprint active routed decode, prefix/paged/disk/TurboQuant KV, multi-turn coherence | Local MiniMax CRACK rows are non-MTP unless real MTP tensor evidence appears. Larger K/JANG CRACK rows now have cache-off infer proof, chat-cache proof, and focused TQ B=2 proof; low-footprint active-routed promotion remains open. |
 | Ling/Bailing hybrid | Ling JANGTQ2 and MXFP4 CRACK | Bailing thinking template, hybrid cache/SSM rederive, nextn metadata handling, JANGTQ/MXFP decode, multi-turn coherence | Extra nextn-layer evidence exists, but Swift native-MTP auto-launch remains off. |
@@ -573,9 +574,10 @@ Open boundary:
 | Laguna | Laguna XS JANGTQ | Laguna/Mistral-style template and RoPE params, JANGTQ decode, prefix/paged/disk cache, multi-turn coherence | No native MTP. |
 
 The no-load MTP census now distinguishes `mtp_tensors` from `mtp_auto`.
-Tensor-proven supported Qwen MTP resolves native D3 through the settings bridge;
-Hy3/Ling/DSV4 nextn-style rows can report tensor evidence while `mtp_auto=no`,
-and JANG_2K remains blocked until its own runtime policy is proven.
+Tensor-proven supported Qwen MTP resolves native depth through the settings
+bridge only when `vmlx_mtp_tuning.json` is usable; Hy3/Ling/DSV4 nextn-style
+rows can report tensor evidence while `mtp_auto=no`, and JANG_2K remains
+blocked until its own runtime policy is proven.
 
 The current no-load metadata/template sweep passed 60/60 rows across the 30
 non-Kimi `~/models` bundles. Warnings remain visible and must not be collapsed

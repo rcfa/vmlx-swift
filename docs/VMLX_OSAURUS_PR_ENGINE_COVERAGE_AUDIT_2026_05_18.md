@@ -20,7 +20,7 @@ gh api repos/osaurus-ai/{repo}/compare/{pin}...main
 Current `vmlx-swift` branch head at this refresh:
 
 ```text
-47c5d15 docs(osaurus): refresh live pr pin audit
+3889499 fix(mtp): use qwen tuning file for auto depth
 ```
 
 2026-05-18 continuation refresh:
@@ -69,6 +69,29 @@ Current `vmlx-swift` branch head at this refresh:
   The old hardcoded Qwen profile/depth rules are removed; local 27B MXFP4 proves
   `best_depth=2` is honored, and local 35B JANG_2K proves a blocked tuning row
   keeps auto-launch off.
+
+2026-05-17 20:25 PDT live refresh:
+
+- `gh pr list --repo osaurus-ai/osaurus --state all --limit 20` shows the
+  newest Osaurus PRs are mostly app/plugin/UI work: #1145, #1144, #1141,
+  #1140, #1139, #1138, #1137, #1136, #1135, #1134, #1132, #1131, #1130,
+  #1128, #1127, #1126, #1125, #1124, and #1123 are merged; #1133 remains open
+  draft for plugin host multimodal contracts. None of those change the
+  vMLX runtime pin window recorded below.
+- `gh pr view 1110` still reports PR #1110 open/non-draft with green checks but
+  `mergeStateStatus=DIRTY`; it has no public PR comments or reviews in the
+  queried metadata. Its commits remain the DSV4 runtime chain ending at
+  `b0a96dd4 Wire native DSV4 tokenizer bridge`.
+- `osaurus-staging` still resolves `mlx-swift 0a56f904`, `Jinja 58d21aa`,
+  `swift-transformers 087a66b`, and `vmlx-swift-lm 2cc64dd` in the workspace
+  `Package.resolved`. Local Osaurus edits are present but are not pinned public
+  PR state.
+- MTP display/helper semantics were tightened after the initial tuning-file
+  patch: `MTPBundleStatus.canAutoLaunchMTP`, `speculativeDecodeEnabled`, and
+  `VMLXServerRuntimeSettings.effectiveMTPLaunchMode(for:)` now require usable
+  `vmlx_mtp_tuning.json` metadata, not just tensor evidence. Tensor-proven Qwen
+  bundles missing tuning report off/blocked and `statusLine` says tuning is
+  required.
 
 ## Current Switch Verdict
 
@@ -161,7 +184,7 @@ Recent dependency scan, 2026-05-04 through 2026-05-18:
 | TurboQuant KV | Explicit TQ mode must preserve coherency and prove actual compression. | `20260518T_minimax_m27_jangtqk_tq_tail_fix_exact/` proves actual TQ transitions and exact outputs after tail preservation. | Fixed for MiniMax strict row; keep family-by-family gates. |
 | VL/media salt | Image/video/audio state must be isolated across turns and cache hits. | Qwen, ZAYA1-VL, Gemma4, and Omni rows prove same/different media behavior where implemented. | Raw Qwen high-res video and repeated Omni cache-on audio remain open. |
 | Reasoning on/off | No fake close; reasoning off must affect template/runtime where supported, and visible output must remain coherent. | Gemma4 reasoning matrix, MiniMax rows, DSV4 reasoning kwargs, Ling/Bailing aliases. Fresh Gemma E2B no-guard red/green pair proves the harness now accepts coherent stellar equivalents instead of forcing decode behavior; fresh Ling row proves the Russian stress prompt with `temp=0.7` stops normally. | Covered for tested families; package-wide model matrix still open for absent local bundles. |
-| MTP autodetect | Only real tensor evidence may enable MTP; model names and stale metadata are insufficient. Qwen auto-depth must come from bundle-local `vmlx_mtp_tuning.json`, not profile/name rules. | Non-Kimi MTP census and Qwen MTP settings docs; CRACK rows explicitly stay MTP off. Focused tests cover tuned D2, validated D3, missing tuning, and blocked tuning rows. | Correct fail-closed policy covered; full MTP speed target remains separate/open. |
+| MTP autodetect | Only real tensor evidence plus usable tuning may enable MTP; model names and stale metadata are insufficient. Qwen auto-depth must come from bundle-local `vmlx_mtp_tuning.json`, not profile/name rules. | Non-Kimi MTP census and Qwen MTP settings docs; CRACK rows explicitly stay MTP off. Focused tests cover tuned D2, validated D3, missing tuning, blocked tuning rows, and status/helper display behavior. | Correct fail-closed policy covered; full MTP speed target remains separate/open. |
 
 ## Production-Quality Checklist Still Required
 
