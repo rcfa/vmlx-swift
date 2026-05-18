@@ -412,6 +412,39 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   `RuntimePolicySourceTests` passes 28/28. This is still harness readiness and
   not a live model production-clear row.
 
+2026-05-18 15:02 PDT Osaurus PR #1147 ZAYA-VL first live row:
+
+- Osaurus PR #1147 head `0e965e85` hardens the live sequence probe and records
+  the first real ZAYA-VL app/API artifact set under
+  `docs/internal/live-gates/pr1147/zaya1-vl-8b-mxfp4/`.
+- The pre-fix artifact
+  `vlm-sequence-20260518T1458/` shows the probe helper itself was wrong for
+  Responses follow-up history: it carried Chat Completions media shape into
+  Responses, so later Responses rows returned HTTP 400.
+- The helper now keeps route-native user history: Chat uses `text` /
+  `image_url`, while Responses uses `input_text` / `input_image`. It also uses
+  a macOS-compatible `ps` parser for process memory snapshots.
+- The post-fix artifact
+  `vlm-sequence-20260518T1504/` completed 10 Chat/Responses rows with red
+  image, text-only follow-up, blue image, red repeat, and video. It is
+  explicitly FAIL/PARTIAL, not a production pass. Chat grounds the first red
+  image and text-only follow-up, but the blue-image turn still describes red;
+  Responses returns generic "media" explanations instead of grounded image
+  answers; ZAYA1-VL video returns HTTP 500 `ZAYA1-VL video input is not
+  implemented`; and `/health` plus `/admin/cache-stats` continue to report no
+  loaded model/cache counters throughout the sequence.
+- Verification for the checkpoint: `python3 -m unittest
+  scripts/tests/test_pr1147_live_sequence_probe.py` passes 4/4,
+  `python3 -m py_compile scripts/pr1147_live_sequence_probe.py
+  scripts/pr1147_http_route_probe.py` passes, `git diff --check` passes, and
+  focused Osaurus `RuntimePolicySourceTests` passes 28/28.
+- Engine consequence: this confirms the live Osaurus UI/API gate is correctly
+  exposing real failures now. `vmlx-swift` should not treat ZAYA-VL as
+  production-clear until media switch/cache-state, Responses media handling,
+  unsupported-video capability reporting, and loaded-model/cache-stats
+  reporting are root-caused and fixed without sampler, prompt, or output
+  guards.
+
 2026-05-17 20:25 PDT live refresh:
 
 - `gh pr list --repo osaurus-ai/osaurus --state all --limit 20` shows the
