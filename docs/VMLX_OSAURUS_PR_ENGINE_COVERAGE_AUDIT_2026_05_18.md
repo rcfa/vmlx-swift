@@ -1201,6 +1201,29 @@ Recent dependency scan, 2026-05-04 through 2026-05-18:
   --package-path Packages/OsaurusCore --filter RuntimePolicySourceTests --jobs 2`
   passes 28/28.
 
+2026-05-18 16:07 PDT Ling forced-behavior source fix:
+
+- Osaurus PR #1147 head `a398a9cd` replaces the Ling fake-guard path with a
+  real profile/template contract. Ling now defaults `disableThinking=true`,
+  sends `enable_thinking=false` by default, honors explicit opt-in through
+  `disableThinking=false` or positive reasoning request, and keeps `.reasoning`
+  deltas on the reasoning rail instead of converting them to visible content.
+- vmlx runtime proof lives in
+  `docs/internal/live-gates/20260518T_ling_jangtq2_forced_behavior_refresh/`.
+  The no-guard run loaded
+  `/Users/eric/models/dealign.ai/Ling-2.6-flash-JANGTQ2-CRACK` as
+  `BailingHybridModel`, then passed greedy no-repetition, thinking-on
+  `rep=1.0`, and Russian `temp=0.7` stress rows at about 37-38 tok/s with
+  no loop, BOS repetition, reasoning leak, marker leak, or forced close repair.
+- Osaurus verification:
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
+  --package-path Packages/OsaurusCore --filter
+  'LocalReasoningCapabilityTests|GenerationEventMapperTests|MLXBatchAdapterTests|ModelProfileRegistryTests|RuntimePolicySourceTests'
+  --jobs 2` passes 96/96.
+- Boundary: this closes the Ling force-off/reasoning-merge source hit. It does
+  not production-clear Ling or Hy3 in Osaurus until app/API long-output,
+  cache/SSM, memory, route, and saved-setting carryover artifacts are attached.
+
 ## Osaurus PR #1147 Function-Level Gate
 
 The Osaurus package-switch PR now carries an F1-F12 live checklist in
