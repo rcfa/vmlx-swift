@@ -499,6 +499,21 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   not prove cache hits until a keychain-safe rerun uses non-immediate residency
   or stream-time cache snapshots.
 
+2026-05-18 15:44 PDT Osaurus PR #1147 forced-behavior audit gate:
+
+- Osaurus PR #1147 head `1bc461cc` adds a dedicated forced-behavior audit gate
+  to the live matrix, component edge-case matrix, completion audit, and source
+  policy tests. The gate requires source/live search for forced sampler
+  defaults, forced repetition penalties, reasoning rail rewrites, forced
+  `</think>` close tokens, token/logit shaping, and parser output repair.
+- For every hit, the artifact must record why the behavior was originally
+  added, prove whether it still fires, and replace it with a real template,
+  decode, tokenizer, cache, or model-family fix. The only allowed output
+  defaults are bundle metadata (`generation_config.json` / `jang_config.json`)
+  or explicit user/API kwargs.
+- Verification for the checkpoint: focused Osaurus `RuntimePolicySourceTests`
+  passes 28/28 and `git diff --check` passes.
+
 2026-05-17 20:25 PDT live refresh:
 
 - `gh pr list --repo osaurus-ai/osaurus --state all --limit 20` shows the
