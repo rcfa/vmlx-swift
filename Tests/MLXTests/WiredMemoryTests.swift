@@ -5,6 +5,7 @@ import MLX
 import XCTest
 
 final class WiredMemoryTests: XCTestCase {
+    #if DEBUG
     enum TestError: Error {
         case missingInfo
         case timeout
@@ -615,4 +616,9 @@ final class WiredMemoryTests: XCTestCase {
             return result ?? []
         }
     }
+    #else
+    func testWiredMemoryDebugEventTestsRequireDebugBuild() throws {
+        throw XCTSkip("WiredMemory debug event tests require a DEBUG test build.")
+    }
+    #endif
 }

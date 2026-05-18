@@ -1,6 +1,7 @@
 // Copyright 2026 Osaurus AI. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import Foundation
 import MLX
 import MLXLMCommon
 import Testing
@@ -122,6 +123,20 @@ struct VMLXServerRuntimeSettingsTests {
         #expect(params.topK == 0)
         #expect(params.minP == 0.0)
         #expect(params.repetitionPenalty == nil)
+    }
+
+    @Test("VLM JANG load uses quantization container, not deprecated alias")
+    func vlmJangLoadUsesQuantizationContainer() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repoRoot.appending(path: "Libraries/MLXVLM/VLMModelFactory.swift"),
+            encoding: .utf8)
+
+        #expect(source.contains("baseConfig.quantizationContainer?.quantization"))
+        #expect(!source.contains("baseConfig.quantization : nil"))
     }
 
     @Test("MTP auto launches complete tensor-proven artifacts")

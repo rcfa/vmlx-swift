@@ -41,10 +41,13 @@ e8dad80 fix(vlm): clean media preprocessing warnings
   deprecated `baseConfig.quantization` alias. This keeps MXFP4/MXFP8 group-size
   inference source-backed for VL/Omni bundles; it is not a sampler, parser, or
   EOS workaround. `swift build -c release --product RunBench` passed after the
-  change. A filtered Swift Testing run was attempted under full Xcode, but the
-  package currently fails earlier in unrelated `MLXTests/WiredMemoryTests.swift`
-  because those tests call `WiredMemoryManager.makeForTesting`, which no longer
-  exists on the current API.
+  change.
+- Release-mode Swift Testing initially failed before focused MLXLM tests because
+  `MLXTests/WiredMemoryTests.swift` referenced DEBUG-only wired-memory event
+  helpers. The tests are now explicitly DEBUG-gated with a release skip, keeping
+  the production `WiredMemoryManager` event surface unchanged. Focused release
+  tests now pass for `vlmJangLoadUsesQuantizationContainer` and
+  `nilServerSamplingFieldsDoNotAddFakeGuards`.
 
 ## Current Switch Verdict
 
