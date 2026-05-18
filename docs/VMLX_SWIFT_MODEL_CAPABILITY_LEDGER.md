@@ -70,7 +70,12 @@ Focused fix artifacts live under `docs/local/swift-release-gates/dsv4-fixes/`.
   `dsv4-fixes/live_zaya_jangtqk_native_growing_chat_cache_recall_phrase.log`,
   `dsv4-fixes/live_zaya_jangtq4_native_growing_chat_cache_recall_phrase.log`.
 - Live Qwen3.6 text/hybrid: `live/Qwen3.6-27B-MXFP4-CRACK/jpreg.log`.
-- Live MiniMax text/JANGTQ: `live/MiniMax-M2.7-Small-JANGTQ/jpreg.log`.
+- Live MiniMax text/JANGTQ: `live/MiniMax-M2.7-Small-JANGTQ/jpreg.log`;
+  current large CRACK cache gate:
+  `live-model-matrix/20260518T_minimax_m27_jangtqk_crack_turnmatrix_strict_tq_gate/`;
+  final focused post-macro chat cache/TQ blocker:
+  `live-model-matrix/20260518T_minimax_m27_jangtqk_growing_chat_cache_fail_loud_macro/`,
+  `live-model-matrix/20260518T_minimax_m27_jangtqk_tq_b2_strict_fail_loud_macro/`.
 - Live ZAYA-VL MXFP4:
   `live/ZAYA1-VL-8B-MXFP4/vl_batch_chat.log`,
   `live/ZAYA1-VL-8B-MXFP4/vl_chat_cache.log`.
@@ -99,7 +104,7 @@ Focused fix artifacts live under `docs/local/swift-release-gates/dsv4-fixes/`.
 | `dealign.ai/Ling-2.6-flash-MXFP4-CRACK` | `bailing_hybrid` / `BailingHybridModel` | `PASS` | Current release turnmatrix passes config/template/MTP metadata, production defaults cache OFF/ON, BatchEngine single/chat/disk restore/concurrent/per-slot/TurboQuant B=2. Bundle defaults apply with `rep=nil`; disk L2 and SSM companion hits are recorded. | Generic paged prefix hit is `N-A` by topology because Ling/Bailing uses disk-backed restore. |
 | `JANGQ/Hy3-preview-JANGTQ` | `hy_v3` / `Hy3Model` | `PASS` | Current release turnmatrix passes config/template/MTP metadata, production defaults cache OFF/ON, paged cache hit, disk restore, B=2 concurrent, per-slot sampler, and TurboQuant B=2. Bundle defaults apply as `temp=0.900 topP=1.000 topK=-1 minP=0.000 rep=nil`. | Cold first prompt is slow; JANGTQ_K needs a current all-non-Kimi matrix re-run before Osaurus promotion. |
 | `JANGQ/Hy3-preview-JANGTQ_K` | `hy_v3` / `Hy3Model` | `PARTIAL / NEEDS CURRENT RE-RUN` | Eager load was killed, but active expert streaming now passes the short production matrix without a process-global model-dir override after `loadWeights` binds the loaded model directory. It skips 91,008 per-expert tensors, indexes 79 layers x 192 experts, and passes 7/7 at about 6.2 GiB RSS. | Needs a current all-non-Kimi matrix re-run before Osaurus promotion. Speed remains blocked at about 1.4 tok/s, and multi-model active streaming still needs a per-loaded-model store before Osaurus exposes simultaneous JANGTQ_K sessions. |
-| `dealign.ai/MiniMax-M2.7-JANGTQ_K-CRACK` | `minimax_m2` / `MiniMaxJANGTQModel` | `PARTIAL / INFER PASS` | Fresh `20260518T001219Z_minimax_m27_jangtqk_crack_infer/` passes config/template plus cache-off `BENCH_PROD` 7/7. Bundle defaults apply as `temp=1.000 topP=0.950 topK=40 rep=nil`; MTP depth is `off`; reasoning ON/OFF alternation is coherent with OFF rows carrying zero reasoning; decode is about `48-49 tok/s`; peak RSS is about `55.9 GiB`. | Needs full cache/multibatch/disk/TurboQuant matrix and low-footprint active-routed proof before Osaurus promotion. |
+| `dealign.ai/MiniMax-M2.7-JANGTQ_K-CRACK` | `minimax_m2` / `MiniMaxJANGTQModel` | `PARTIAL / CACHE-CHAT PASS` | Fresh strict turnmatrix `20260518T_minimax_m27_jangtqk_crack_turnmatrix_strict_tq_gate/` passes config/template, production defaults cache OFF/ON, BatchEngine single/chat, disk restore, B=2 concurrent, per-slot sampler, and the new production-shaped growing-chat cache row. Bundle defaults apply as `temp=1.000 topP=0.950 topK=40 rep=nil`; MTP depth is `off`; reasoning OFF rows carry zero reasoning. The final post-macro focused cache proof `20260518T_minimax_m27_jangtqk_growing_chat_cache_fail_loud_macro/` records `Cache history-boundary counts: [47]`, disk hit `matched=47/83`, turn 2 `finish=stop`, text `vmlx-cache-green`, and prompt-time ratio `0.08`. | Raw token-prefix `batch_cache_hit` fails by design for this MiniMax template because the raw Q/A prompt length-stops, so it is not counted as production chat proof. Strict `batch_tq_b2` now fails instead of false-passing: final focused artifact `20260518T_minimax_m27_jangtqk_tq_b2_strict_fail_loud_macro/` shows both-slot TurboQuant(4,4) Pass B slot 0 length-stops at 512 and expands the country list. Low-footprint active-routed proof remains open. |
 | `dealign.ai/MiniMax-M2.7-JANG_K-CRACK` | `minimax_m2` / `MiniMaxModel` | `PARTIAL / INFER PASS` | Fresh `20260518T001257Z_minimax_m27_jangk_crack_infer/` passes config/template plus cache-off `BENCH_PROD` 7/7. Bundle defaults apply as `temp=1.000 topP=0.950 topK=40 rep=nil`; MTP depth is `off`; reasoning ON/OFF alternation is coherent; decode is about `45-50 tok/s`; peak RSS is about `41.0 GiB`; loader logs an in-memory shape-inferred 6-bit metadata repair. | Needs full cache/multibatch/disk matrix and an explicit decision on whether the shape-inferred metadata repair is acceptable as production metadata handling or should be corrected in the bundle. |
 | `dealign.ai/Gemma-4-26B-A4B-it-JANG_4M-CRACK` | `gemma4` / `Gemma4` | `PASS` | Text release turnmatrix passes config/template, cache OFF/ON `BENCH_PROD` 7/7, BatchEngine single/chat/disk restore/concurrent/per-slot/TurboQuant B=2. Structured VL chat-cache row passes: image A cold, same-image replay disk hit `308/308`, different-image miss, and text-only follow-up stays grounded. Live tool-call schema row passes through `UserInput.tools` with `get_weather({"location":"Tokyo"})`, `toolCalls=1`, and no raw marker leak. Long-budget single-turn Harmony reasoning on/off passes with 1420 reasoning chars ON and zero reasoning chars OFF. Fresh `20260517T_reasoning_turn_matrix_harness/` proves one loaded BatchEngine multi-turn ON/OFF/ON with prior assistant `reasoningContent` carried forward, and effort `low/medium/high/max` closes with visible output. | No active Gemma4 text/VL/tool/reasoning blocker from this row. GPT-OSS remains parser-contract only because no local GPT-OSS bundle is present. |
 | `/Users/eric/osaurus_models/finished/gemma-4-e2b-it-4bit` | `gemma4` / `Gemma4` | `PASS` | Osaurus-local E2B bundle passes template smoke, `BENCH_PROD` cache OFF/ON, BatchEngine chat, TurboQuant B=2 isolation, VL chat/cache, VL batch chat, and `BENCH_REASONING_TURN_MATRIX=1` at realistic budgets. Bundle defaults apply as `temp=1.000 topP=0.950 topK=64 rep=nil`; cache-on rows use disk-backed restore because Gemma4 heterogeneous SWA/full-attention cache is paged-incompatible in this topology. | The retained 256-token thinking-on row failed by length before visible output; this is a real server/UI budget setting caveat, not a reason to force-close reasoning or inject sampler guards. This bundle is outside `~/models` and was tested because Osaurus logs reported E2B looping. |
@@ -264,11 +269,23 @@ weights.
 - Live proof: small JANGTQ has coherent 3-turn chat and TQ disk round-trip.
   Fresh large CRACK infer artifacts prove both JANGTQ_K and JANG_K pass
   cache-off production defaults with coherent reasoning ON/OFF flips, MTP off,
-  no hidden repetition penalty, and about `45-50 tok/s`.
-- Current issues: full cache/multibatch/disk/TurboQuant rows are still open for
-  the large CRACK bundles. The JANGTQ_K infer row peaks around `55.9 GiB`, and
-  the JANG_K row logs an in-memory shape-inferred 6-bit metadata repair, so
-  these are not full Osaurus promotion rows yet.
+  no hidden repetition penalty, and about `45-50 tok/s`. The current JANGTQ_K
+  cache artifact
+  `docs/local/live-model-matrix/20260518T_minimax_m27_jangtqk_crack_turnmatrix_strict_tq_gate/`
+  proves the production-shaped chat-cache path too: the MiniMax controllable
+  template path now honors the corrected `enable_thinking=false` fallback at
+  history-boundary render time, the coordinator hits the canonical history
+  prefix (`47/83` tokens), disk L2 is used, and the warm turn stops cleanly with
+  `vmlx-cache-green`.
+- Current issues: the old raw token-prefix cache diagnostic is not a valid
+  production chat proof for MiniMax; it fails because the raw Q/A prompt
+  length-stops. Strict `BENCH_BATCH_TQ_B2` now fails for MiniMax when both slots
+  use live TurboQuant(4,4) KV because the list prompt length-stops at the token
+  cap. This is recorded as a real runtime/cache-codec incompatibility to
+  investigate, not hidden with repetition penalty or sampling guards. The
+  JANGTQ_K row still peaks around `55.9 GiB`, and the JANG_K row logs an
+  in-memory shape-inferred 6-bit metadata repair, so these are not full Osaurus
+  promotion rows yet.
 
 ### ZAYA Text
 

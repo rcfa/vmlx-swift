@@ -466,6 +466,10 @@ run_batch_stack() {
   run_runbench "${name}.batch_cache_hit" \
     BENCH_MODEL="$dir" BENCH_BATCH_CACHE_HIT=1 \
     BENCH_MAX_TOKENS="$max_tokens" || true
+  run_runbench "${name}.batch_growing_chat_cache" \
+    BENCH_MODEL="$dir" BENCH_GROWING_CHAT_CACHE=1 BENCH_GROWING_BUNDLE_DEFAULTS=1 \
+    BENCH_GROWING_SEED="$(matrix_prod_seed)" \
+    BENCH_MAX_TOKENS="$max_tokens" || true
   run_runbench "${name}.batch_disk_restore" \
     BENCH_MODEL="$dir" BENCH_BATCH_DISK_RESTORE=1 \
     BENCH_MAX_TOKENS="$max_tokens" || true

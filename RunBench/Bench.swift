@@ -1941,10 +1941,12 @@ func runBatchEngineCacheHit(modelPath: String, maxNew: Int) async throws {
     let engine = BatchEngine(
         context: ctx, maxBatchSize: 1, cacheCoordinator: coordinator)
 
-    // Key insight 1: running `UserInput(prompt: "A")` through the processor
-    // wraps with chat template tokens, so "A" and "A + more" produce token
-    // sequences that diverge at the boundary. Build prompts at the TOKEN
-    // level so turn 2 is a strict extension of turn 1.
+    // Key insight 1: this is a cache-coordinator test, not a chat-template
+    // test. Mutating a rendered chat prompt after the assistant generation
+    // preface appends text inside model-specific reasoning rails and can turn
+    // the cache row into a prompt-quality failure. Build raw text prompts at
+    // the TOKEN level so turn 2 is a strict extension of turn 1 while still
+    // using the loaded model's own tokenizer.
     //
     // Key insight 2: `PagedCacheManager.storeTokenSequence` stores only
     // complete `blockSize`-sized blocks. With the default blockSize=64, a
@@ -1952,53 +1954,67 @@ func runBatchEngineCacheHit(modelPath: String, maxNew: Int) async throws {
     // least 2 full blocks stored on turn 1 so there's something to hit
     // on turn 2. 200+ tokens at blockSize=64 gives ≥3 blocks cached.
     let turn1Prompt = String(repeating: """
-        You are a careful assistant. Facts to remember across turns: \
-        the sky is blue, grass is green, roses are red, oceans are \
-        deep, fire is hot. Answer concisely and precisely.
-        """, count: 3) + " Q: What is the colour of the sky?"
-    let turn1Input = try await context.processor.prepare(
-        input: UserInput(prompt: turn1Prompt))
-    let turn1Tokens = turn1Input.text.tokens.reshaped(-1).asArray(Int.self)
-    // Turn 2 = turn 1 tokens + 24 "follow-up" tokens (>1 new block worth,
-    // so the added region also fills a block). Safe Qwen3 IDs, no specials.
-    let followup: [Int] = [
-        220, 13, 1527, 264, 4586, 31004, 220, 1207, 25, 3555, 374, 279,
-        12463, 315, 16359, 30, 220, 13, 1527, 4586, 4226, 25, 5312,
-    ]
+        Facts for this cache test: the sky is blue; grass is green; roses are \
+        red; lemons are yellow; snow is white. Use only these facts. Do not \
+        explain the policy or repeat the prompt.
+        """, count: 4) + "\nQuestion: What colour is the sky?\nAnswer:"
+    let turn1Tokens = context.tokenizer.encode(
+        text: turn1Prompt, addSpecialTokens: true)
+    let turn1TokensArr = MLXArray(turn1Tokens.map { Int32($0) })[.newAxis, .ellipsis]
+    let turn1Input = LMInput(text: LMInput.Text(tokens: turn1TokensArr))
+    // Turn 2 = turn 1 tokens + a model-tokenized suffix. This must not use
+    // hard-coded token ids: the same integers are not portable across Qwen,
+    // MiniMax, Gemma, etc., and can turn a cache test into a garbage-prompt
+    // test for non-Qwen tokenizers.
+    let followupText = "\n\nQuestion: What colour is grass?\nAnswer:"
+    let followup = context.tokenizer.encode(
+        text: followupText, addSpecialTokens: false)
+    if followup.isEmpty {
+        fputs("[CacheHit] FAIL: tokenizer produced empty follow-up tokens.\n", stderr)
+        exit(2)
+    }
     let turn2Tokens: [Int] = turn1Tokens + followup
     let turn2TokensArr = MLXArray(turn2Tokens.map { Int32($0) })[.newAxis, .ellipsis]
-    let turn2Input = LMInput(
-        text: LMInput.Text(tokens: turn2TokensArr),
-        image: nil, video: nil,
-        cacheScopeSalt: turn1Input.cacheScopeSalt)
+    let turn2Input = LMInput(text: LMInput.Text(tokens: turn2TokensArr))
 
-    func runTurn(label: String, input: sending LMInput) async throws -> (Double, Int) {
+    func runTurn(label: String, input: sending LMInput) async throws
+        -> (Double, Int, GenerateCompletionInfo?, String)
+    {
         let tokenCount = input.text.tokens.size
         let t0 = CFAbsoluteTimeGetCurrent()
         let (_, stream) = await engine.submit(input: input, parameters: params)
         var promptTime: Double = 0
         var tokenIds: [Int] = []
+        var completionInfo: GenerateCompletionInfo?
         for await event in stream {
             switch event {
             case .token(let id):
                 tokenIds.append(id)
             case .info(let info):
+                completionInfo = info
                 promptTime = info.promptTime
             }
         }
         let wall = CFAbsoluteTimeGetCurrent() - t0
+        let decoded = context.tokenizer.decode(tokenIds: tokenIds)
         print(String(format:
             "  %@ : prompt=%d tokens, promptTime=%.3fs, genTokens=%d, wall=%.2fs",
             label, tokenCount, promptTime, tokenIds.count, wall))
         printDecodedOutput(
             label: "CacheHit \(label)",
-            text: context.tokenizer.decode(tokenIds: tokenIds))
-        return (promptTime, tokenCount)
+            text: decoded)
+        return (promptTime, tokenCount, completionInfo, decoded)
     }
 
     nonisolated(unsafe) let turn1Send = turn1Input
-    let (turn1Prompt_s, _) = try await runTurn(
+    let (turn1Prompt_s, _, turn1Info, turn1Text) = try await runTurn(
         label: "Turn 1 (cold cache)", input: turn1Send)
+    if turn1Info?.stopReason == .length || lagunaLoopHeuristic(turn1Text) {
+        fputs("[CacheHit] FAIL: turn 1 did not produce a coherent stop-bounded output. " +
+              "This row is a cache+coherency gate, not a structural hit-only gate.\n",
+              stderr)
+        exit(1)
+    }
 
     // Verify our construction produced a true prefix extension, then
     // probe the coordinator directly.
@@ -2041,8 +2057,14 @@ func runBatchEngineCacheHit(modelPath: String, maxNew: Int) async throws {
     }
 
     nonisolated(unsafe) let turn2Send = turn2Input
-    let (turn2Prompt_s, _) = try await runTurn(
+    let (turn2Prompt_s, _, turn2Info, turn2Text) = try await runTurn(
         label: "Turn 2 (warm cache)", input: turn2Send)
+    if turn2Info?.stopReason == .length || lagunaLoopHeuristic(turn2Text) {
+        fputs("[CacheHit] FAIL: turn 2 hit cache but did not produce a coherent stop-bounded output. " +
+              "Do not count prompt-time reduction as production cache proof.\n",
+              stderr)
+        exit(1)
+    }
 
     // Turn 2 should also be measurably faster because prefill covers
     // only the remaining tokens. Ratio <= 0.75 catches regressions
@@ -2798,6 +2820,42 @@ private func collectBatchStreamsWithOverlap(
     return results
 }
 
+private func collectBatchStreamsWithOverlapAndInfo(
+    _ engine: BatchEngine,
+    streams: [(Int, AsyncStream<BatchGeneration>)],
+    label: String,
+    atLeast expected: Int? = nil
+) async -> [(Int, [Int], GenerateCompletionInfo?)] {
+    let required = expected ?? streams.count
+    async let overlap = observeActiveSlotOverlap(engine, atLeast: required, label: label)
+    let results = await withTaskGroup(of: (Int, [Int], GenerateCompletionInfo?).self) { group in
+        for (slot, stream) in streams {
+            group.addTask {
+                var ids: [Int] = []
+                var info: GenerateCompletionInfo?
+                for await e in stream {
+                    switch e {
+                    case .token(let id):
+                        ids.append(id)
+                    case .info(let completionInfo):
+                        info = completionInfo
+                    }
+                }
+                return (slot, ids, info)
+            }
+        }
+        var collected: [(Int, [Int], GenerateCompletionInfo?)] = []
+        for await result in group {
+            collected.append(result)
+        }
+        return collected.sorted { $0.0 < $1.0 }
+    }
+    if !(await overlap) {
+        exit(1)
+    }
+    return results
+}
+
 /// Require the scheduler to show real multi-slot admission before a
 /// BatchEngine row is allowed to claim B>1 coverage. This does not prove every
 /// decode step had width B, but it rejects the common false positive where a
@@ -2864,15 +2922,15 @@ private func printDecodedOutput(label: String, text: String) {
 /// `turboQuant(keyBits: 3, valueBits: 3)`. Verifies:
 /// - Stage 0 compression (`BatchQuantize.maybeCompress`) fires per-slot
 ///   post-prefill, does not cross-contaminate.
-/// - Both streams complete with non-empty coherent output.
+/// - Both streams complete with stop-bounded coherent output.
 /// - Running two TQ slots concurrently (the second pass below) also
 ///   completes without corruption — proving per-slot `TurboQuantKVCache`
 ///   state is independent.
 ///
 /// We can't cheaply introspect the cache type post-run from outside the
-/// BatchEngine actor, but the "no crash + non-zero tokens + coherent
-/// text" combo plus the existing `CompilableTurboQuantKVCacheTests` FP
-/// precision probes give a high-confidence end-to-end check.
+/// BatchEngine actor, but the "no crash + stop-bounded coherent text" combo
+/// plus the existing `CompilableTurboQuantKVCacheTests` FP precision probes
+/// give a high-confidence end-to-end check.
 func runBatchEngineTurboQuantB2(modelPath: String, maxNew: Int) async throws {
     let modelDir = URL(fileURLWithPath: modelPath)
     print("\n=== BatchEngine TurboQuant B=2 (iter 38) ===")
@@ -2893,9 +2951,45 @@ func runBatchEngineTurboQuantB2(modelPath: String, maxNew: Int) async throws {
         "List five distinct countries in Europe, one per line.",
         "Give me five adjectives that describe a summer morning.",
     ]
+    func makeVisibleAnswerInput(_ prompt: String) async throws -> LMInput {
+        var input = UserInput(prompt: prompt)
+        input.additionalContext = ["enable_thinking": false]
+        return try await context.processor.prepare(input: input)
+    }
+
+    func requireStopBounded(
+        label: String,
+        tokenIds ids: [Int],
+        info: GenerateCompletionInfo?,
+        text: String
+    ) {
+        if ids.isEmpty {
+            fputs("[TQ B=2] FAIL: \(label) produced zero tokens.\n", stderr)
+            exit(1)
+        }
+        guard let info else {
+            fputs("[TQ B=2] FAIL: \(label) did not emit GenerateCompletionInfo.\n", stderr)
+            exit(1)
+        }
+        guard info.stopReason == .stop else {
+            fputs("[TQ B=2] FAIL: \(label) ended with \(info.stopReason), not .stop. " +
+                  "This row is a coherence gate, not a structural non-empty gate.\n",
+                  stderr)
+            exit(1)
+        }
+        if info.unclosedReasoning {
+            fputs("[TQ B=2] FAIL: \(label) ended with unclosed reasoning.\n", stderr)
+            exit(1)
+        }
+        if lagunaLoopHeuristic(text) {
+            fputs("[TQ B=2] FAIL: \(label) triggered loop heuristic.\n", stderr)
+            exit(1)
+        }
+    }
+
     var inputs: [LMInput] = []
     for p in prompts {
-        inputs.append(try await context.processor.prepare(input: UserInput(prompt: p)))
+        inputs.append(try await makeVisibleAnswerInput(p))
     }
 
     let plainParams = GenerateParameters(
@@ -2919,20 +3013,29 @@ func runBatchEngineTurboQuantB2(modelPath: String, maxNew: Int) async throws {
     let engineRef = BatchEngine(context: ctx, maxBatchSize: 1)
     var refInputs: [LMInput] = []
     for p in prompts {
-        refInputs.append(try await context.processor.prepare(input: UserInput(prompt: p)))
+        refInputs.append(try await makeVisibleAnswerInput(p))
     }
     nonisolated(unsafe) let inRef = refInputs[0]
     let (_, streamRef) = await engineRef.submit(input: inRef, parameters: plainParams)
     var refTokens: [Int] = []
+    var refInfo: GenerateCompletionInfo?
     for await e in streamRef {
-        if case .token(let id) = e { refTokens.append(id) }
-        if refTokens.count >= maxNew { break }
+        switch e {
+        case .token(let id):
+            refTokens.append(id)
+        case .info(let info):
+            refInfo = info
+        }
     }
     await engineRef.shutdown()
+    let refText = tokenizer.decode(tokenIds: refTokens)
     print("  reference plain solo: \(refTokens.count) tokens, first 8: \(Array(refTokens.prefix(8)))")
-    printDecodedOutput(
-        label: "TQ reference plain solo",
-        text: tokenizer.decode(tokenIds: refTokens))
+    printDecodedOutput(label: "TQ reference plain solo", text: refText)
+    requireStopBounded(
+        label: "reference plain solo",
+        tokenIds: refTokens,
+        info: refInfo,
+        text: refText)
 
     // Reference run: same B=2 scheduler shape as the heterogeneous probe, but
     // both slots use plain KV. This is the isolation baseline. Some quantized
@@ -2943,29 +3046,28 @@ func runBatchEngineTurboQuantB2(modelPath: String, maxNew: Int) async throws {
     let engineRefB2 = BatchEngine(context: ctx, maxBatchSize: 2)
     var refB2Inputs: [LMInput] = []
     for p in prompts {
-        refB2Inputs.append(try await context.processor.prepare(input: UserInput(prompt: p)))
+        refB2Inputs.append(try await makeVisibleAnswerInput(p))
     }
     nonisolated(unsafe) let inRefB20 = refB2Inputs[0]
     nonisolated(unsafe) let inRefB21 = refB2Inputs[1]
     let (_, streamRefB20) = await engineRefB2.submit(input: inRefB20, parameters: plainParams)
     let (_, streamRefB21) = await engineRefB2.submit(input: inRefB21, parameters: plainParams)
-    let refB2Results = await collectBatchStreamsWithOverlap(
+    let refB2Results = await collectBatchStreamsWithOverlapAndInfo(
         engineRefB2,
         streams: [(0, streamRefB20), (1, streamRefB21)],
-        maxTokens: maxNew,
         label: "TQ B=2 plain/plain reference")
     await engineRefB2.shutdown()
     let refB2Slot0 = refB2Results[0].1
-    for (slot, ids) in refB2Results {
+    for (slot, ids, info) in refB2Results {
         let text = tokenizer.decode(tokenIds: ids)
         print(String(format: "  Plain/plain slot %d: %d tokens, first 8: %@",
             slot, ids.count, "\(Array(ids.prefix(8)))"))
         printDecodedOutput(label: "TQ reference B2 plain slot \(slot)", text: text)
-        if ids.isEmpty {
-            fputs("[TQ B=2] FAIL: B=2 plain/plain reference slot \(slot) produced zero tokens.\n",
-                  stderr)
-            exit(1)
-        }
+        requireStopBounded(
+            label: "B=2 plain/plain reference slot \(slot)",
+            tokenIds: ids,
+            info: info,
+            text: text)
     }
 
     // --- Pass A: plain KV  +  TurboQuant  (heterogeneous) ----------------
@@ -2976,22 +3078,22 @@ func runBatchEngineTurboQuantB2(modelPath: String, maxNew: Int) async throws {
     nonisolated(unsafe) let inA1 = inputs[1]
     let (_, streamA0) = await engineA.submit(input: inA0, parameters: plainParams)
     let (_, streamA1) = await engineA.submit(input: inA1, parameters: tqParams)
-    let resultsA = await collectBatchStreamsWithOverlap(
+    let resultsA = await collectBatchStreamsWithOverlapAndInfo(
         engineA,
         streams: [(0, streamA0), (1, streamA1)],
-        maxTokens: maxNew,
         label: "TQ B=2 pass A")
     let compatibilitySplitsA = await engineA.decodeCompatibilitySplitCountForDiagnostics
-    for (slot, ids) in resultsA {
+    for (slot, ids, info) in resultsA {
         let tag = slot == 0 ? "plain" : "TQ(4,4)"
         let text = tokenizer.decode(tokenIds: ids)
         print(String(format: "  Slot %d (%@) : %d tokens, first 8: %@",
             slot, tag, ids.count, "\(Array(ids.prefix(8)))"))
         printDecodedOutput(label: "TQ pass A slot \(slot) \(tag)", text: text)
-        if ids.isEmpty {
-            fputs("[TQ B=2] FAIL: Pass A slot \(slot) produced zero tokens.\n", stderr)
-            exit(1)
-        }
+        requireStopBounded(
+            label: "Pass A slot \(slot) \(tag)",
+            tokenIds: ids,
+            info: info,
+            text: text)
     }
     await engineA.shutdown()
 
@@ -3001,26 +3103,26 @@ func runBatchEngineTurboQuantB2(modelPath: String, maxNew: Int) async throws {
     // Fresh inputs — LMInput is consumed by submit.
     var inputsB: [LMInput] = []
     for p in prompts {
-        inputsB.append(try await context.processor.prepare(input: UserInput(prompt: p)))
+        inputsB.append(try await makeVisibleAnswerInput(p))
     }
     nonisolated(unsafe) let inB0 = inputsB[0]
     nonisolated(unsafe) let inB1 = inputsB[1]
     let (_, streamB0) = await engineB.submit(input: inB0, parameters: tqParams)
     let (_, streamB1) = await engineB.submit(input: inB1, parameters: tqParams)
-    let resultsB = await collectBatchStreamsWithOverlap(
+    let resultsB = await collectBatchStreamsWithOverlapAndInfo(
         engineB,
         streams: [(0, streamB0), (1, streamB1)],
-        maxTokens: maxNew,
         label: "TQ B=2 pass B")
-    for (slot, ids) in resultsB {
+    for (slot, ids, info) in resultsB {
         let text = tokenizer.decode(tokenIds: ids)
         print(String(format: "  Slot %d (TQ) : %d tokens, first 8: %@",
             slot, ids.count, "\(Array(ids.prefix(8)))"))
         printDecodedOutput(label: "TQ pass B slot \(slot)", text: text)
-        if ids.isEmpty {
-            fputs("[TQ B=2] FAIL: Pass B slot \(slot) produced zero tokens.\n", stderr)
-            exit(1)
-        }
+        requireStopBounded(
+            label: "Pass B slot \(slot)",
+            tokenIds: ids,
+            info: info,
+            text: text)
     }
     await engineB.shutdown()
 

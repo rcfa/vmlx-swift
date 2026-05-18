@@ -183,25 +183,20 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                            enableThinking == false,
                            upstream.bosToken == "]~!b[",
                            upstream.eosToken == "[e~[" {
-                            do {
-                                if (env["VMLX_CHAT_TEMPLATE_FALLBACK_LOG"] ?? "0") == "1" {
-                                    FileHandle.standardError.write(
-                                        "[vmlx] chat-template auto-correction engaged: MiniMaxM2Minimal (enable_thinking=false)\\n"
-                                            .data(using: .utf8)!)
-                                }
-                                return try upstream.applyChatTemplate(
-                                    messages: messages,
-                                    chatTemplate: Tokenizers.ChatTemplateArgument.literal(
-                                        MLXLMCommon.ChatTemplateFallbacks.minimaxM2Minimal),
-                                    addGenerationPrompt: true,
-                                    truncation: false,
-                                    maxLength: nil,
-                                    tools: tools,
-                                    additionalContext: additionalContext)
-                            } catch {
-                                // Fall through to native template if our corrected
-                                // version trips a Jinja runtime issue.
+                            if (env["VMLX_CHAT_TEMPLATE_FALLBACK_LOG"] ?? "0") == "1" {
+                                FileHandle.standardError.write(
+                                    "[vmlx] chat-template auto-correction engaged: MiniMaxM2Minimal (enable_thinking=false)\\n"
+                                        .data(using: .utf8)!)
                             }
+                            return try upstream.applyChatTemplate(
+                                messages: messages,
+                                chatTemplate: Tokenizers.ChatTemplateArgument.literal(
+                                    MLXLMCommon.ChatTemplateFallbacks.minimaxM2Minimal),
+                                addGenerationPrompt: true,
+                                truncation: false,
+                                maxLength: nil,
+                                tools: tools,
+                                additionalContext: additionalContext)
                         }
                         // Mistral 4 effort coercion (mirrors Python
                         // `vmlx serve` server.py:3216-3225). The Mistral 4
@@ -406,6 +401,37 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                         additionalContext: [String: any Sendable]?,
                         addGenerationPrompt: Bool
                     ) throws -> [Int] {
+                        let env = ProcessInfo.processInfo.environment
+                        if let path = env["VMLX_CHAT_TEMPLATE_OVERRIDE"], !path.isEmpty,
+                           let src = try? String(contentsOfFile: path, encoding: .utf8) {
+                            do {
+                                return try upstream.applyChatTemplate(
+                                    messages: messages,
+                                    chatTemplate: Tokenizers.ChatTemplateArgument.literal(src),
+                                    addGenerationPrompt: addGenerationPrompt,
+                                    truncation: false,
+                                    maxLength: nil,
+                                    tools: tools,
+                                    additionalContext: additionalContext)
+                            } catch Tokenizers.TokenizerError.missingChatTemplate {
+                                throw MLXLMCommon.TokenizerError.missingChatTemplate
+                            }
+                        }
+                        if let ctx = additionalContext,
+                           let enableThinking = ctx["enable_thinking"] as? Bool,
+                           enableThinking == false,
+                           upstream.bosToken == "]~!b[",
+                           upstream.eosToken == "[e~[" {
+                            return try upstream.applyChatTemplate(
+                                messages: messages,
+                                chatTemplate: Tokenizers.ChatTemplateArgument.literal(
+                                    MLXLMCommon.ChatTemplateFallbacks.minimaxM2Minimal),
+                                addGenerationPrompt: addGenerationPrompt,
+                                truncation: false,
+                                maxLength: nil,
+                                tools: tools,
+                                additionalContext: additionalContext)
+                        }
                         do {
                             return try upstream.applyChatTemplate(
                                 messages: messages,
@@ -416,6 +442,18 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                 tools: tools,
                                 additionalContext: additionalContext)
                         } catch Tokenizers.TokenizerError.missingChatTemplate {
+                            if upstream.bosToken == "]~!b[",
+                               upstream.eosToken == "[e~[" {
+                                return try upstream.applyChatTemplate(
+                                    messages: messages,
+                                    chatTemplate: Tokenizers.ChatTemplateArgument.literal(
+                                        MLXLMCommon.ChatTemplateFallbacks.minimaxM2Minimal),
+                                    addGenerationPrompt: addGenerationPrompt,
+                                    truncation: false,
+                                    maxLength: nil,
+                                    tools: tools,
+                                    additionalContext: additionalContext)
+                            }
                             throw MLXLMCommon.TokenizerError.missingChatTemplate
                         }
                     }
