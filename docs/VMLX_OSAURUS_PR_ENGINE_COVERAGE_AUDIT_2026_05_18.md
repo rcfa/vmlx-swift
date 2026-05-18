@@ -120,6 +120,33 @@ d228fdd fix(mtp): expose tuning-gated status snapshot
   pass `loadPreservedMTP: loadNativeMTP`, preserve `generationDefaults:
   generationConfig`, and carry `mtpStatus` into `ModelConfiguration`.
 
+2026-05-17 21:09 PDT `vmlx-swift-lm` parity refresh:
+
+- The current reference repo state is still dirty and concurrent-agent active:
+  `/Users/eric/vmlx-swift-lm` is `main...origin/main [behind 5]` with local
+  edits across factories, DSV4, Hy3, ZAYA, cache, BatchEngine, templates, and
+  tests. Treat that worktree as reference material only; do not overwrite it or
+  copy unreviewed local edits.
+- Upstream reference commits checked in this pass:
+  `4546a5d fix(dsv4): render DSML tools in fallback template`,
+  `e1280c3 fixed nested ternary operator error during build`,
+  `6561a72 fix(dsv4): preserve overlap compressor state across decode`,
+  `f728718 fix(dsv4): mask HSA top-k scores causally`, and
+  `4365651 fix: decode nested ZAYA JANGTQ bits`.
+- Current `vmlx-swift` has focused parity tests for the runtime-relevant pieces:
+  DSV4 DSML tools in the fallback and standalone templates, no-system tool
+  rendering, DSV4 native encoder system/user separation, Jinja
+  `tojson(separators=...)`, ratio-4 overlap compressor preservation across
+  decode calls, causal masking before HSA top-k, nested ZAYA/ZAYA1-VL
+  JANGTQ_K gate/up/down bit decoding, Qwen/ZAYA/GLM/Gemma/LFM/Smol VL extent
+  guards, Qwen3.6 VLM native-MTP MRoPE continuation, Qwen3.6 VLM sparse-MoE MTP
+  sidecars, and Gemma3/Gemma4 masked-scatter error propagation.
+- Focused verification for this parity pass:
+  `DeepseekV4IndexerCausalTopKTests|DeepseekV4ChatTemplateFallbackFocusedTests|ZayaConfigDecodeFocusedTests|VLShapeGuardFocusedTests`
+  passes 31/31 with the Xcode framework path. This is source/test parity for
+  those fixes only; it is not a replacement for the live DSV4, ZAYA, Gemma, VL,
+  cache, speed, and low-footprint gates listed below.
+
 2026-05-17 21:10 PDT live refresh:
 
 - Open Osaurus PR #1133 remains the relevant post-runtime watch item for the
