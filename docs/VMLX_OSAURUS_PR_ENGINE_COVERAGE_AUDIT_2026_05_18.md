@@ -1328,3 +1328,76 @@ docs/VMLX_SWIFT_MODEL_CAPABILITY_LEDGER.md
 docs/VMLX_ACTIVE_MODEL_PRODUCTION_SCOPE_2026_05_17.md
 docs/VMLX_OSAURUS_PR_PIN_LINEAGE_2026_05_17.md
 ```
+
+2026-05-18 17:47 PDT completion-audit refresh:
+
+- Live GitHub state for Osaurus PR #1147:
+  `https://github.com/osaurus-ai/osaurus/pull/1147` is open and draft at head
+  `9b0e8f19f250abbfc3f8aa400c20e31ea2a5a4fa`; `mergeStateStatus=BLOCKED`.
+  CI is not a final green release signal at this snapshot: `test-core` is still
+  in progress, while `test-cli`, `swiftlint`, `shellcheck`, and release drafter
+  are green.
+- The local PR worktree
+  `/Users/eric/.config/superpowers/worktrees/osaurus/codex-vmlx-swift-package-switch`
+  is clean at the same head. The current `vmlx-swift` checkout is not clean
+  because another agent's Flux/native image work is present under
+  `Libraries/vMLXFlux*`, `Tests/vMLXFluxTests/`, `tools/vMLXFluxProbe/`, and
+  `docs/VMLX_FLUX_NATIVE_STATUS_2026_05_15.md`; do not mix that work into this
+  engine/readiness row.
+- The Osaurus-side tracker now names the current switch state explicitly in
+  `docs/internal/live-gates/20260518T_pr1147_model_function_compatibility_tracker.md`:
+  the PR is source-wired and harnessed, but not production-ready. Existing live
+  red/partial rows remain red for Gemma3n UTF/string behavior, ZAYA text UTF /
+  direct-mode behavior, ZAYA-VL media carryover/Responses grounding, and missing
+  broad UI/API/cache/memory/saved-setting evidence across the remaining model
+  families.
+- This `vmlx-swift` audit mirrors that status. Do not convert a direct
+  `RunBench` pass, source test, metadata census, or Osaurus route scaffold into
+  a production claim until the matching Osaurus chat-app/API artifact folder has
+  visible coherent output, normal stop, no loop, no marker leak, resolved bundle
+  defaults, cache stats, TTFT, tok/s, RSS plus physical-footprint context, and
+  an explicit no-fake-guard review.
+
+## PR #1147 Next Live Rows
+
+These are the concrete rows that still need app/API execution before Osaurus can
+switch entirely to this package. Each row must include the raw request, output
+body or stream frames, `health`, `/admin/cache-stats`, process memory, resolved
+generation defaults, parser/channel review, and a short human output review.
+
+| Row | Current blocker or proof gap | Required next artifact |
+| --- | --- | --- |
+| DSV4 Flash settings/runtime | vmlx has DSML, prompt-boundary, reasoning, and DSV4 cache proof; Osaurus still needs the real server-settings visual/API row. | `pr1147/deepseek-v4-flash-*/` with UI model picker, server-settings CLI preview, `reasoning_effort=max`, DSML tools off/on/result, long/growing chat, DSV4 native cache stats, block size 256 fixed/disabled, generic q4/q8/JIT omitted, pool quant visible, TTFT/tok/s/footprint. |
+| Qwen3.6 MTP VL | Census and vmlx rows prove tensor/tuning-gated MTP; Osaurus has not yet proven UI/API MTP ON/OFF with media. | `pr1147/qwen3.6-*-mxfp*-mtp/` with real `mtp.*` count, `vmlx_mtp_tuning.json` depth, MTP off baseline, MTP on depth/speed/acceptance, image T1, text-only T2 with nil media salt, different image/video, repeated-media hit, reasoning on/off, Qwen tools, cache stats, footprint. |
+| Qwen non-MTP controls | CRACK rows must remain MTP disabled from real weight evidence, not names. | `pr1147/qwen3.6-*-crack/` with status reason `no mtp tensor evidence`, no MTP UI activation, text/VL/media cache proof where supported, and no stale MTP cache-key component. |
+| Gemma4 / Gemma VLM | vmlx has Gemma4 text/VL/Harmony/tool proof; Osaurus route/UI proof remains open. | `pr1147/gemma4-*/` with image+text, text-only follow-up, image switch/repeat, Harmony analysis/final separation, Gemma tool call/result, stream/non-stream Chat and Responses, cache topology stats, TTFT/tok/s/footprint, no Harmony/Gemma marker leak. |
+| Gemma3n E2B text | Osaurus live row remains fail/partial: math and sky are coherent, UTF/string row is red, and the latest post-scrubber row lacks cache proof due immediate idle unload. | Rerun with non-immediate residency or stream-time snapshots, exact UTF/string row, Chat and Responses stream/non-stream, cache counters and physical footprint. Root cause must be template/tokenizer/decode/route, not sampler clamp or output repair. |
+| ZAYA text | Osaurus MXFP4 text row proves cache movement but Responses UTF is red; vmlx JANGTQ4 direct-mode math remains a strict-prompt blocker. | `pr1147/zaya1-8b-*/` with math, follow-up, UTF, reasoning/coding-context isolation, SSM companion and block-L2 counters, and source trace for UTF/direct-mode failures. No top-k/repetition/stop-token guard. |
+| ZAYA-VL | Osaurus artifacts expose partial/red media carryover; ZAYA1-VL video is correctly unsupported. | Fresh image-only row with red image T1, text-only T2, blue image T3, repeated image, Chat and Responses grounding, CCA/media salt hit/miss, unsupported-video UI/API rejection, speed/footprint, no stale prior-image state. |
+| Nemotron Omni / Parakeet / RADIO | Text and one WAV Chat smoke exist; streaming, repeat media, RADIO/video, and sleep/wake are not closed. | `pr1147/nemotron-omni-*/` with audio raw and pre-encoded, repeated audio cache, image/video where supported, Parakeet/RADIO facts, streaming terminal frames, sleep/wake, cache stats, TTFT/tok/s/footprint, no reasoning-only short-budget pass. |
+| MiniMax | vmlx has reasoning/cache/TQ proof; Osaurus UI/API tool/reasoning rows are open. | `pr1147/minimax-m2.7-*/` with reasoning-only behavior, `enable_thinking` off/on, MiniMax XML/JSON parser, tools off/on/result, cache stack, TurboQuant KV inverse, no MTP from CRACK/name, tok/s/footprint. |
+| Ling / Hy3 hybrid SSM | vmlx no-guard proof exists; Osaurus app/API/cache rows remain partial/open. | `pr1147/ling-*` and `pr1147/hy3-*` with family-specific reasoning defaults, explicit opt-in/native effort, long prompt, overlap/mismatch async rederive, SSM companion hit/miss/store, no KV-only unsafe hit, parser/no-leak review, TTFT/footprint. |
+| GLM / GPT-OSS / Mistral parser families | Parser source tests are not model production proof. | Only run when local bundles exist; require base-architecture parser detection, reasoning/tool rows, route parity, marker no-leak, and topology-specific cache stats. |
+| UI saved settings and visuals | Source policies exist; user-facing controls and carryover still need proof. | Cross-family app artifact: Qwen thinking -> Ling/no-thinking, DSV4 `max` -> Qwen/Gemma/ZAYA/Nemotron, VLM media -> text-only, cache OFF/ON restore, tool/coding context switch, send/stop/retry/edit/copy, thinking panel, tool card, media preview, unsupported-media error, token/s display, sleep/wake state. |
+| Old library and zombie-code sweep | Current sweep is partial because late fixes can reintroduce imports or CLI flags. | Final post-live sweep of Osaurus and `vmlx-swift`: no active inference path through old `vmlx-swift-lm`, standalone `Jinja`, standalone `swift-transformers`, invalid DSV4 CLI flags, app-side parser repair, or hidden sampler guard. |
+
+## Forced-Behavior Source Search Terms
+
+Every source or live-output audit should at minimum search these concepts before
+marking a row clear. A hit is allowed only when it is explicit user/API policy,
+bundle metadata, a topology safety gate, or a diagnostic artifact. Any hit that
+changes output to hide incoherence is a release blocker.
+
+```text
+forced temperature/top_p/top_k/min_p
+default repetition penalty / family repetition floor
+forced EOS / hidden stop sequence / length-cap success
+forced </think> / reasoning close repair / reasoning-to-visible conversion
+parser scrub / parser repair / XML or DSML output cleanup
+token or logit shaping outside explicit sampler/request policy
+name-based MTP / name-based VLM / metadata-only MTP auto enable
+KV-only hybrid SSM cache hit / media salt reuse / cross-session CCA reuse
+DSV4 generic paged/KV/JIT flag use
+global TurboQuant KV quality default
+saved reasoning/tool/media/cache setting crossing incompatible families
+```
