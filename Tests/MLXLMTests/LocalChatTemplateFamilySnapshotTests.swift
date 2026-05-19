@@ -41,6 +41,9 @@ final class LocalChatTemplateFamilySnapshotTests: XCTestCase {
             candidatePaths: [
                 "models/JANGQ/MiniMax-M2.7-JANGTQ/chat_template.jinja",
                 "models/JANGQ/MiniMax-M2.7-JANGTQ_K/chat_template.jinja",
+                "models/JANGQ/MiniMax-M2.7-Small-JANGTQ/chat_template.jinja",
+                "models/dealign.ai/MiniMax-M2.7-JANGTQ_K-CRACK/chat_template.jinja",
+                "models/dealign.ai/MiniMax-M2.7-JANG_K-CRACK/chat_template.jinja",
                 ".cache/huggingface/hub/models--JANGQ-AI--MiniMax-M2.7-JANGTQ_K/snapshots/*/chat_template.jinja",
             ],
             expectedFragments: [
@@ -102,6 +105,9 @@ final class LocalChatTemplateFamilySnapshotTests: XCTestCase {
         TemplateCase(
             name: "zaya",
             candidatePaths: [
+                "models/Osaurus/ZAYA1-8B-MXFP4/chat_template.jinja",
+                "models/JANGQ/ZAYA1-8B-JANGTQ_K/chat_template.jinja",
+                "models/JANGQ/ZAYA1-8B-JANGTQ4/chat_template.jinja",
                 "models/Zyphra/ZAYA1-8B-JANGTQ2/chat_template.jinja",
                 "models/Zyphra/ZAYA1-8B-JANGTQ4/chat_template.jinja",
                 "models/Zyphra/ZAYA1-8B-MXFP4/chat_template.jinja",

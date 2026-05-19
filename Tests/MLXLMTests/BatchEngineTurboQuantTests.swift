@@ -72,8 +72,8 @@ struct BatchKVCacheWithTQSlotsTests {
     @Test("BatchKVCache wraps two TQ slot caches at different offsets")
     func testWrapTwoTQSlotsDifferentOffsets() {
         MLXMetalTestLock.withLock {
-            let tq0 = makeCompressedTQCache(tokens: 12)
-            let tq1 = makeCompressedTQCache(tokens: 9)
+            let tq0 = makeCompressedTQCache(tokens: 16)
+            let tq1 = makeCompressedTQCache(tokens: 12)
 
             #expect(tq0.phase == .compressed)
             #expect(tq1.phase == .compressed)
@@ -82,18 +82,18 @@ struct BatchKVCacheWithTQSlotsTests {
             let batchCache = BatchKVCache(slotCaches: [tq0 as KVCache, tq1 as KVCache])
 
             #expect(batchCache.batchSize == 2)
-            #expect(batchCache.offset == 12)
+            #expect(batchCache.offset == 16)
             MLX.eval(batchCache.offsetArray)
-            #expect(batchCache.offsetArray[0].item(Int32.self) == 12)
-            #expect(batchCache.offsetArray[1].item(Int32.self) == 9)
+            #expect(batchCache.offsetArray[0].item(Int32.self) == 16)
+            #expect(batchCache.offsetArray[1].item(Int32.self) == 12)
         }
     }
 
     @Test("update on BatchKVCache over TQ slots returns padded [B, H, maxLen, D]")
     func testUpdatePadsAndStacksOverTQ() {
         MLXMetalTestLock.withLock {
-            let tq0 = makeCompressedTQCache(tokens: 12)
-            let tq1 = makeCompressedTQCache(tokens: 9)
+            let tq0 = makeCompressedTQCache(tokens: 16)
+            let tq1 = makeCompressedTQCache(tokens: 12)
 
             let batchCache = BatchKVCache(slotCaches: [tq0 as KVCache, tq1 as KVCache])
 
@@ -102,34 +102,34 @@ struct BatchKVCacheWithTQSlotsTests {
             let (ks, vs) = batchCache.update(keys: batchKeys, values: batchValues)
             MLX.eval(ks, vs)
 
-            // Post-update: tq0 at 13 tokens, tq1 at 10 tokens; padded to maxLen=13
-            #expect(ks.shape == [2, 4, 13, 64])
-            #expect(vs.shape == [2, 4, 13, 64])
+            // Post-update: tq0 at 17 tokens, tq1 at 13 tokens; padded to maxLen=17
+            #expect(ks.shape == [2, 4, 17, 64])
+            #expect(vs.shape == [2, 4, 17, 64])
 
             MLX.eval(batchCache.offsetArray)
-            #expect(batchCache.offsetArray[0].item(Int32.self) == 13)
-            #expect(batchCache.offsetArray[1].item(Int32.self) == 10)
-            #expect(batchCache.offset == 13)
+            #expect(batchCache.offsetArray[0].item(Int32.self) == 17)
+            #expect(batchCache.offsetArray[1].item(Int32.self) == 13)
+            #expect(batchCache.offset == 17)
         }
     }
 
     @Test("single-slot BatchKVCache over TQ cache is equivalent to raw TQ update")
     func testSingleSlotTQEquivalence() {
         MLXMetalTestLock.withLock {
-            let tq = makeCompressedTQCache(tokens: 10)
+            let tq = makeCompressedTQCache(tokens: 12)
             let batchCache = BatchKVCache(slotCaches: [tq as KVCache])
 
             #expect(batchCache.batchSize == 1)
-            #expect(batchCache.offset == 10)
+            #expect(batchCache.offset == 12)
 
             let k = MLXArray.ones([1, 4, 1, 64])
             let v = MLXArray.ones([1, 4, 1, 64])
             let (ks, vs) = batchCache.update(keys: k, values: v)
             MLX.eval(ks, vs)
 
-            #expect(ks.shape == [1, 4, 11, 64])
-            #expect(vs.shape == [1, 4, 11, 64])
-            #expect(tq.offset == 11)
+            #expect(ks.shape == [1, 4, 13, 64])
+            #expect(vs.shape == [1, 4, 13, 64])
+            #expect(tq.offset == 13)
         }
     }
 
@@ -166,7 +166,7 @@ struct BatchKVCacheWithTQSlotsTests {
             // (short prompt below TQ threshold). Both slot caches must satisfy
             // the `update(keys:values:) -> (MLXArray, MLXArray)` contract for
             // `BatchKVCache.padAndConcatenate` to work.
-            let tq = makeCompressedTQCache(tokens: 10)
+            let tq = makeCompressedTQCache(tokens: 12)
 
             let simple = KVCacheSimple()
             for _ in 0 ..< 5 {
@@ -183,9 +183,9 @@ struct BatchKVCacheWithTQSlotsTests {
             let (returnedK, returnedV) = batchCache.update(keys: ks, values: vs)
             MLX.eval(returnedK, returnedV)
 
-            // tq -> 11, simple -> 6. Padded to maxLen=11.
-            #expect(returnedK.shape == [2, 4, 11, 64])
-            #expect(returnedV.shape == [2, 4, 11, 64])
+            // tq -> 13, simple -> 6. Padded to maxLen=13.
+            #expect(returnedK.shape == [2, 4, 13, 64])
+            #expect(returnedV.shape == [2, 4, 13, 64])
         }
     }
 }

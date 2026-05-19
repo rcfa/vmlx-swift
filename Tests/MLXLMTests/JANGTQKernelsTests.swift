@@ -255,14 +255,20 @@ final class JANGTQKernelsTests: XCTestCase {
     // MARK: - JANGTQRuntimeCache signs/codebook lookup contract
 
     /// Lookups by (inFeatures, seed) and (inFeatures, bits) must be
-    /// deterministic — unknown keys return nil without crashing.
-    /// Pins the LRU-free lookup semantics the kernel callers rely on.
-    func testRuntimeCacheLookupKeyShape() {
+    /// deterministic. Consolidated vmlx-swift can synthesize the runtime
+    /// arrays when a sidecar entry is missing, so use a small uncached
+    /// dimension and pin the generated fallback contract.
+    func testRuntimeCacheLookupKeyShape() throws {
         let cache = JANGTQRuntimeCache.shared
-        XCTAssertNil(cache.signs(inFeatures: 999_999_999, seed: 999_999_999),
-            "Unknown (inFeatures, seed) must return nil, not crash.")
-        XCTAssertNil(cache.codebook(inFeatures: 999_999_999, bits: 17),
-            "Unknown (inFeatures, bits) must return nil.")
+        let signs1 = try XCTUnwrap(cache.signs(inFeatures: 16, seed: 999_999_999))
+        let signs2 = try XCTUnwrap(cache.signs(inFeatures: 16, seed: 999_999_999))
+        XCTAssertEqual(signs1.shape, [16])
+        XCTAssertEqual(signs2.shape, [16])
+        realise(signs1, signs2)
+        XCTAssertEqual((signs1 - signs2).abs().max().item(Float.self), 0)
+
+        let codebook = try XCTUnwrap(cache.codebook(inFeatures: 16, bits: 2))
+        XCTAssertEqual(codebook.shape, [4])
     }
 
     // MARK: - profile routed-bits inference

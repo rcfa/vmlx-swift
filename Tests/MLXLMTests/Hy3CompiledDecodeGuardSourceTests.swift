@@ -25,6 +25,6 @@ struct Hy3CompiledDecodeGuardSourceTests {
 
         #expect(source.contains("private static func compiledDecodeDenied(for model: any LanguageModel) -> Bool"))
         #expect(source.contains("typeName.contains(\"hy3\") || typeName.contains(\"hunyuan\")"))
-        #expect(source.contains("parameters.enableCompiledDecode && !Self.compiledDecodeDenied(for: model)"))
+        #expect(source.contains("effectiveParameters.enableCompiledDecode && !Self.compiledDecodeDenied(for: model)"))
     }
 }

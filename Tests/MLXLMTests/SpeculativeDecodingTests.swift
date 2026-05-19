@@ -1,11 +1,11 @@
 // Copyright © 2025 Apple Inc.
 
-import Foundation
 import MLX
 import MLXLLM
 import MLXLMCommon
 import Testing
 
+@Suite(.serialized)
 struct SpeculativeDecodingTests {
 
     let processor: any UserInputProcessor
@@ -13,6 +13,8 @@ struct SpeculativeDecodingTests {
     let draftContext: ModelContext
 
     init() {
+        MLXRandom.seed(0x5EC_DEC0D)
+
         let processor = TestInputProcessor()
         let modelConfig = Gemma3TextConfiguration(
             modelType: "text",
@@ -21,7 +23,7 @@ struct SpeculativeDecodingTests {
             rmsNormEps: 0.00001, vocabularySize: 100, kvHeads: 4,
             ropeTheta: 1_000_000, ropeLocalBaseFreq: 10_000,
             ropeTraditional: false, queryPreAttnScalar: 256,
-            slidingWindow: 512, slidingWindowPattern: 6,
+            slidingWindow: 512, slidingWindowPattern: 1,
             maxPositionEmbeddings: 32768
         )
 
@@ -52,8 +54,7 @@ struct SpeculativeDecodingTests {
         numDraftTokens: Int,
         withLogitProcessor: Bool
     ) async throws {
-        let input = UserInput(prompt: "Input text")
-        let modelInput = try await processor.prepare(input: input)
+        let modelInput = LMInput(tokens: MLXArray([3, 5, 7, 11, 13, 17, 19, 23]))
         let parameters = GenerateParameters(
             maxTokens: 32,
             temperature: 0.0,  // Use greedy decoding for deterministic output

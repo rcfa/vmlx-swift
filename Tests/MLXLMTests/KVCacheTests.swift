@@ -16,6 +16,9 @@ private let cacheCreators: [@Sendable () -> any KVCache] = [
     .serialized,
     arguments: cacheCreators)
 func testCacheSerialization(creator: (() -> any KVCache)) async throws {
+    let mlxTestLock = lockSerializedMLXTest()
+    defer { mlxTestLock.unlock() }
+
     let cache = (0 ..< 10).map { _ in creator() }
     let keys = MLXArray.ones([1, 8, 32, 64], dtype: .bfloat16)
     let values = MLXArray.ones([1, 8, 32, 64], dtype: .bfloat16)
@@ -52,6 +55,9 @@ func testCacheSerialization(creator: (() -> any KVCache)) async throws {
     .serialized,
     arguments: cacheCreators)
 func testCacheCopyIsIndependent(creator: (() -> any KVCache)) async throws {
+    let mlxTestLock = lockSerializedMLXTest()
+    defer { mlxTestLock.unlock() }
+
     let original = creator()
 
     let keys = MLXArray.ones([1, 8, 4, 64], dtype: .bfloat16)
@@ -123,6 +129,9 @@ func testCacheCopyIsIndependent(creator: (() -> any KVCache)) async throws {
     .serialized,
     arguments: cacheCreators)
 func testCacheCopyOnEmptyCache(creator: (() -> any KVCache)) async throws {
+    let mlxTestLock = lockSerializedMLXTest()
+    defer { mlxTestLock.unlock() }
+
     let empty = creator()
     let copied = empty.copy()
 
@@ -134,6 +143,9 @@ func testCacheCopyOnEmptyCache(creator: (() -> any KVCache)) async throws {
 /// CacheList.copy() produces independent sub-caches.
 @Test
 func testCacheListCopyIsIndependent() async throws {
+    let mlxTestLock = lockSerializedMLXTest()
+    defer { mlxTestLock.unlock() }
+
     let sub1 = KVCacheSimple()
     let sub2 = RotatingKVCache(maxSize: 32)
     let composite = CacheList(sub1, sub2)

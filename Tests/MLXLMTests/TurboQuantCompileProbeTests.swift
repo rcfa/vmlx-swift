@@ -286,12 +286,12 @@ class TurboQuantCompileProbeTests: XCTestCase {
         quantize(model: model, groupSize: 64, bits: 4)
         MLX.eval(model)
 
-        // Build a TQ cache state after a short prefill. The TQ
-        // appendDecodeTokens grows the unified buffer in windowStep=256
-        // chunks, so to exercise a realloc we need >256 decode steps past
-        // the prefix. That's expensive; for the probe we accept a smaller
-        // bound and just check closeness.
-        let prompt = MLXArray(Int32(1) ..< Int32(9))
+        // Build a compressed TQ cache state after a short prefill. With
+        // residualTokens: 0, the prompt must leave at least
+        // TurboQuantKVCache.minimumCompressedTokens after sink tokens;
+        // otherwise fromSimpleCache stays in fill phase and this raw-TQ
+        // compile probe becomes vacuous.
+        let prompt = MLXArray(Int32(1) ..< Int32(17))
 
         func makeTQCache() -> [KVCache] {
             let simpleCache = model.newCache(parameters: nil)
@@ -310,6 +310,14 @@ class TurboQuantCompileProbeTests: XCTestCase {
 
         let refCache = makeTQCache()
         let compiledCache = makeTQCache()
+        for layer in refCache + compiledCache {
+            guard let tq = layer as? TurboQuantKVCache else {
+                XCTFail("Expected TurboQuantKVCache layer")
+                return
+            }
+            XCTAssertEqual(tq.phase, .compressed,
+                "Long-decode raw TQ probe must run against compressed caches")
+        }
 
         // 50 decode steps, all with the SAME hardcoded token. Greedy argmax
         // on tiny random models is unstable — a sub-FP-tolerance difference

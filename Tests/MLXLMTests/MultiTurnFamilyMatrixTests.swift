@@ -104,20 +104,17 @@ struct ReasoningStampFamilyMatrixTests {
         #expect(reasoningStampFromModelType(nil) == "none")
     }
 
-    /// Defensive-parsing semantics for whitespace in `model_type`:
-    ///   - Leading whitespace breaks prefix match → returns "none".
-    ///   - Trailing whitespace is tolerated by the `hasPrefix` check
-    ///     (still matches the canonical family prefix), so the family
-    ///     stamp resolves correctly. This is intentional — a
-    ///     copy-pasted `"qwen3 "` in a config.json must not silently
-    ///     demote to "none" reasoning.
+    /// Defensive-parsing semantics for whitespace in `model_type`: raw
+    /// config values are trimmed before family matching so pasted leading
+    /// or trailing whitespace does not silently demote a reasoning family
+    /// to "none".
     @Test func whitespacedStampSemantics() {
-        #expect(reasoningStampFromModelType(" qwen3") == "none",
-            "leading whitespace breaks prefix match")
+        #expect(reasoningStampFromModelType(" qwen3") == "think_xml",
+            "leading whitespace is trimmed before prefix match")
         #expect(reasoningStampFromModelType("qwen3 ") == "think_xml",
             "trailing whitespace is tolerated — still matches `qwen3` prefix")
-        #expect(reasoningStampFromModelType("\nqwen3") == "none",
-            "leading newline also breaks prefix match")
+        #expect(reasoningStampFromModelType("\nqwen3") == "think_xml",
+            "leading newline is trimmed before prefix match")
     }
 }
 

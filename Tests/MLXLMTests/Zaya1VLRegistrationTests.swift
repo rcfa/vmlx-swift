@@ -8,7 +8,6 @@ import MLXLMCommon
 @testable import MLXVLM
 import Testing
 @preconcurrency import VMLXTokenizers
-import XCTest
 
 @Suite("ZAYA1-VL registration and metadata", .serialized)
 struct Zaya1VLRegistrationTests {
@@ -38,6 +37,13 @@ struct Zaya1VLRegistrationTests {
 
     static func fileData(_ bundle: String, _ file: String) throws -> Data {
         try Data(contentsOf: URL(fileURLWithPath: bundlePath(bundle)).appendingPathComponent(file))
+    }
+
+    static var hasJANGTQ2TokenizerBundle: Bool {
+        let dir = URL(fileURLWithPath: bundlePath("ZAYA1-VL-8B-JANGTQ2"))
+        return FileManager.default.fileExists(atPath: dir.appendingPathComponent("tokenizer.json").path)
+            && FileManager.default.fileExists(
+                atPath: dir.appendingPathComponent("preprocessor_config.json").path)
     }
 
     struct VisionPadTokenizer: MLXLMCommon.Tokenizer {
@@ -362,14 +368,10 @@ struct Zaya1VLRegistrationTests {
         }
     }
 
-    @Test("Real ZAYA1-VL tokenizer renders image placeholders from sidecar template")
+    @Test("Real ZAYA1-VL tokenizer renders image placeholders from sidecar template",
+          .enabled(if: hasJANGTQ2TokenizerBundle))
     func realTokenizerRendersImagePlaceholderFromSidecarTemplate() async throws {
         let dir = URL(fileURLWithPath: Self.bundlePath("ZAYA1-VL-8B-JANGTQ2"))
-        guard FileManager.default.fileExists(atPath: dir.appendingPathComponent("tokenizer.json").path)
-        else {
-            throw XCTSkip("local ZAYA1-VL bundle not available")
-        }
-
         let tokenizerDir = JangLoader.resolveTokenizerClassSubstitution(
             for: JangLoader.resolveChatTemplateSidecarSubstitution(
                 for: JangLoader.resolveTokenizerDirectory(for: dir)))
@@ -386,15 +388,11 @@ struct Zaya1VLRegistrationTests {
             "decoded prompt: \(decoded)")
     }
 
-    @Test("Real ZAYA1-VL processor expands sidecar-rendered image placeholders")
+    @Test("Real ZAYA1-VL processor expands sidecar-rendered image placeholders",
+          .enabled(if: hasJANGTQ2TokenizerBundle))
     func realProcessorExpandsSidecarRenderedImagePlaceholder() async throws {
         try await MLXMetalTestLock.withLock {
             let dir = URL(fileURLWithPath: Self.bundlePath("ZAYA1-VL-8B-JANGTQ2"))
-            guard FileManager.default.fileExists(atPath: dir.appendingPathComponent("tokenizer.json").path)
-            else {
-                throw XCTSkip("local ZAYA1-VL bundle not available")
-            }
-
             let tokenizerDir = JangLoader.resolveTokenizerClassSubstitution(
                 for: JangLoader.resolveChatTemplateSidecarSubstitution(
                     for: JangLoader.resolveTokenizerDirectory(for: dir)))

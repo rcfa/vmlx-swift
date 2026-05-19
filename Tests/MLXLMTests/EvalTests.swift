@@ -112,12 +112,14 @@ public class EvalTests: XCTestCase {
 
             for samplerId in 0 ..< numSamplers {
                 group.addTask {
-                    let logits = MLXRandom.normal([1, vocabSize])
-                    return withRandomState(MLXRandom.RandomState(seed: UInt64(samplerId))) {
-                        if samplerId % 2 == 0 {
-                            return categorical(logits).item(Int.self)
-                        } else {
-                            return logits.argMax(axis: -1).item(Int.self)
+                    try await MLXMetalTestLock.withLock {
+                        let logits = MLXRandom.normal([1, vocabSize])
+                        return withRandomState(MLXRandom.RandomState(seed: UInt64(samplerId))) {
+                            if samplerId % 2 == 0 {
+                                return categorical(logits).item(Int.self)
+                            } else {
+                                return logits.argMax(axis: -1).item(Int.self)
+                            }
                         }
                     }
                 }
@@ -199,20 +201,22 @@ public class EvalTests: XCTestCase {
 
             for samplerId in 0 ..< numSamplers {
                 group.addTask {
-                    let logits = MLXArray.ones([1, 50])
-                    var taskResults: [Int] = []
-                    let sampler = CategoricalSampler(temperature: 1.0)
+                    try await MLXMetalTestLock.withLock {
+                        let logits = MLXArray.ones([1, 50])
+                        var taskResults: [Int] = []
+                        let sampler = CategoricalSampler(temperature: 1.0)
 
-                    for sampleId in 0 ..< samplesPerTask {
-                        let token = withRandomState(
-                            MLXRandom.RandomState(seed: UInt64(samplerId * 1000 + sampleId))
-                        ) {
-                            return sampler.sample(logits: logits)
+                        for sampleId in 0 ..< samplesPerTask {
+                            let token = withRandomState(
+                                MLXRandom.RandomState(seed: UInt64(samplerId * 1000 + sampleId))
+                            ) {
+                                return sampler.sample(logits: logits)
+                            }
+                            taskResults.append(token.item(Int.self))
                         }
-                        taskResults.append(token.item(Int.self))
-                    }
 
-                    return taskResults
+                        return taskResults
+                    }
                 }
             }
 
