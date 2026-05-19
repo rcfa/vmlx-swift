@@ -1439,3 +1439,21 @@ saved reasoning/tool/media/cache setting crossing incompatible families
   not discoverable by `swift test list` in the current package graph, so those
   zero-test filters are not counted as proof. The active server runtime tests
   still prove the key no-fake-sampler behavior for the Osaurus settings bridge.
+
+2026-05-18 18:21 PDT broad package test follow-up:
+
+- `swift test --jobs 2` exposed real Metal test-harness races before the full
+  package gate could be trusted: concurrent random-state rows shared the process
+  default Metal stream, and `vmap`'s trace/replace path only locked tracing.
+- Fixed the random contract without adding sampler/output guards: task-local
+  `RandomState` now documents and tests that concurrent GPU work also needs a
+  task-local stream. `MLXRandomTests` passes 22 tests, including both concurrent
+  random-state rows.
+- Fixed `vmap` transform locking by keeping trace and replace inside the same
+  transform critical section. The XCTest `vmap` thread row now serializes actual
+  Metal evaluation in the test process, matching the existing production
+  assumption that model/generation owners serialize MLX Metal work.
+- Full package suite passes with `swift test --jobs 1`: 543 XCTest tests and
+  255 Swift Testing tests, with no failures or process aborts. The `--jobs 2`
+  full-suite run remains a harness-level parallel Metal collision, not a model
+  behavior proof and not a release-quality invocation for this package.

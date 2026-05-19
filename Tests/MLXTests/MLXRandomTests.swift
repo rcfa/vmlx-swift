@@ -214,12 +214,14 @@ class MLXRandomTests: XCTestCase {
             for _ in 0 ..< 10 {
                 group.addTask {
                     let state = MLXRandom.RandomState(seed: 23)
-                    return withRandomState(state) {
-                        var t: Float = 0.0
-                        for _ in 0 ..< 100 {
-                            t += uniform(0 ..< 1, [10, 10]).sum().item(Float.self)
+                    return Stream.withNewDefaultStream {
+                        withRandomState(state) {
+                            var t: Float = 0.0
+                            for _ in 0 ..< 100 {
+                                t += uniform(0 ..< 1, [10, 10]).sum().item(Float.self)
+                            }
+                            return t
                         }
-                        return t
                     }
                 }
             }
@@ -236,20 +238,24 @@ class MLXRandomTests: XCTestCase {
 
     func testRandomThreadsDifferent() async {
 
-        // several threads using task local random state with different
-        // seeds will produce different values
+        // Several tasks using task-local random state with different
+        // seeds will produce different values. Each task also needs its
+        // own MLX stream; task-local random state protects key splitting,
+        // not the process default Metal command encoder.
         await withTaskGroup(of: Float.self) { group in
             for i in 0 ..< 10 {
                 group.addTask {
                     let state = MLXRandom.RandomState(seed: UInt64(i))
-                    return withRandomState(state) {
-                        var t: Float = 0.0
-                        for _ in 0 ..< 100 {
-                            let x = uniform(0 ..< 1, [10, 10]).sum()
-                            asyncEval(x)
-                            t += x.item(Float.self)
+                    return Stream.withNewDefaultStream {
+                        withRandomState(state) {
+                            var t: Float = 0.0
+                            for _ in 0 ..< 100 {
+                                let x = uniform(0 ..< 1, [10, 10]).sum()
+                                asyncEval(x)
+                                t += x.item(Float.self)
+                            }
+                            return t
                         }
-                        return t
                     }
                 }
             }

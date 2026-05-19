@@ -19,9 +19,9 @@ extension MLXRandom {
     ///
     ///
     ///
-    /// Note: although this type is thread-safe, the MLXArrays that it returns are not -- do not
-    /// evaluate these values or expressions that depend on them across multiple threads
-    /// simultaneously.
+    /// Note: this type serializes key splitting, but it does not make the process
+    /// default GPU stream safe to share across tasks. Concurrent GPU evaluation
+    /// should run under a task-local ``Stream/withNewDefaultStream(device:_:)-5bwc3``.
     ///
     /// ### See Also
     /// - ``globalState``

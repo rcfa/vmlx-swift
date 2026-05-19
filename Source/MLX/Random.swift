@@ -67,12 +67,14 @@ import Foundation
 ///     for i in 0 ..< 10 {
 ///         group.addTask {
 ///             let state = MLXRandom.RandomState(seed: UInt64(i))
-///             return withRandomState(state) {
-///                 var t: Float = 0.0
-///                 for _ in 0 ..< 100 {
-///                     t += uniform(0 ..< 1, [10, 10]).sum().item(Float.self)
+///             return Stream.withNewDefaultStream {
+///                 withRandomState(state) {
+///                     var t: Float = 0.0
+///                     for _ in 0 ..< 100 {
+///                         t += uniform(0 ..< 1, [10, 10]).sum().item(Float.self)
+///                     }
+///                     return t
 ///                 }
-///                 return t
 ///             }
 ///         }
 ///     }
@@ -83,7 +85,10 @@ import Foundation
 /// }
 /// ```
 ///
-/// Each task will have separate ``RandomState`` that will be used implicitly (if no other key is passed in).
+/// Each task will have a separate ``RandomState`` that will be used implicitly
+/// if no other key is passed in. Concurrent GPU evaluation should also use a
+/// task-local stream, as shown above, instead of sharing the process default
+/// Metal stream across tasks.
 public enum MLXRandom {
 
     /// Seed the global PRNG.

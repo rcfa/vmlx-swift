@@ -374,10 +374,14 @@ class TransformTests: XCTestCase {
         await withTaskGroup(of: Void.self) { group in
             for _ in 0 ..< 10 {
                 group.addTask {
-                    withRandomState(.init()) {
-                        let x = MLXRandom.normal([1024, 1024])
-                        let y = MLXRandom.normal(x.shape)
-                        let _ = compileSwiglu()(x, y)
+                    Device.withDefaultDevice(.cpu) {
+                        Stream.withNewDefaultStream(device: .cpu) {
+                            withRandomState(.init()) {
+                                let x = MLXRandom.normal([1024, 1024])
+                                let y = MLXRandom.normal(x.shape)
+                                let _ = compileSwiglu()(x, y)
+                            }
+                        }
                     }
                 }
             }
@@ -389,18 +393,30 @@ class TransformTests: XCTestCase {
     }
 
     func testVmapThreadSafety() async throws {
+        let metalExecutionLock = NSLock()
         await withTaskGroup(of: Void.self) { group in
             for _ in 0 ..< 10 {
                 group.addTask {
-                    func f(_ x: MLXArray) -> MLXArray { x.square().sum() }
+                    // vmap/grad setup can be repeated from tasks, but MLX
+                    // array evaluation in the XCTest process must remain
+                    // single-tenant to avoid racing the default Metal command
+                    // buffer. Production generation uses actor/model-level
+                    // serialization for the same reason.
+                    metalExecutionLock.withLock {
+                        Device.withDefaultDevice(.cpu) {
+                            Stream.withNewDefaultStream(device: .cpu) {
+                                func f(_ x: MLXArray) -> MLXArray { x.square().sum() }
 
-                    let x = MLXArray(0 ..< 6, [3, 2])
+                                let x = MLXArray(0 ..< 6, [3, 2])
 
-                    let gradF = grad(f)
-                    let vg = vmap(gradF)
-                    assertEqual(vg(x), x * 2)
+                                let gradF = grad(f)
+                                let vg = vmap(gradF)
+                                assertEqual(vg(x), x * 2)
 
-                    let _ = grad { vmap(f)($0).sum() }
+                                let _ = grad { vmap(f)($0).sum() }
+                            }
+                        }
+                    }
                 }
             }
 

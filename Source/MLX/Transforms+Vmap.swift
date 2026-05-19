@@ -26,38 +26,35 @@ public func vmap(
         let inputs = new_mlx_vector_array(arrays)
         defer { mlx_vector_array_free(inputs) }
 
-        var traceInputs = mlx_vector_array_new()
-        var traceOutputs = mlx_vector_array_new()
-
-        evalLock.withLock {
-            let closure = new_mlx_closure(f)
-            _ = inAxes32.withUnsafeBufferPointer { inAxesBuf in
-                mlx_detail_vmap_trace(
-                    &traceInputs, &traceOutputs, closure, inputs, inAxesBuf.baseAddress,
-                    inAxesBuf.count
-                )
-            }
-            mlx_closure_free(closure)
-        }
-
-        defer {
-            mlx_vector_array_free(traceInputs)
-            mlx_vector_array_free(traceOutputs)
-        }
-
         var result = mlx_vector_array_new()
-        _ = inAxes32.withUnsafeBufferPointer { inAxesBuf in
-            outAxes32.withUnsafeBufferPointer { outAxesBuf in
-                mlx_detail_vmap_replace(
-                    &result,
-                    inputs,
-                    traceInputs,
-                    traceOutputs,
-                    inAxesBuf.baseAddress,
-                    inAxesBuf.count,
-                    outAxesBuf.baseAddress,
-                    outAxesBuf.count
-                )
+        evalLock.withLock {
+            var traceInputs = mlx_vector_array_new()
+            var traceOutputs = mlx_vector_array_new()
+            defer {
+                mlx_vector_array_free(traceInputs)
+                mlx_vector_array_free(traceOutputs)
+            }
+
+            let closure = new_mlx_closure(f)
+            defer { mlx_closure_free(closure) }
+
+            inAxes32.withUnsafeBufferPointer { inAxesBuf in
+                outAxes32.withUnsafeBufferPointer { outAxesBuf in
+                    mlx_detail_vmap_trace(
+                        &traceInputs, &traceOutputs, closure, inputs, inAxesBuf.baseAddress,
+                        inAxesBuf.count
+                    )
+                    mlx_detail_vmap_replace(
+                        &result,
+                        inputs,
+                        traceInputs,
+                        traceOutputs,
+                        inAxesBuf.baseAddress,
+                        inAxesBuf.count,
+                        outAxesBuf.baseAddress,
+                        outAxesBuf.count
+                    )
+                }
             }
         }
 
