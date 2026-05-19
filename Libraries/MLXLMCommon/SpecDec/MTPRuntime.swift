@@ -128,7 +128,7 @@ public struct NativeMTPTuning: Codable, Sendable, Equatable {
             .lowercased()
             .replacingOccurrences(of: "-", with: "_")
         guard let normalized, !normalized.isEmpty else {
-            return "sequential_repair"
+            return "chunk_lazy_repair"
         }
         return normalized
     }
@@ -634,7 +634,7 @@ public struct NativeMTPAutoDecodeRecommendation: Codable, Sendable, Equatable {
 
     public init(
         depth: Int,
-        verifierMode: String = "chunk_commit",
+        verifierMode: String = "chunk_lazy_repair",
         reason: String,
         evidence: [String] = []
     ) {
@@ -920,11 +920,16 @@ public enum NativeMTPVerifierStatePolicy {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
             .replacingOccurrences(of: "-", with: "_")
+        if raw.isEmpty {
+            return .lazyRepair
+        }
         switch raw {
         case "chunk_lazy_repair", "lazy_repair", "lazy", "fast_lazy":
             return .lazyRepair
         case "chunk_fast", "fast", "capture_commit", "chunk_commit":
             return .captureCommit
+        case "sequential", "sequential_repair", "strict", "strict_capture":
+            return .strictCapture
         default:
             return .strictCapture
         }

@@ -143,7 +143,7 @@ struct MTPRuntimeFocusedTests {
             status: status)
 
         #expect(recommendation?.depth == 2)
-        #expect(recommendation?.verifierMode == "sequential_repair")
+        #expect(recommendation?.verifierMode == "chunk_lazy_repair")
         #expect(recommendation?.evidence.contains("tuning_file=vmlx_mtp_tuning.json") == true)
         #expect(recommendation?.reason.contains("vmlx_mtp_tuning.json") == true)
     }
@@ -539,6 +539,15 @@ struct MTPRuntimeFocusedTests {
 
         #expect(NativeMTPActivation.isExplicitlyRequested)
         #expect(NativeMTPVerifierStatePolicy.mode == .captureCommit)
+
+        unsetenv("VMLINUX_NATIVE_MTP_HYBRID_VERIFY")
+        #expect(NativeMTPVerifierStatePolicy.mode == .lazyRepair)
+
+        setenv("VMLX_NATIVE_MTP_HYBRID_VERIFY", "sequential_repair", 1)
+        #expect(NativeMTPVerifierStatePolicy.mode == .strictCapture)
+
+        setenv("VMLX_NATIVE_MTP_HYBRID_VERIFY", "misspelled_fast_mode", 1)
+        #expect(NativeMTPVerifierStatePolicy.mode == .strictCapture)
     }
 
     @Test("JANG MTP metadata without tensor evidence is not treated as an MTP bundle")
@@ -721,7 +730,7 @@ struct MTPRuntimeFocusedTests {
             jangConfig: nil,
             status: preserved)
         #expect(denseAuto?.depth == 3)
-        #expect(denseAuto?.verifierMode == "sequential_repair")
+        #expect(denseAuto?.verifierMode == "chunk_lazy_repair")
         #expect(denseAuto?.evidence.contains("tuning_file=vmlx_mtp_tuning.json") == true)
         #expect(NativeMTPAutoDecodePolicy.recommendation(
             configData: denseMXFP8Config,
@@ -739,14 +748,14 @@ struct MTPRuntimeFocusedTests {
             status: preserved,
             requireVerifiedRuntime: false)
         #expect(denseReporting?.depth == 3)
-        #expect(denseReporting?.verifierMode == "sequential_repair")
+        #expect(denseReporting?.verifierMode == "chunk_lazy_repair")
 
         let moeVerified = NativeMTPAutoDecodePolicy.recommendation(
             configData: moeMXFP8Config,
             jangConfig: nil,
             status: verified)
         #expect(moeVerified?.depth == 3)
-        #expect(moeVerified?.verifierMode == "sequential_repair")
+        #expect(moeVerified?.verifierMode == "chunk_lazy_repair")
 
         let jang2k = NativeMTPAutoDecodePolicy.recommendation(
             configData: denseMXFP8Config,

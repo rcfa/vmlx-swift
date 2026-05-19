@@ -1205,7 +1205,7 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
         if !speculativeSampler.isGreedy && cache.contains(where: { $0 is MambaCache }) {
             return true
         }
-        return cache.contains { $0 is MambaCache }
+        return false
     }
 
     private static func requiresChunkTokenReplayRepair(_ cache: [KVCache]) -> Bool {

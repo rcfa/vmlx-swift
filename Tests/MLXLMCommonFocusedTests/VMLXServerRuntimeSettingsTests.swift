@@ -244,7 +244,7 @@ struct VMLXServerRuntimeSettingsTests {
 
         #expect(launch.launchMode == .speculative)
         #expect(launch.recommendation?.depth == 2)
-        #expect(launch.recommendation?.verifierMode == "sequential_repair")
+        #expect(launch.recommendation?.verifierMode == "chunk_lazy_repair")
         #expect(launch.recommendation?.evidence.contains("server_draft_token_limit=2") == true)
         if case .nativeMTP(let depth)? = settings.resolvedMTPDraftStrategy(
             configData: config,
@@ -296,7 +296,7 @@ struct VMLXServerRuntimeSettingsTests {
             status: preserved)
 
         #expect(candidate?.depth == 3)
-        #expect(candidate?.verifierMode == "sequential_repair")
+        #expect(candidate?.verifierMode == "chunk_lazy_repair")
         #expect(settings.effectiveMTPLaunchMode(for: preserved) == .speculative)
         #expect(launch.launchMode == .speculative)
         #expect(loadConfiguration.nativeMTP)
