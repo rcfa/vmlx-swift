@@ -292,21 +292,25 @@ public func loadWeights(
             "[loadWeights] JANGTQ runtime sidecar missing; generating deterministic signs/codebooks on demand\n".utf8))
     }
 
-    // JANG: dequantize MoE gate weights from quantized uint32 → float.
-    // Gates are stored at 8-bit (CRITICAL tier) but may have different group_size
-    // than the body. Dequantizing resolves ambiguous bit/group_size inference.
+    // Dequantize MoE gate/router weights from quantized uint32 -> float.
+    // The model definitions keep router gates as plain Linear modules for
+    // routing precision; bundled `.gate.{weight,scales,biases}` tensors are a
+    // storage detail, not a signal to replace those gates with QuantizedLinear.
+    // This must run for standard quantized bundles too, not only JANG bundles:
+    // some Qwen3.6 MXFP-stamped artifacts carry affine router companions.
     // Safe for JANGTQ-native too: the dequant only touches `.*.gate.*` keys,
     // not the `tq_packed`/`tq_norms` expert projections.
     let declaredAffineQuantization = perLayerQuantization?.quantization
-    if let jangConfig {
+    let gateDefaultQuantization = declaredAffineQuantization ?? quantization
+    let gateGroupSize = gateDefaultQuantization?.groupSize ?? jangConfig?.quantization.blockSize
+    if let gateGroupSize {
         let gateBitWidths = Array(Set(
-            jangConfig.quantization.bitWidthsUsed
-                + [declaredAffineQuantization?.bits].compactMap { $0 }
+            (jangConfig?.quantization.bitWidthsUsed ?? [])
+                + [gateDefaultQuantization?.bits].compactMap { $0 }
         )).sorted()
         JangLoader.dequantizeMoEGates(
             weights: &weights,
-            groupSize: declaredAffineQuantization?.groupSize
-                ?? jangConfig.quantization.blockSize,
+            groupSize: gateGroupSize,
             bitWidthsUsed: gateBitWidths,
             hiddenSizeHint: readHiddenSizeHint(at: modelDirectory))
     }

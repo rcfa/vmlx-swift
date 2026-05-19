@@ -1267,6 +1267,26 @@ struct MTPRuntimeFocusedTests {
         #expect(weights["\(base).biases"] == nil)
     }
 
+    @Test("MoE router gate dequantization strips stale MXFP affine companions")
+    func moeRouterGateDequantizationStripsStaleMXFPAffineCompanions() {
+        let base = "language_model.model.layers.0.mlp.gate"
+        var weights: [String: MLXArray] = [
+            "\(base).weight": MLXArray.zeros([256, 256], dtype: .uint32),
+            "\(base).scales": MLXArray.zeros([256, 32], dtype: .float32),
+            "\(base).biases": MLXArray.zeros([256, 32], dtype: .float32),
+        ]
+
+        JangLoader.dequantizeMoEGates(
+            weights: &weights,
+            groupSize: 32,
+            bitWidthsUsed: [4],
+            hiddenSizeHint: 2048)
+
+        #expect(weights["\(base).weight"]?.shape == [256, 2048])
+        #expect(weights["\(base).scales"] == nil)
+        #expect(weights["\(base).biases"] == nil)
+    }
+
     @Test("Qwen3.5 sanitize does not shift base norms just because MTP tensors exist")
     func qwen35SanitizeDoesNotShiftBaseNormsForPreservedMTP() throws {
         let configData = """
