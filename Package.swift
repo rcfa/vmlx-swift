@@ -697,6 +697,30 @@ let package = Package(
             path: "Tests/MLXTests"
         ),
         .testTarget(
+            name: "MLXLMTests",
+            dependencies: [
+                "MLX",
+                "MLXNN",
+                "MLXOptimizers",
+                "VMLXJinja",
+                "VMLXTokenizers",
+                "MLXLMCommon",
+                "MLXLLM",
+                "MLXVLM",
+                "MLXEmbedders",
+                "MLXHuggingFace",
+                "BenchmarkHelpers",
+            ],
+            path: "Tests/MLXLMTests",
+            exclude: [
+                "README.md",
+            ],
+            resources: [
+                .process("Resources/1080p_30.mov"),
+                .process("Resources/audio_only.mov"),
+            ]
+        ),
+        .testTarget(
             name: "MLXPressPolicyTests",
             path: "Tests/MLXPressPolicyTests",
             sources: ["MLXPressLowRamPolicySourceTests.swift"]
