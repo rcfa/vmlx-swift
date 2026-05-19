@@ -224,6 +224,12 @@ private func resolveStopTokenString(
     allowExactTextFallback: Bool
 ) {
     if let id = tokenizer.convertTokenToId(token) {
+        if let unknownID = tokenizer.unknownTokenId, id == unknownID {
+            textStopStrings.append(contentsOf: textFallbackStopStrings(
+                for: token,
+                allowExactTextFallback: allowExactTextFallback))
+            return
+        }
         tokenIDs.insert(id)
         return
     }

@@ -28,6 +28,23 @@ struct StopStringMatcherTests {
         ) throws -> [Int] { [] }
     }
 
+    private struct UnknownMappingTokenizer: Tokenizer {
+        var bosToken: String? { nil }
+        var eosToken: String? { nil }
+        var unknownToken: String? { "<unk>" }
+
+        func encode(text: String, addSpecialTokens: Bool) -> [Int] { [] }
+        func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String { "" }
+        func convertTokenToId(_ token: String) -> Int? { 0 }
+        func convertIdToToken(_ id: Int) -> String? { id == 0 ? "<unk>" : nil }
+
+        func applyChatTemplate(
+            messages: [[String: any Sendable]],
+            tools: [[String: any Sendable]]?,
+            additionalContext: [String: any Sendable]?
+        ) throws -> [Int] { [] }
+    }
+
     // MARK: - Disabled matcher (no stop strings)
 
     @Test("empty stop list → pass-through")
@@ -249,6 +266,20 @@ struct StopStringMatcherTests {
             includeUnknownToken: true)
 
         #expect(resolved.tokenIDs.isEmpty)
+        #expect(resolved.textStopStrings.contains("<｜end▁of▁sentence｜>"))
+        #expect(resolved.textStopStrings.contains("<｜end▁of▁sentence>"))
+        #expect(resolved.textStopStrings.contains("<｜end▁of▁sent"))
+        #expect(!resolved.textStopStrings.contains("<|im_end|>"))
+    }
+
+    @Test("unknown-token mappings still fall back to narrow sentinel text")
+    func testUnknownTokenMappingUsesSentinelTextFallbacks() {
+        let resolved = resolveStopSequences(
+            modelConfiguration: ModelConfiguration(id: "nemotron-h"),
+            tokenizer: UnknownMappingTokenizer(),
+            includeUnknownToken: true)
+
+        #expect(resolved.tokenIDs == [0])
         #expect(resolved.textStopStrings.contains("<｜end▁of▁sentence｜>"))
         #expect(resolved.textStopStrings.contains("<｜end▁of▁sentence>"))
         #expect(resolved.textStopStrings.contains("<｜end▁of▁sent"))
