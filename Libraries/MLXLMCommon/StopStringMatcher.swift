@@ -146,3 +146,107 @@ public struct StopStringMatcher: Sendable {
         return tail
     }
 }
+
+struct ResolvedStopSequences: Sendable, Equatable {
+    var tokenIDs: Set<Int>
+    var textStopStrings: [String]
+
+    init(tokenIDs: Set<Int> = [], textStopStrings: [String] = []) {
+        self.tokenIDs = tokenIDs
+        self.textStopStrings = textStopStrings
+    }
+}
+
+let commonEndTokenStrings: [String] = [
+    "<|im_end|>",       // Qwen / Mistral 3 / NemotronH-Omni / many
+    "<|endoftext|>",    // Qwen2/3, GPT-style
+    "<|eot_id|>",       // Llama 3.x
+    "<|end_of_text|>",  // Llama 3.x alt
+    "<|end|>",          // Phi 3, Phi 4
+    "<|end_of_turn|>",  // Gemma family
+    "<end_of_turn>",    // Gemma 2/3 alt spelling
+    "〈|EOS|〉",          // Laguna / Poolside
+    "<｜end▁of▁sentence｜>",  // DeepSeek V4 wide-pipe spelling
+    "<|EOT|>",          // Uppercase EOT variants in some shipped templates
+]
+
+func mergeStopStrings(_ explicit: [String], _ defaults: [String]) -> [String] {
+    var seen = Set<String>()
+    var merged: [String] = []
+    for string in explicit + defaults {
+        guard !string.isEmpty, seen.insert(string).inserted else { continue }
+        merged.append(string)
+    }
+    return merged
+}
+
+func resolveStopSequences(
+    modelConfiguration: ModelConfiguration,
+    tokenizer: Tokenizer,
+    includeUnknownToken: Bool = false
+) -> ResolvedStopSequences {
+    var tokenIDs = modelConfiguration.eosTokenIds
+    if let tokenizerEOS = tokenizer.eosTokenId {
+        tokenIDs.insert(tokenizerEOS)
+    }
+    if includeUnknownToken, let unknownID = tokenizer.unknownTokenId {
+        tokenIDs.insert(unknownID)
+    }
+
+    var textStopStrings: [String] = []
+    for token in modelConfiguration.extraEOSTokens {
+        resolveStopTokenString(
+            token,
+            tokenizer: tokenizer,
+            tokenIDs: &tokenIDs,
+            textStopStrings: &textStopStrings,
+            allowExactTextFallback: true)
+    }
+    for token in commonEndTokenStrings {
+        resolveStopTokenString(
+            token,
+            tokenizer: tokenizer,
+            tokenIDs: &tokenIDs,
+            textStopStrings: &textStopStrings,
+            allowExactTextFallback: false)
+    }
+
+    return ResolvedStopSequences(
+        tokenIDs: tokenIDs,
+        textStopStrings: mergeStopStrings([], textStopStrings))
+}
+
+private func resolveStopTokenString(
+    _ token: String,
+    tokenizer: Tokenizer,
+    tokenIDs: inout Set<Int>,
+    textStopStrings: inout [String],
+    allowExactTextFallback: Bool
+) {
+    if let id = tokenizer.convertTokenToId(token) {
+        tokenIDs.insert(id)
+        return
+    }
+    textStopStrings.append(contentsOf: textFallbackStopStrings(
+        for: token,
+        allowExactTextFallback: allowExactTextFallback))
+}
+
+private func textFallbackStopStrings(
+    for token: String,
+    allowExactTextFallback: Bool
+) -> [String] {
+    switch token {
+    case "<｜end▁of▁sentence｜>":
+        return [
+            "<｜end▁of▁sentence｜>",
+            "<｜end▁of▁sentence>",
+            "<｜end▁of▁sent",
+        ]
+    default:
+        if allowExactTextFallback, token.hasPrefix("<") || token.hasPrefix("〈") {
+            return [token]
+        }
+        return []
+    }
+}

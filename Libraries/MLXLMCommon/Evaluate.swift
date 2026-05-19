@@ -2224,37 +2224,9 @@ private func buildStopTokenIds(
     modelConfiguration: ModelConfiguration,
     tokenizer: Tokenizer
 ) -> Set<Int> {
-    // Build complete EOS token set from all sources.
-    var stopTokenIds = modelConfiguration.eosTokenIds
-    if let tokenizerEOS = tokenizer.eosTokenId {
-        stopTokenIds.insert(tokenizerEOS)
-    }
-    for token in modelConfiguration.extraEOSTokens {
-        if let id = tokenizer.convertTokenToId(token) {
-            stopTokenIds.insert(id)
-        }
-    }
-    // Match BatchEngine's defensive end-of-turn widening so the
-    // single-request generate() path cannot leak a chat-template turn
-    // terminator when a bundle's config only lists a partial EOS set.
-    let commonEndTokens = [
-        "<|im_end|>",
-        "<|endoftext|>",
-        "<|eot_id|>",
-        "<|end_of_text|>",
-        "<|end|>",
-        "<|end_of_turn|>",
-        "<end_of_turn>",
-        "〈|EOS|〉",
-        "<｜end▁of▁sentence｜>",
-        "<|EOT|>",
-    ]
-    for token in commonEndTokens {
-        if let id = tokenizer.convertTokenToId(token) {
-            stopTokenIds.insert(id)
-        }
-    }
-    return stopTokenIds
+    resolveStopSequences(
+        modelConfiguration: modelConfiguration,
+        tokenizer: tokenizer).tokenIDs
 }
 
 private func runSynchronousGenerationLoop(
@@ -2667,6 +2639,11 @@ public func generate(
         parameters: parameters,
         numDraftTokens: numDraftTokens
     )
+    let effectiveStopStrings = mergeStopStrings(
+        parameters.extraStopStrings,
+        resolveStopSequences(
+            modelConfiguration: context.configuration,
+            tokenizer: context.tokenizer).textStopStrings)
     let (stream, _) = generateLoopTask(
         promptTokenCount: input.text.tokens.size,
         modelConfiguration: context.configuration,
@@ -2681,7 +2658,7 @@ public func generate(
                 promptTail: _decodePromptTail(
                     input: input, tokenizer: context.tokenizer, tokens: 64)),
             stopStringMatcher: StopStringMatcher(
-                stopStrings: parameters.extraStopStrings)
+                stopStrings: effectiveStopStrings)
         )
     )
     return stream
@@ -2732,6 +2709,11 @@ public func generateTask(
         promptTail
         ?? _decodePromptTail(
             tokenIds: iterator.promptTokenIds, tokenizer: tokenizer, tokens: 64)
+    let effectiveStopStrings = mergeStopStrings(
+        extraStopStrings,
+        resolveStopSequences(
+            modelConfiguration: modelConfiguration,
+            tokenizer: tokenizer).textStopStrings)
 
     return generateLoopTask(
         promptTokenCount: promptTokenCount,
@@ -2745,7 +2727,7 @@ public func generateTask(
             reasoningParser: ReasoningParser.forPrompt(
                 stampName: modelConfiguration.reasoningParserName,
                 promptTail: effectivePromptTail),
-            stopStringMatcher: StopStringMatcher(stopStrings: extraStopStrings)
+            stopStringMatcher: StopStringMatcher(stopStrings: effectiveStopStrings)
         )
     )
 }

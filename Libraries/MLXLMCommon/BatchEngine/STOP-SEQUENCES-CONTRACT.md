@@ -34,6 +34,17 @@ They are orthogonal and can be combined. Token-level is fastest
 OpenAI-API `stop: ["<string>"]` behaviour — it exists because many stop
 sequences cannot be expressed as a single token (e.g., `"\n\nUser:"`).
 
+The model-default stop resolver first tries to convert configured EOS strings
+and known assistant-turn sentinels to token IDs. If an explicitly configured
+`ModelConfiguration.extraEOSTokens` string cannot be resolved to a token ID, it
+is added as an exact decoded-text stop string. The defensive common-sentinel
+list stays narrower: unresolved entries do not become text stops by default
+except for the DeepSeek/Nemotron wide-pipe end-of-sentence sentinel variants
+observed in live Osaurus output (`<｜end▁of▁sentence｜>`,
+`<｜end▁of▁sentence>`, and malformed prefixes beginning
+`<｜end▁of▁sent`). This keeps the fallback targeted to real sentinel leaks
+without turning the whole heuristic token list into broad text matching.
+
 ## Match scope — `.chunk` only
 
 `.reasoning(String)` deltas and `.toolCall(ToolCall)` events are NOT

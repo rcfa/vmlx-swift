@@ -11,6 +11,22 @@ import Testing
 
 @Suite("StopStringMatcher")
 struct StopStringMatcherTests {
+    private struct NoSpecialTokenTokenizer: Tokenizer {
+        var bosToken: String? { nil }
+        var eosToken: String? { nil }
+        var unknownToken: String? { nil }
+
+        func encode(text: String, addSpecialTokens: Bool) -> [Int] { [] }
+        func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String { "" }
+        func convertTokenToId(_ token: String) -> Int? { nil }
+        func convertIdToToken(_ id: Int) -> String? { nil }
+
+        func applyChatTemplate(
+            messages: [[String: any Sendable]],
+            tools: [[String: any Sendable]]?,
+            additionalContext: [String: any Sendable]?
+        ) throws -> [Int] { [] }
+    }
 
     // MARK: - Disabled matcher (no stop strings)
 
@@ -223,5 +239,75 @@ struct StopStringMatcherTests {
 
         let defaults = GenerateParameters()
         #expect(defaults.extraStopStrings.isEmpty)
+    }
+
+    @Test("unresolved special-token text becomes default stop strings")
+    func testUnresolvedSpecialTokenTextFallbacks() {
+        let resolved = resolveStopSequences(
+            modelConfiguration: ModelConfiguration(id: "nemotron-h"),
+            tokenizer: NoSpecialTokenTokenizer(),
+            includeUnknownToken: true)
+
+        #expect(resolved.tokenIDs.isEmpty)
+        #expect(resolved.textStopStrings.contains("<｜end▁of▁sentence｜>"))
+        #expect(resolved.textStopStrings.contains("<｜end▁of▁sentence>"))
+        #expect(resolved.textStopStrings.contains("<｜end▁of▁sent"))
+        #expect(!resolved.textStopStrings.contains("<|im_end|>"))
+    }
+
+    @Test("explicit unresolved extra EOS token becomes exact text fallback")
+    func testExplicitUnresolvedExtraEOSTokenTextFallback() {
+        let resolved = resolveStopSequences(
+            modelConfiguration: ModelConfiguration(
+                id: "custom",
+                extraEOSTokens: ["<|custom_end|>"]),
+            tokenizer: NoSpecialTokenTokenizer())
+
+        #expect(resolved.textStopStrings.contains("<|custom_end|>"))
+    }
+
+    @Test("default sentinel fallback truncates Nemotron malformed text")
+    func testDefaultSentinelFallbackTruncatesMalformedText() {
+        let resolved = resolveStopSequences(
+            modelConfiguration: ModelConfiguration(id: "nemotron-h"),
+            tokenizer: NoSpecialTokenTokenizer())
+        var matcher = StopStringMatcher(stopStrings: resolved.textStopStrings)
+
+        switch matcher.feed("Your word is blue.<｜end▁of▁sentic>") {
+        case .stopped(let out):
+            #expect(out == "Your word is blue.")
+        case .streaming:
+            Issue.record("Expected malformed sentinel text to stop generation")
+        }
+
+        var matcher2 = StopStringMatcher(stopStrings: resolved.textStopStrings)
+        switch matcher2.feed("Finish with blue.<｜end▁of▁sentence>") {
+        case .stopped(let out):
+            #expect(out == "Finish with blue.")
+        case .streaming:
+            Issue.record("Expected missing-final-pipe sentinel text to stop generation")
+        }
+    }
+
+    @Test("default sentinel fallback does not truncate normal prose")
+    func testDefaultSentinelFallbackDoesNotTruncateNormalProse() {
+        let resolved = resolveStopSequences(
+            modelConfiguration: ModelConfiguration(id: "nemotron-h"),
+            tokenizer: NoSpecialTokenTokenizer())
+        var matcher = StopStringMatcher(stopStrings: resolved.textStopStrings)
+
+        let input = "Use the phrase end of sentence in normal prose without stopping."
+        var emitted = ""
+        for ch in input {
+            switch matcher.feed(String(ch)) {
+            case .streaming(let out):
+                emitted += out
+            case .stopped:
+                Issue.record("Default sentinel fallback should not stop on ordinary prose")
+            }
+        }
+
+        emitted += matcher.flush()
+        #expect(emitted == input)
     }
 }
