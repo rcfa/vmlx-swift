@@ -7,8 +7,75 @@ import Testing
 
 @Suite("VLM processor cache scope salt propagation", .serialized)
 struct VLMProcessorCacheScopeSaltTests {
+    private struct GenerationPromptTokenizer: GenerationPromptControllableTokenizer {
+        let promptTokens = [11, 22, 33, 44, 55]
+        let historyTokens = [11, 22, 33]
+
+        func encode(text: String, addSpecialTokens: Bool) -> [Int] {
+            text.unicodeScalars.map { Int($0.value) }
+        }
+
+        func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String {
+            tokenIds.map(String.init).joined(separator: " ")
+        }
+
+        func convertTokenToId(_ token: String) -> Int? { nil }
+        func convertIdToToken(_ id: Int) -> String? { nil }
+
+        var bosToken: String? { nil }
+        var eosToken: String? { "<eos>" }
+        var unknownToken: String? { nil }
+
+        func applyChatTemplate(
+            messages: [[String: any Sendable]],
+            tools: [[String: any Sendable]]?,
+            additionalContext: [String: any Sendable]?
+        ) throws -> [Int] {
+            promptTokens
+        }
+
+        func applyChatTemplate(
+            messages: [[String: any Sendable]],
+            tools: [[String: any Sendable]]?,
+            additionalContext: [String: any Sendable]?,
+            addGenerationPrompt: Bool
+        ) throws -> [Int] {
+            addGenerationPrompt ? promptTokens : historyTokens
+        }
+    }
+
     private static func decode<T: Decodable>(_ json: String, as type: T.Type = T.self) throws -> T {
         try JSONDecoder.json5().decode(T.self, from: Data(json.utf8))
+    }
+
+    @Test("Qwen3VL processor records text-only history cache boundary")
+    func qwen3VLTextOnlyRecordsHistoryCacheBoundary() async throws {
+        try await MLXMetalTestLock.withLock {
+            let config: Qwen3VLProcessorConfiguration = try Self.decode("""
+            {
+              "image_mean": [0.5, 0.5, 0.5],
+              "image_std": [0.5, 0.5, 0.5],
+              "merge_size": 2,
+              "patch_size": 14,
+              "temporal_patch_size": 1,
+              "image_processor_type": "Qwen3VLImageProcessor",
+              "size": {"min_pixels": 3136, "max_pixels": 12845056},
+              "video_min_pixels": 3136,
+              "video_max_pixels": 12845056,
+              "video_fps": 2.0,
+              "video_min_frames": 1,
+              "video_max_frames": 768
+            }
+            """)
+            let tokenizer = GenerationPromptTokenizer()
+            let processor = Qwen3VLProcessor(config, tokenizer: tokenizer)
+
+            let input = try await processor.prepare(input: UserInput(
+                prompt: .chat([.user("Remember graphite-cache.")]),
+                additionalContext: ["enable_thinking": false]))
+
+            #expect(input.cachePrefixTokenCounts == [tokenizer.historyTokens.count])
+        }
     }
 
     @Test("GlmOcr processor threads reasoning cache scope on text-only inputs")

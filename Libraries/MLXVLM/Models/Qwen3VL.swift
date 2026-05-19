@@ -24,6 +24,32 @@ public struct Qwen3VLProcessor: UserInputProcessor {
         self.tokenizer = tokenizer
     }
 
+    private func canonicalHistoryCacheBoundaries(
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?,
+        promptTokens: [Int]
+    ) -> [Int] {
+        guard let controllable = tokenizer as? any GenerationPromptControllableTokenizer else {
+            return []
+        }
+        guard let historyTokens = try? controllable.applyChatTemplate(
+            messages: messages,
+            tools: tools,
+            additionalContext: additionalContext,
+            addGenerationPrompt: false)
+        else {
+            return []
+        }
+        guard !historyTokens.isEmpty,
+              historyTokens.count < promptTokens.count,
+              promptTokens.prefix(historyTokens.count).elementsEqual(historyTokens)
+        else {
+            return []
+        }
+        return [historyTokens.count]
+    }
+
     private func preprocess(image: CIImage, resizedSize: CGSize) -> CIImage {
         image
             .toSRGB()
@@ -141,9 +167,15 @@ public struct Qwen3VLProcessor: UserInputProcessor {
         if input.images.isEmpty, input.videos.isEmpty {
             let promptArray = MLXArray(promptTokens).expandedDimensions(axis: 0)
             let mask = ones(like: promptArray).asType(.int8)
+            let cachePrefixTokenCounts = canonicalHistoryCacheBoundaries(
+                messages: messages,
+                tools: input.tools,
+                additionalContext: input.additionalContext,
+                promptTokens: promptTokens)
             return LMInput(
                 text: .init(tokens: promptArray, mask: mask),
-                cacheScopeSalt: cacheScopeSalt(from: input.additionalContext))
+                cacheScopeSalt: cacheScopeSalt(from: input.additionalContext),
+                cachePrefixTokenCounts: cachePrefixTokenCounts)
         }
 
         var processedImage: LMInput.ProcessedImage?
