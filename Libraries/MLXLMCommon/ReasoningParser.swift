@@ -102,6 +102,8 @@ public struct ReasoningParser: Sendable {
     private var insideHarmonyChannel: Bool = false
     private var harmonyChannelIsReasoning: Bool = false
     private var harmonyChannelEndTags: [String] = []
+    private var harmonyChannelShouldStripName: Bool = false
+    private var harmonyChannelNameBuffer: String = ""
 
     /// Read-only access to the current parser state — true when the
     /// stream is currently inside a `<think>…</think>` block (or the
@@ -195,8 +197,8 @@ public struct ReasoningParser: Sendable {
     /// - GPT-OSS: `<|channel|>analysis<|message|>...<|end|>` and
     ///   `<|channel|>final<|message|>...<|return|>`.
     ///
-    /// The Gemma path keeps historical semantics: all channel payloads route
-    /// to reasoning and the channel name remains part of the reasoning text.
+    /// The Gemma path routes all channel payloads to reasoning and strips
+    /// simple identifier channel headers such as `thought\n`.
     /// The GPT-OSS path strips control tokens and routes `final` to visible
     /// content while routing other channels to reasoning.
     private mutating func drainHarmonyChannel(allowPartialTagAtEnd: Bool = true)
@@ -224,11 +226,17 @@ public struct ReasoningParser: Sendable {
                 }
 
                 let before = String(buffer[..<range.lowerBound])
-                appendHarmonyChannelText(before, into: &out)
+                appendHarmonyChannelText(
+                    before,
+                    into: &out,
+                    final: true,
+                    stripIdentifierOnlyAtEnd: false)
                 buffer.removeSubrange(buffer.startIndex..<range.upperBound)
                 insideHarmonyChannel = false
                 harmonyChannelIsReasoning = false
                 harmonyChannelEndTags = []
+                harmonyChannelShouldStripName = false
+                harmonyChannelNameBuffer.removeAll(keepingCapacity: false)
                 insideReasoning = false
                 continue
             }
@@ -281,6 +289,8 @@ public struct ReasoningParser: Sendable {
                 insideHarmonyChannel = true
                 harmonyChannelIsReasoning = channelName != "final"
                 harmonyChannelEndTags = gptEndTags
+                harmonyChannelShouldStripName = false
+                harmonyChannelNameBuffer.removeAll(keepingCapacity: false)
                 insideReasoning = harmonyChannelIsReasoning
                 continue
             }
@@ -293,15 +303,64 @@ public struct ReasoningParser: Sendable {
             insideHarmonyChannel = true
             harmonyChannelIsReasoning = true
             harmonyChannelEndTags = [endTag]
+            harmonyChannelShouldStripName = true
+            harmonyChannelNameBuffer.removeAll(keepingCapacity: false)
             insideReasoning = true
         }
 
         return out
     }
 
-    private func appendHarmonyChannelText(_ text: String, into out: inout [ReasoningSegment]) {
+    private mutating func appendHarmonyChannelText(
+        _ text: String,
+        into out: inout [ReasoningSegment],
+        final: Bool = false,
+        stripIdentifierOnlyAtEnd: Bool = true
+    ) {
+        guard !text.isEmpty || final else { return }
+
+        if harmonyChannelShouldStripName {
+            harmonyChannelNameBuffer += text
+            if let newline = harmonyChannelNameBuffer.firstIndex(of: "\n") {
+                let firstLine = String(harmonyChannelNameBuffer[..<newline])
+                let remainderStart = harmonyChannelNameBuffer.index(after: newline)
+                let remainder = String(harmonyChannelNameBuffer[remainderStart...])
+                harmonyChannelNameBuffer.removeAll(keepingCapacity: false)
+                harmonyChannelShouldStripName = false
+                let emitted = isHarmonyIdentifierChannelName(firstLine)
+                    ? remainder
+                    : firstLine + "\n" + remainder
+                appendHarmonyChannelPayload(emitted, into: &out)
+                return
+            }
+
+            if final {
+                let emitted = stripIdentifierOnlyAtEnd
+                    && isHarmonyIdentifierChannelName(harmonyChannelNameBuffer)
+                    ? ""
+                    : harmonyChannelNameBuffer
+                harmonyChannelNameBuffer.removeAll(keepingCapacity: false)
+                harmonyChannelShouldStripName = false
+                appendHarmonyChannelPayload(emitted, into: &out)
+            }
+            return
+        }
+
+        appendHarmonyChannelPayload(text, into: &out)
+    }
+
+    private func appendHarmonyChannelPayload(_ text: String, into out: inout [ReasoningSegment]) {
         guard !text.isEmpty else { return }
         out.append(harmonyChannelIsReasoning ? .reasoning(text) : .content(text))
+    }
+
+    private func isHarmonyIdentifierChannelName(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = trimmed.unicodeScalars.first else { return true }
+        guard CharacterSet.letters.contains(first) || first == "_" else { return false }
+        return trimmed.unicodeScalars.allSatisfy {
+            CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-"
+        }
     }
 
     private mutating func emitSafeHarmonyPrefix(
@@ -335,7 +394,7 @@ public struct ReasoningParser: Sendable {
             appendHarmonyChannelText(safe, into: &out)
             buffer = String(buffer[splitAt...])
         } else {
-            appendHarmonyChannelText(buffer, into: &out)
+            appendHarmonyChannelText(buffer, into: &out, final: true)
             buffer.removeAll(keepingCapacity: false)
         }
     }
