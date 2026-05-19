@@ -1421,3 +1421,21 @@ saved reasoning/tool/media/cache setting crossing incompatible families
   removed the reasoning-as-output fallback from `StabilityBench` rows S1, S2,
   S3, S4, S5, S6, S7, S8, S9, S10, S11, and S12. JangPress is not part of the
   current active Osaurus switch-readiness gate.
+
+2026-05-18 18:06 PDT follow-up source checks:
+
+- `VMLXServerRuntimeSettingsTests` passes 25 tests. Covered: nil server sampling
+  fields preserve bundle/engine defaults, bundle `generation_config.json` values
+  apply before explicit server overrides, invalid sampling/sleep settings report
+  issues instead of clamping, cache conflict validation, multimodal lane
+  validation, and tensor/tuning-gated native-MTP launch decisions.
+- `GenerationConfig` focused filter passes 4 tests. Covered: bundle/server
+  sampling merge, VLM text embedding path, MTP tuning metadata propagation, and
+  Omni audio latency bench use of bundle generation defaults.
+- `NemotronHOmniPreEncodedAudioTests` passes 16 tests. Covered: Parakeet/RADIO
+  wrapper and shape contracts, pre-encoded audio, video EVS placeholder counts,
+  and the current direct-answer media-template contract.
+- Caveat: `VLMDefaultContextProcessorTests` and older `SampleTests` names are
+  not discoverable by `swift test list` in the current package graph, so those
+  zero-test filters are not counted as proof. The active server runtime tests
+  still prove the key no-fake-sampler behavior for the Osaurus settings bridge.
