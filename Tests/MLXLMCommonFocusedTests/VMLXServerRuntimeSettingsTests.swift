@@ -246,12 +246,13 @@ struct VMLXServerRuntimeSettingsTests {
         #expect(launch.recommendation?.depth == 2)
         #expect(launch.recommendation?.verifierMode == "chunk_lazy_repair")
         #expect(launch.recommendation?.evidence.contains("server_draft_token_limit=2") == true)
-        if case .nativeMTP(let depth)? = settings.resolvedMTPDraftStrategy(
+        if case .nativeMTP(depth: let depth, verifierMode: let verifierMode)? = settings.resolvedMTPDraftStrategy(
             configData: config,
             jangConfig: nil,
             status: verified)
         {
             #expect(depth == 2)
+            #expect(verifierMode == "chunk_lazy_repair")
         } else {
             Issue.record("Resolved MTP draft strategy did not carry the capped native depth")
         }
@@ -300,12 +301,13 @@ struct VMLXServerRuntimeSettingsTests {
         #expect(settings.effectiveMTPLaunchMode(for: preserved) == .speculative)
         #expect(launch.launchMode == .speculative)
         #expect(loadConfiguration.nativeMTP)
-        if case .nativeMTP(let depth)? = settings.resolvedMTPDraftStrategy(
+        if case .nativeMTP(depth: let depth, verifierMode: let verifierMode)? = settings.resolvedMTPDraftStrategy(
             configData: config,
             jangConfig: nil,
             status: preserved)
         {
             #expect(depth == 3)
+            #expect(verifierMode == "chunk_lazy_repair")
         } else {
             Issue.record("Tensor-proven Qwen MTP should resolve a native-MTP draft strategy")
         }

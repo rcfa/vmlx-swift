@@ -377,6 +377,20 @@ public struct GenerateParameters: Sendable {
             frequencyContext: frequencyContext
         )
     }
+
+    public var isNativeMTPLosslessGreedyEligible: Bool {
+        temperature == 0
+            && topP >= 1
+            && topK == 0
+            && minP == 0
+            && (repetitionPenalty == nil || repetitionPenalty == 0 || repetitionPenalty == 1)
+            && (presencePenalty == nil || presencePenalty == 0)
+            && (frequencyPenalty == nil || frequencyPenalty == 0)
+    }
+
+    public func canUseNativeMTP(for input: LMInput) -> Bool {
+        isNativeMTPLosslessGreedyEligible && !input.hasMediaContent
+    }
 }
 
 /// Sampler that uses `argMax` (most likely) to sample the logits.
@@ -2518,7 +2532,8 @@ public func generate(
     let promptTail = _decodePromptTail(
         input: input, tokenizer: context.tokenizer, tokens: 64)
     if let strategy = parameters.draftStrategy,
-        case .nativeMTP(let depth) = strategy
+        case .nativeMTP(depth: let depth, verifierMode: _) = strategy,
+        parameters.canUseNativeMTP(for: input)
     {
         guard let nativeModel = context.model as? any NativeMTPModel else {
             throw NativeMTPRuntimeError.modelDoesNotExposeNativeMTP
@@ -2855,7 +2870,8 @@ public func generateTokensTask(
         input.text.tokens.reshaped(-1).asArray(Int.self))
 
     if let strategy = parameters.draftStrategy,
-        case .nativeMTP(let depth) = strategy
+        case .nativeMTP(depth: let depth, verifierMode: _) = strategy,
+        parameters.canUseNativeMTP(for: input)
     {
         guard let nativeModel = context.model as? any NativeMTPModel else {
             throw NativeMTPRuntimeError.modelDoesNotExposeNativeMTP

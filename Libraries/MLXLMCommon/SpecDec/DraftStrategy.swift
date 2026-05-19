@@ -35,9 +35,10 @@ import Foundation
 ///   4-7× over autoregressive on pure-attention models; smaller gains on
 ///   hybrid-SSM models until Phase 3 per-node recurrent forking lands.
 ///
-/// - ``nativeMTP(depth:)`` — uses a native MTP sidecar already present in
-///   the target model artifact. This never loads a separate draft model and
-///   is valid only for model instances conforming to ``NativeMTPModel``.
+/// - ``nativeMTP(depth:verifierMode:)`` — uses a native MTP sidecar already
+///   present in the target model artifact. This never loads a separate draft
+///   model and is valid only for model instances conforming to
+///   ``NativeMTPModel``.
 ///
 /// ## Picking a block size / budget
 ///
@@ -89,7 +90,7 @@ public enum DraftStrategy: @unchecked Sendable {
     /// This path is intentionally explicit. The model must have been loaded
     /// with real MTP tensors and `NativeMTPActivation` must have allowed them
     /// through the loader; otherwise the iterator refuses to start.
-    case nativeMTP(depth: Int)
+    case nativeMTP(depth: Int, verifierMode: String? = nil)
 
     /// Discriminator usable as a stable dictionary key / log label.
     /// Does not expose associated values.
@@ -116,5 +117,19 @@ public enum DraftStrategy: @unchecked Sendable {
     public var usesNativeMTP: Bool {
         if case .nativeMTP = self { return true }
         return false
+    }
+
+    public var nativeMTPDepth: Int? {
+        if case .nativeMTP(depth: let depth, verifierMode: _) = self {
+            return depth
+        }
+        return nil
+    }
+
+    public var nativeMTPVerifierMode: String? {
+        if case .nativeMTP(depth: _, verifierMode: let verifierMode) = self {
+            return verifierMode
+        }
+        return nil
     }
 }
