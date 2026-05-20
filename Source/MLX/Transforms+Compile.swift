@@ -51,6 +51,7 @@ final class CompiledFunction: @unchecked (Sendable) {
 
     func call(_ arguments: [MLXArray]) -> [MLXArray] {
         if !mlxSwiftCompileAllowedByPolicy() {
+            mlx_disable_compile()
             return f(arguments)
         }
 
