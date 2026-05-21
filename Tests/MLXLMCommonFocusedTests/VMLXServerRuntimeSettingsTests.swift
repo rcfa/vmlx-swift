@@ -48,6 +48,39 @@ struct VMLXServerRuntimeSettingsTests {
         #expect(!resolved.nativeMTP)
     }
 
+    @Test("tool parser settings resolve into model configuration overrides")
+    func toolParserSettingsResolveIntoModelConfigurationOverrides() {
+        var settings = VMLXServerRuntimeSettings()
+        settings.tools.toolParserOverride = "qwen3_6"
+        settings.tools.reasoningParserOverride = "off"
+
+        let base = ModelConfiguration(
+            directory: URL(fileURLWithPath: "/tmp/qwen36"),
+            toolCallFormat: .json,
+            reasoningParserName: "qwen3_6")
+
+        let resolved = settings.resolvedModelConfiguration(base: base)
+
+        #expect(resolved.toolCallFormat == .xmlFunction)
+        #expect(resolved.reasoningParserName == "none")
+    }
+
+    @Test("local load configuration entrypoint preserves caller model configuration")
+    func localLoadConfigurationEntrypointPreservesCallerModelConfiguration() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repoRoot.appending(path: "Libraries/MLXLMCommon/ModelFactory.swift"),
+            encoding: .utf8)
+
+        #expect(source.contains("configuration: ModelConfiguration,"))
+        #expect(source.contains("loadConfiguration: LoadConfiguration"))
+        #expect(source.contains("try await $0.load("))
+        #expect(source.contains("configuration: configuration"))
+    }
+
     @Test("paged cache rejects legacy disk cache conflict")
     func pagedCacheRejectsLegacyDiskCacheConflict() {
         var settings = VMLXServerRuntimeSettings()

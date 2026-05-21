@@ -195,6 +195,38 @@ extension ModelFactory {
             configuration: .init(directory: directory), tokenizerLoader: tokenizerLoader)
     }
 
+    /// Load a model from a local directory with caller-supplied
+    /// `ModelConfiguration` overrides, producing a ``ModelContext``.
+    ///
+    /// The model source is forced to `directory`, but fields such as
+    /// `toolCallFormat`, `reasoningParserName`, `generationDefaults`, and
+    /// `mtpStatus` are preserved. This lets hosts combine local-directory
+    /// loading with server-panel parser overrides without bypassing the
+    /// factory registry.
+    public func load(
+        from directory: URL,
+        using tokenizerLoader: any TokenizerLoader,
+        configuration: ModelConfiguration
+    ) async throws -> sending ModelContext {
+        let tokenizerDirectory: URL
+        switch configuration.tokenizerSource {
+        case .directory(let directory):
+            tokenizerDirectory = directory
+        case .id:
+            throw ModelFactoryError.unsupportedModelType(
+                "local directory load with remote tokenizerSource requires a Downloader")
+        case nil:
+            tokenizerDirectory = directory
+        }
+        var localConfiguration = configuration
+        localConfiguration.id = .directory(directory)
+        return try await _load(
+            configuration: localConfiguration.resolved(
+                modelDirectory: directory,
+                tokenizerDirectory: tokenizerDirectory),
+            tokenizerLoader: tokenizerLoader)
+    }
+
     /// Load a model from a local directory, producing a ``ModelContainer``.
     public func loadContainer(
         from directory: URL,
@@ -202,6 +234,20 @@ extension ModelFactory {
     ) async throws -> ModelContainer {
         let context = try await _load(
             configuration: .init(directory: directory), tokenizerLoader: tokenizerLoader)
+        return ModelContainer(context: context)
+    }
+
+    /// Load a model from a local directory with caller-supplied
+    /// `ModelConfiguration` overrides, producing a ``ModelContainer``.
+    public func loadContainer(
+        from directory: URL,
+        using tokenizerLoader: any TokenizerLoader,
+        configuration: ModelConfiguration
+    ) async throws -> ModelContainer {
+        let context = try await load(
+            from: directory,
+            using: tokenizerLoader,
+            configuration: configuration)
         return ModelContainer(context: context)
     }
 
@@ -479,6 +525,27 @@ public func loadModelContainer(
     return container
 }
 
+/// Load a local-directory model with both caller-supplied
+/// ``ModelConfiguration`` overrides and a typed ``LoadConfiguration``.
+///
+/// Hosts use this when server-panel parser/tool overrides must coexist with
+/// MLXPress, mmap-safetensors, memory caps, and native-MTP activation.
+public func loadModelContainer(
+    from directory: URL,
+    using tokenizerLoader: any TokenizerLoader,
+    configuration: ModelConfiguration,
+    loadConfiguration: LoadConfiguration
+) async throws -> ModelContainer {
+    let (context, runtime) = try await loadModel(
+        from: directory,
+        using: tokenizerLoader,
+        configuration: configuration,
+        loadConfiguration: loadConfiguration)
+    let container = ModelContainer(context: context)
+    container.setJangPressRuntime(runtime)
+    return container
+}
+
 /// Load a model from a local directory using a typed ``LoadConfiguration``
 /// — the recommended entry point for hosts (osaurus, JANG Studio) that
 /// want to wire user-facing toggles to JangPress and resident-cap
@@ -514,6 +581,21 @@ public func loadModelContainer(
 public func loadModel(
     from directory: URL,
     using tokenizerLoader: any TokenizerLoader,
+    loadConfiguration: LoadConfiguration
+) async throws -> (ModelContext, JangPressRuntime) {
+    try await loadModel(
+        from: directory,
+        using: tokenizerLoader,
+        configuration: .init(directory: directory),
+        loadConfiguration: loadConfiguration)
+}
+
+/// Load a model from a local directory using caller-supplied
+/// ``ModelConfiguration`` overrides plus a typed ``LoadConfiguration``.
+public func loadModel(
+    from directory: URL,
+    using tokenizerLoader: any TokenizerLoader,
+    configuration: ModelConfiguration,
     loadConfiguration: LoadConfiguration
 ) async throws -> (ModelContext, JangPressRuntime) {
     // 1. Inspect bundle once.
@@ -606,7 +688,10 @@ public func loadModel(
     ) {
         try await NativeMTPActivation.withExplicitRequest(loadConfiguration.nativeMTP) {
             try await load {
-                try await $0.load(from: loadDirectory, using: tokenizerLoader)
+                try await $0.load(
+                    from: loadDirectory,
+                    using: tokenizerLoader,
+                    configuration: configuration)
             }
         }
     }

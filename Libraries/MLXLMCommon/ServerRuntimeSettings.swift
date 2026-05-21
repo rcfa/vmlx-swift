@@ -421,6 +421,37 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
         return resolved
     }
 
+    /// Apply explicit server-panel parser overrides to a model configuration.
+    ///
+    /// Factories still own normal auto-detection from `jang_config.json` and
+    /// `config.json.model_type`. This helper only mutates fields when the host
+    /// has persisted a concrete override; "auto" keeps the factory result, and
+    /// "none"/"off"/"disabled" disables reasoning parsing by stamping `none`.
+    public func resolvedModelConfiguration(
+        base: ModelConfiguration
+    ) -> ModelConfiguration {
+        var resolved = base
+        if let override = Self.nonEmptyOverride(tools.toolParserOverride),
+           !Self.isNoopParserOverride(override),
+           let format = ToolCallFormat.fromCapabilityName(override) {
+            resolved.toolCallFormat = format
+        }
+        if let override = Self.nonEmptyOverride(tools.reasoningParserOverride) {
+            let normalized = override.lowercased().replacingOccurrences(of: "-", with: "_")
+            switch normalized {
+            case "auto":
+                break
+            case "none", "off", "disabled":
+                resolved.reasoningParserName = "none"
+            default:
+                if ReasoningParser.fromCapabilityName(override) != nil {
+                    resolved.reasoningParserName = override
+                }
+            }
+        }
+        return resolved
+    }
+
     /// Resolve decode parameters for a server request.
     ///
     /// Merge order is intentionally narrow and auditable:
