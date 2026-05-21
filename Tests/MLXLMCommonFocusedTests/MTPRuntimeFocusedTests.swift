@@ -144,6 +144,9 @@ struct MTPRuntimeFocusedTests {
                 "validated": true,
                 "output_equivalent": true,
                 "cache_mode": "off",
+                "quantization_mode": "mxfp4",
+                "quantization_bits": 4,
+                "model_types": ["qwen3_5_moe_text"],
                 "artifact": "docs/internal/release-gates/qwen-depth2/result.json",
                 "baseline_tok_s": 24.655,
                 "best_tok_s": 45.712,
@@ -161,7 +164,97 @@ struct MTPRuntimeFocusedTests {
         #expect(recommendation?.depth == 2)
         #expect(recommendation?.verifierMode == "chunk_lazy_repair")
         #expect(recommendation?.evidence.contains("tuning_file=vmlx_mtp_tuning.json") == true)
+        #expect(recommendation?.evidence.contains("tuning.quantization_mode=mxfp4") == true)
+        #expect(recommendation?.evidence.contains("tuning.quantization_bits=4") == true)
         #expect(recommendation?.reason.contains("vmlx_mtp_tuning.json") == true)
+    }
+
+    @Test("MXFP8 MTP tuning must explicitly match bundle quantization")
+    func mxfp8MTPTuningMustExplicitlyMatchBundleQuantization() throws {
+        let root = try makeTemporaryBundle(name: "qwen-mxfp8-mtp-tuning")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try writeJSON([
+            "model_type": "qwen3_vl",
+            "text_config": [
+                "model_type": "qwen3_5_moe_text",
+                "num_hidden_layers": 48,
+                "mtp_num_hidden_layers": 1,
+            ] as [String: Any],
+            "quantization": [
+                "mode": "mxfp8",
+                "bits": 8,
+            ] as [String: Any],
+        ], to: root.appendingPathComponent("config.json"))
+        try writeJSON([
+            "runtime": [
+                "bundle_has_mtp": true,
+                "mtp_layers": 1,
+                "mtp_mode": "preserved_enabled",
+            ] as [String: Any],
+        ], to: root.appendingPathComponent("jang_config.json"))
+        try writeJSON([
+            "weight_map": [
+                "mtp.fc.weight": "model-00029-of-00029.safetensors",
+                "mtp.layers.0.self_attn.q_proj.weight": "model-00029-of-00029.safetensors",
+                "model.layers.0.self_attn.q_proj.weight": "model-00001-of-00029.safetensors",
+            ] as [String: Any],
+        ], to: root.appendingPathComponent("model.safetensors.index.json"))
+        try writeJSON([
+            "native_mtp": [
+                "best_depth": 2,
+                "validated": true,
+                "output_equivalent": true,
+                "artifact": "docs/internal/release-gates/qwen-mxfp4-depth2/result.json",
+                "baseline_tok_s": 24.655,
+                "best_tok_s": 45.712,
+                "speedup_vs_baseline": 1.854,
+            ] as [String: Any],
+        ], to: root.appendingPathComponent("vmlx_mtp_tuning.json"))
+
+        let status = try MTPBundleInspector.inspect(modelDirectory: root)
+        let configData = try Data(contentsOf: root.appendingPathComponent("config.json"))
+        let genericRecommendation = NativeMTPAutoDecodePolicy.recommendation(
+            configData: configData,
+            jangConfig: try? JangLoader.loadConfig(at: root),
+            status: status)
+        let reason = NativeMTPAutoDecodePolicy.rejectionReason(
+            configData: configData,
+            jangConfig: try? JangLoader.loadConfig(at: root),
+            status: status)
+
+        #expect(status.canAutoLaunchMTP)
+        #expect(genericRecommendation == nil)
+        #expect(reason?.contains("quantization_mode=mxfp8") == true)
+
+        try writeJSON([
+            "native_mtp": [
+                "best_depth": 2,
+                "validated": true,
+                "output_equivalent": true,
+                "quantization_mode": "mxfp8",
+                "quantization_bits": 8,
+                "model_types": ["qwen3_5_moe_text"],
+                "artifact": "docs/internal/release-gates/qwen-mxfp8-depth2/result.json",
+                "baseline_tok_s": 24.655,
+                "best_tok_s": 45.712,
+                "speedup_vs_baseline": 1.854,
+            ] as [String: Any],
+        ], to: root.appendingPathComponent("vmlx_mtp_tuning.json"))
+
+        let matchedStatus = try MTPBundleInspector.inspect(modelDirectory: root)
+        let matchedRecommendation = NativeMTPAutoDecodePolicy.recommendation(
+            configData: configData,
+            jangConfig: try? JangLoader.loadConfig(at: root),
+            status: matchedStatus)
+
+        #expect(matchedStatus.configEvidence.contains("tuning.quantization_mode=mxfp8"))
+        #expect(matchedStatus.configEvidence.contains("tuning.quantization_bits=8"))
+        #expect(matchedStatus.snapshot.tuning?.quantizationMode == "mxfp8")
+        #expect(matchedStatus.snapshot.tuning?.quantizationBits == 8)
+        #expect(matchedRecommendation?.depth == 2)
+        #expect(matchedRecommendation?.evidence.contains("tuning.quantization_mode=mxfp8") == true)
+        #expect(matchedRecommendation?.evidence.contains("tuning.quantization_bits=8") == true)
     }
 
     @Test("complete MTP tensors without tuning stay non auto launch")
@@ -796,7 +889,9 @@ struct MTPRuntimeFocusedTests {
                 artifact: "docs/internal/release-gates/qwen-depth3/result.json",
                 baselineTokensPerSecond: 24.0,
                 bestTokensPerSecond: 36.0,
-                speedupVsBaseline: 1.5))
+                speedupVsBaseline: 1.5,
+                quantizationMode: "mxfp8",
+                quantizationBits: 8))
         let verified = MTPBundleStatus(
             bundleHasMTP: true,
             configuredLayers: 1,
@@ -810,7 +905,9 @@ struct MTPRuntimeFocusedTests {
                 artifact: "docs/internal/release-gates/qwen-depth3/result.json",
                 baselineTokensPerSecond: 24.0,
                 bestTokensPerSecond: 36.0,
-                speedupVsBaseline: 1.5))
+                speedupVsBaseline: 1.5,
+                quantizationMode: "mxfp8",
+                quantizationBits: 8))
         let blockedTuning = MTPBundleStatus(
             bundleHasMTP: true,
             configuredLayers: 1,

@@ -354,10 +354,16 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
             requireVerifiedRuntime: true)
         else {
             let mode = mtp.mode == .forceOn ? VMLXMTPLaunchMode.blocked : .off
+            let reason = NativeMTPAutoDecodePolicy.rejectionReason(
+                configData: configData,
+                jangConfig: jangConfig,
+                status: status,
+                requireVerifiedRuntime: true)
+                ?? "No supported tensor-proven native-MTP recommendation for this bundle."
             return .init(
                 launchMode: mode,
                 recommendation: nil,
-                reason: "No supported tensor-proven native-MTP recommendation for this bundle.")
+                reason: reason)
         }
 
         let resolvedRecommendation: NativeMTPAutoDecodeRecommendation

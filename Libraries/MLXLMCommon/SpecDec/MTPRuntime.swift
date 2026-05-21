@@ -75,6 +75,9 @@ public struct NativeMTPTuning: Codable, Sendable, Equatable {
     public let baselineTokensPerSecond: Double?
     public let bestTokensPerSecond: Double?
     public let speedupVsBaseline: Double?
+    public let quantizationMode: String?
+    public let quantizationBits: Int?
+    public let modelTypes: [String]
     public let note: String?
     public let reason: String?
 
@@ -91,6 +94,9 @@ public struct NativeMTPTuning: Codable, Sendable, Equatable {
         baselineTokensPerSecond: Double? = nil,
         bestTokensPerSecond: Double? = nil,
         speedupVsBaseline: Double? = nil,
+        quantizationMode: String? = nil,
+        quantizationBits: Int? = nil,
+        modelTypes: [String] = [],
         note: String? = nil,
         reason: String? = nil
     ) {
@@ -106,6 +112,9 @@ public struct NativeMTPTuning: Codable, Sendable, Equatable {
         self.baselineTokensPerSecond = baselineTokensPerSecond
         self.bestTokensPerSecond = bestTokensPerSecond
         self.speedupVsBaseline = speedupVsBaseline
+        self.quantizationMode = quantizationMode
+        self.quantizationBits = quantizationBits
+        self.modelTypes = modelTypes
         self.note = note
         self.reason = reason
     }
@@ -156,6 +165,9 @@ public struct NativeMTPTuning: Codable, Sendable, Equatable {
             bestTokensPerSecond: try c.decodeIfPresent(
                 Double.self, forKey: .bestTokensPerSecond),
             speedupVsBaseline: try c.decodeIfPresent(Double.self, forKey: .speedupVsBaseline),
+            quantizationMode: try c.decodeIfPresent(String.self, forKey: .quantizationMode),
+            quantizationBits: try c.decodeIfPresent(Int.self, forKey: .quantizationBits),
+            modelTypes: try c.decodeIfPresent([String].self, forKey: .modelTypes) ?? [],
             note: try c.decodeIfPresent(String.self, forKey: .note),
             reason: try c.decodeIfPresent(String.self, forKey: .reason))
     }
@@ -173,6 +185,9 @@ public struct NativeMTPTuning: Codable, Sendable, Equatable {
         case baselineTokensPerSecond = "baseline_tok_s"
         case bestTokensPerSecond = "best_tok_s"
         case speedupVsBaseline = "speedup_vs_baseline"
+        case quantizationMode = "quantization_mode"
+        case quantizationBits = "quantization_bits"
+        case modelTypes = "model_types"
         case note
         case reason
     }
@@ -193,6 +208,9 @@ public struct NativeMTPTuningSnapshot: Codable, Sendable, Equatable {
     public let baselineTokensPerSecond: Double?
     public let bestTokensPerSecond: Double?
     public let speedupVsBaseline: Double?
+    public let quantizationMode: String?
+    public let quantizationBits: Int?
+    public let modelTypes: [String]
     public let note: String?
     public let reason: String?
 
@@ -211,6 +229,9 @@ public struct NativeMTPTuningSnapshot: Codable, Sendable, Equatable {
         baselineTokensPerSecond: Double? = nil,
         bestTokensPerSecond: Double? = nil,
         speedupVsBaseline: Double? = nil,
+        quantizationMode: String? = nil,
+        quantizationBits: Int? = nil,
+        modelTypes: [String] = [],
         note: String? = nil,
         reason: String? = nil
     ) {
@@ -228,6 +249,9 @@ public struct NativeMTPTuningSnapshot: Codable, Sendable, Equatable {
         self.baselineTokensPerSecond = baselineTokensPerSecond
         self.bestTokensPerSecond = bestTokensPerSecond
         self.speedupVsBaseline = speedupVsBaseline
+        self.quantizationMode = quantizationMode
+        self.quantizationBits = quantizationBits
+        self.modelTypes = modelTypes
         self.note = note
         self.reason = reason
     }
@@ -247,6 +271,9 @@ public struct NativeMTPTuningSnapshot: Codable, Sendable, Equatable {
         case baselineTokensPerSecond = "baseline_tok_s"
         case bestTokensPerSecond = "best_tok_s"
         case speedupVsBaseline = "speedup_vs_baseline"
+        case quantizationMode = "quantization_mode"
+        case quantizationBits = "quantization_bits"
+        case modelTypes = "model_types"
         case note
         case reason
     }
@@ -351,6 +378,9 @@ extension NativeMTPTuning {
             baselineTokensPerSecond: baselineTokensPerSecond,
             bestTokensPerSecond: bestTokensPerSecond,
             speedupVsBaseline: speedupVsBaseline,
+            quantizationMode: quantizationMode,
+            quantizationBits: quantizationBits,
+            modelTypes: modelTypes,
             note: note,
             reason: reason)
     }
@@ -585,6 +615,14 @@ public enum NativeMTPActivation {
         guard status?.canAutoLaunchMTP == true else {
             throw NativeMTPActivationError.requestedWithoutUsableTuning(status)
         }
+        guard NativeMTPAutoDecodePolicy.recommendation(
+            configData: configData,
+            jangConfig: nil,
+            status: status,
+            requireVerifiedRuntime: true) != nil
+        else {
+            throw NativeMTPActivationError.requestedWithoutUsableTuning(status)
+        }
         return true
     }
 
@@ -700,6 +738,12 @@ public enum NativeMTPAutoDecodePolicy {
 
         if let tuning = status.nativeMTPTuning {
             guard let depth = tuning.usableBestDepth else { return nil }
+            guard tuningMatchesBundleModelTypes(tuning, modelTypes: modelTypes) else {
+                return nil
+            }
+            guard tuningMatchesBundleQuantization(tuning, mode: mode, bits: bits) else {
+                return nil
+            }
             var tuningEvidence = evidence + [
                 "tuning_file=\(NativeMTPTuning.fileName)",
                 "tuning.validated=\(tuning.validated)",
@@ -708,6 +752,16 @@ public enum NativeMTPAutoDecodePolicy {
                 "tuning.best_depth=\(depth)",
                 "tuning.verifier_mode=\(tuning.resolvedVerifierMode)",
             ]
+            if let quantizationMode = tuning.quantizationMode {
+                tuningEvidence.append("tuning.quantization_mode=\(normalize(quantizationMode))")
+            }
+            if let quantizationBits = tuning.quantizationBits {
+                tuningEvidence.append("tuning.quantization_bits=\(quantizationBits)")
+            }
+            if !tuning.modelTypes.isEmpty {
+                tuningEvidence.append(
+                    "tuning.model_types=\(tuning.modelTypes.map(normalize).sorted().joined(separator: ","))")
+            }
             if let cacheMode = tuning.cacheMode {
                 tuningEvidence.append("tuning.cache_mode=\(cacheMode)")
             }
@@ -731,6 +785,46 @@ public enum NativeMTPAutoDecodePolicy {
         // without `vmlx_mtp_tuning.json` is loadable, but it does not receive
         // automatic speculative launch because depth must come from measured
         // artifact-local proof, not from path/name/profile assumptions.
+        return nil
+    }
+
+    public static func rejectionReason(
+        configData: Data?,
+        jangConfig: JangConfig?,
+        status: MTPBundleStatus?,
+        requireVerifiedRuntime: Bool = true
+    ) -> String? {
+        guard let status else {
+            return "No MTP bundle status snapshot was available."
+        }
+        guard status.hasCompleteMTPArtifact else {
+            return "Bundle does not have complete native-MTP tensor evidence."
+        }
+        guard !requireVerifiedRuntime || status.canAutoLaunchMTP else {
+            return "Bundle does not have usable \(NativeMTPTuning.fileName) production tuning."
+        }
+
+        let config = (configData.flatMap { try? JSONSerialization.jsonObject(with: $0) })
+            as? [String: Any]
+        let modelTypes = modelTypes(config: config, fallback: jangConfig?.sourceModel.architecture)
+        guard modelTypes.contains(where: isSupportedQwenMTPModelType) else {
+            return "Bundle model type is not on the native-MTP allowlist."
+        }
+
+        guard let tuning = status.nativeMTPTuning, tuning.usableBestDepth != nil else {
+            return "Bundle tuning is missing or not production usable."
+        }
+        if let reason = modelTypeMismatchReason(tuning, modelTypes: modelTypes) {
+            return reason
+        }
+
+        let mode = quantizationMode(config: config, jangConfig: jangConfig)
+        let bits = intValue((config?["quantization"] as? [String: Any])?["bits"])
+            ?? Int(jangConfig?.quantization.targetBits.rounded() ?? 0)
+        if let reason = quantizationMismatchReason(tuning, mode: mode, bits: bits) {
+            return reason
+        }
+
         return nil
     }
 
@@ -763,6 +857,55 @@ public enum NativeMTPAutoDecodePolicy {
             if normalized == "mxfp8" || normalized == "mxfp4" || normalized == "affine" {
                 return normalized
             }
+        }
+        return nil
+    }
+
+    private static func tuningMatchesBundleQuantization(
+        _ tuning: NativeMTPTuning,
+        mode: String?,
+        bits: Int
+    ) -> Bool {
+        quantizationMismatchReason(tuning, mode: mode, bits: bits) == nil
+    }
+
+    private static func tuningMatchesBundleModelTypes(
+        _ tuning: NativeMTPTuning,
+        modelTypes: [String]
+    ) -> Bool {
+        modelTypeMismatchReason(tuning, modelTypes: modelTypes) == nil
+    }
+
+    private static func modelTypeMismatchReason(
+        _ tuning: NativeMTPTuning,
+        modelTypes: [String]
+    ) -> String? {
+        guard !tuning.modelTypes.isEmpty else { return nil }
+        let bundleTypes = Set(modelTypes.map(normalize))
+        let tuningTypes = Set(tuning.modelTypes.map(normalize))
+        guard !bundleTypes.isDisjoint(with: tuningTypes) else {
+            return "\(NativeMTPTuning.fileName) model_types=\(tuningTypes.sorted().joined(separator: ",")) do not match bundle model_types=\(bundleTypes.sorted().joined(separator: ","))."
+        }
+        return nil
+    }
+
+    private static func quantizationMismatchReason(
+        _ tuning: NativeMTPTuning,
+        mode: String?,
+        bits: Int
+    ) -> String? {
+        let bundleMode = mode.map(normalize)
+        let tuningMode = tuning.quantizationMode.map(normalize)
+        if bundleMode == "mxfp8" {
+            guard tuningMode == "mxfp8", tuning.quantizationBits == 8 else {
+                return "\(NativeMTPTuning.fileName) must explicitly match quantization_mode=mxfp8 and quantization_bits=8 before MXFP8 native MTP can launch."
+            }
+        }
+        if let tuningMode, let bundleMode, tuningMode != bundleMode {
+            return "\(NativeMTPTuning.fileName) quantization_mode=\(tuningMode) does not match bundle quantization_mode=\(bundleMode)."
+        }
+        if let tuningBits = tuning.quantizationBits, bits > 0, tuningBits != bits {
+            return "\(NativeMTPTuning.fileName) quantization_bits=\(tuningBits) does not match bundle quantization_bits=\(bits)."
         }
         return nil
     }
@@ -1167,6 +1310,12 @@ public enum MTPBundleInspector {
             statusEvidence.append("tuning_file=\(NativeMTPTuning.fileName)")
             if let bestDepth = nativeMTPTuning.bestDepth {
                 statusEvidence.append("tuning.best_depth=\(bestDepth)")
+            }
+            if let quantizationMode = nativeMTPTuning.quantizationMode {
+                statusEvidence.append("tuning.quantization_mode=\(quantizationMode)")
+            }
+            if let quantizationBits = nativeMTPTuning.quantizationBits {
+                statusEvidence.append("tuning.quantization_bits=\(quantizationBits)")
             }
             statusEvidence.append("tuning.validated=\(nativeMTPTuning.validated)")
             statusEvidence.append("tuning.output_equivalent=\(nativeMTPTuning.outputEquivalent)")

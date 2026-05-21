@@ -291,7 +291,9 @@ struct VMLXServerRuntimeSettingsTests {
                 artifact: "docs/internal/release-gates/qwen-depth3/result.json",
                 baselineTokensPerSecond: 24.0,
                 bestTokensPerSecond: 36.0,
-                speedupVsBaseline: 1.5))
+                speedupVsBaseline: 1.5,
+                quantizationMode: "mxfp8",
+                quantizationBits: 8))
         var settings = VMLXServerRuntimeSettings()
         settings.mtp.mode = .auto
         settings.mtp.draftTokenLimit = 2
@@ -315,6 +317,49 @@ struct VMLXServerRuntimeSettingsTests {
         } else {
             Issue.record("Resolved MTP draft strategy did not carry the capped native depth")
         }
+    }
+
+    @Test("MXFP8 MTP launch requires quantization-matched tuning")
+    func mxfp8MTPLaunchRequiresQuantizationMatchedTuning() {
+        let config = """
+        {
+          "model_type": "qwen3_5_moe",
+          "text_config": { "model_type": "qwen3_5_moe_text", "mtp_num_hidden_layers": 1 },
+          "quantization": { "mode": "mxfp8", "bits": 8 }
+        }
+        """.data(using: .utf8)!
+        let genericTuning = MTPBundleStatus(
+            bundleHasMTP: true,
+            configuredLayers: 1,
+            tensorCount: 31,
+            mode: .speculativeVerified,
+            nativeMTPTuning: NativeMTPTuning(
+                bestDepth: 3,
+                validated: true,
+                outputEquivalent: true,
+                artifact: "docs/internal/release-gates/qwen-depth3/result.json",
+                baselineTokensPerSecond: 24.0,
+                bestTokensPerSecond: 36.0,
+                speedupVsBaseline: 1.5))
+        var settings = VMLXServerRuntimeSettings()
+        settings.mtp.mode = .forceOn
+
+        let launch = settings.resolvedMTPLaunch(
+            configData: config,
+            jangConfig: nil,
+            status: genericTuning)
+
+        #expect(launch.launchMode == .blocked)
+        #expect(launch.recommendation == nil)
+        #expect(launch.reason.contains("quantization_mode=mxfp8"))
+        #expect(settings.validationIssues(
+            configData: config,
+            jangConfig: nil,
+            mtpStatus: genericTuning).contains {
+                $0.severity == .error
+                    && $0.field == "mtp.mode"
+                    && $0.message.contains("quantization_mode=mxfp8")
+            })
     }
 
     @Test("tensor-proven Qwen MTP auto-launch resolves D3 load and draft settings")
