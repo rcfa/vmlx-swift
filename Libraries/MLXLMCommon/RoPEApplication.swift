@@ -1,0 +1,83 @@
+// Copyright © 2024 Apple Inc.
+
+import Foundation
+import MLX
+import MLXNN
+
+// MARK: - applyRotaryPosition Helper
+
+/// Apply rotary position embeddings, using the cache offset when available.
+///
+/// This function enables models to use a single call site instead of
+/// repeating conditional offset handling:
+/// ```swift
+/// queries = applyRotaryPosition(rope, to: queries, cache: cache)
+/// keys = applyRotaryPosition(rope, to: keys, cache: cache)
+/// ```
+///
+/// When the cache exposes an `offsetArray`, the offset is passed as an `MLXArray`
+/// so the compile tracer can track it through the graph without triggering a
+/// synchronous GPU readback. For all other cache types, the standard `Int`-based
+/// offset path is used.
+///
+/// - Parameters:
+///   - rope: A RoPE layer conforming to both `OffsetLayer` and `ArrayOffsetLayer`.
+///   - x: The input tensor to apply RoPE to.
+///   - cache: The KV cache (determines offset), or `nil` for offset 0.
+/// - Returns: The input with rotary positional encoding applied.
+public func applyRotaryPosition<R: RoPELayer>(_ rope: R, to x: MLXArray, cache: KVCache?)
+    -> MLXArray
+{
+    applyRotaryPosition(rope, to: x, offset: capturedRotaryOffset(for: cache))
+}
+
+public enum CapturedRotaryOffset {
+    case array(MLXArray)
+    case scalar(Int)
+}
+
+public func capturedRotaryOffset(for cache: KVCache?) -> CapturedRotaryOffset {
+    if let offsetArray = graphOffsetArray(for: cache) {
+        return .array(offsetArray)
+    }
+    return .scalar(cache?.offset ?? 0)
+}
+
+public func applyRotaryPosition<R: RoPELayer>(
+    _ rope: R,
+    to x: MLXArray,
+    offset: CapturedRotaryOffset
+) -> MLXArray {
+    switch offset {
+    case .array(let offsetArray):
+        return rope(x, offset: offsetArray)
+    case .scalar(let offset):
+        return rope(x, offset: offset)
+    }
+}
+
+/// Returns a graph-visible cache offset when the cache exposes one.
+///
+/// `KVCache.offset` is an `Int` API for compatibility with upstream model
+/// ports. Compile-safe caches keep the offset as an `MLXArray` so the value
+/// can flow through `compile()` without an `.item()` readback. Model-side
+/// helpers that need positions outside `applyRotaryPosition` should call this
+/// before falling back to `cache.offset`.
+public func graphOffsetArray(for cache: KVCache?) -> MLXArray? {
+    if let compilable = cache as? CompilableKVCache {
+        return compilable.offsetArray
+    }
+    if let compilableTQ = cache as? CompilableTurboQuantKVCache {
+        return compilableTQ.offsetArray
+    }
+    if let compilableRot = cache as? CompilableRotatingKVCache {
+        return compilableRot.offsetArray
+    }
+    if let batchCache = cache as? BatchKVCache {
+        return batchCache.offsetArray
+    }
+    if let batchArrays = cache as? BatchArraysCache {
+        return batchArrays.offsetArray
+    }
+    return nil
+}
