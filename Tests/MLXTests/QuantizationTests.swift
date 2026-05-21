@@ -61,4 +61,52 @@ class QuantizationTests: XCTestCase {
         XCTAssertEqual(quantized.mode, .mxfp8)
         XCTAssertNil(quantized.biases)
     }
+
+    func testCPUAffineGatherQuantizedMMKeepsBitsAndGroupSizeOrder() {
+        Device.withDefaultDevice(.cpu) {
+            Stream.withNewDefaultStream(device: .cpu) {
+                let dense =
+                    (MLXArray(0 ..< (3 * 16 * 32), [3, 16, 32]).asType(.float32) / 2048)
+                    - 0.5
+                let x =
+                    (MLXArray(0 ..< (2 * 1 * 32), [2, 1, 32]).asType(.float32) / 128)
+                    - 0.25
+                let (weight, scales, biases) = MLX.quantized(
+                    dense,
+                    groupSize: 32,
+                    bits: 4,
+                    mode: .affine,
+                    stream: .cpu)
+
+                let gathered = MLX.gatherQuantizedMM(
+                    x,
+                    weight,
+                    scales: scales,
+                    biases: biases,
+                    rhsIndices: MLXArray([0, 2]),
+                    transpose: true,
+                    groupSize: 32,
+                    bits: 4,
+                    mode: .affine,
+                    stream: .cpu)
+                MLX.eval(gathered)
+
+                let dequantized = MLX.dequantized(
+                    weight,
+                    scales: scales,
+                    biases: biases,
+                    groupSize: 32,
+                    bits: 4,
+                    mode: .affine,
+                    stream: .cpu)
+                let expected = concatenated(
+                    [
+                        matmul(x[0 ..< 1], dequantized[0].transposed()),
+                        matmul(x[1 ..< 2], dequantized[2].transposed()),
+                    ], axis: 0, stream: .cpu)
+
+                assertEqual(gathered, expected, rtol: 1e-3, atol: 1e-3)
+            }
+        }
+    }
 }

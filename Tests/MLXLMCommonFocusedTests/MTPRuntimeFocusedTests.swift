@@ -85,6 +85,9 @@ struct MTPRuntimeFocusedTests {
                 "best_depth": 3,
                 "validated": true,
                 "output_equivalent": true,
+                "baseline_tok_s": 24.0,
+                "best_tok_s": 36.0,
+                "speedup_vs_baseline": 1.5,
                 "artifact": "docs/internal/release-gates/qwen-depth3/result.json",
             ] as [String: Any],
         ], to: root.appendingPathComponent("vmlx_mtp_tuning.json"))
@@ -287,6 +290,35 @@ struct MTPRuntimeFocusedTests {
         #expect(snapshot.tuning?.reason == "diagnostic row was not production-valid")
     }
 
+    @Test("MTP tuning without speedup is not production usable")
+    func mtpTuningWithoutSpeedupIsNotProductionUsable() {
+        let noSpeed = NativeMTPTuning(
+            bestDepth: 3,
+            validated: true,
+            outputEquivalent: true,
+            artifact: "docs/internal/release-gates/qwen-depth3/result.json")
+        let slowerThanBaseline = NativeMTPTuning(
+            bestDepth: 3,
+            validated: true,
+            outputEquivalent: true,
+            artifact: "docs/internal/release-gates/qwen-depth3/result.json",
+            baselineTokensPerSecond: 24.0,
+            bestTokensPerSecond: 23.9,
+            speedupVsBaseline: 0.99)
+        let fasterThanBaseline = NativeMTPTuning(
+            bestDepth: 3,
+            validated: true,
+            outputEquivalent: true,
+            artifact: "docs/internal/release-gates/qwen-depth3/result.json",
+            baselineTokensPerSecond: 24.0,
+            bestTokensPerSecond: 36.0,
+            speedupVsBaseline: 1.5)
+
+        #expect(noSpeed.usableBestDepth == nil)
+        #expect(slowerThanBaseline.usableBestDepth == nil)
+        #expect(fasterThanBaseline.usableBestDepth == 3)
+    }
+
     @Test("MTP config without tensors is reported as metadata-only")
     func configOnlyMTPIsMetadataOnlyMissingWeights() throws {
         let root = try makeTemporaryBundle(name: "qwen-mtp-missing-weights")
@@ -346,6 +378,9 @@ struct MTPRuntimeFocusedTests {
                 "best_depth": 3,
                 "validated": true,
                 "output_equivalent": true,
+                "baseline_tok_s": 24.0,
+                "best_tok_s": 36.0,
+                "speedup_vs_baseline": 1.5,
                 "artifact": "docs/internal/release-gates/qwen-depth3/result.json",
             ] as [String: Any],
         ], to: root.appendingPathComponent("vmlx_mtp_tuning.json"))
@@ -429,7 +464,10 @@ struct MTPRuntimeFocusedTests {
                 bestDepth: 3,
                 validated: true,
                 outputEquivalent: true,
-                artifact: "docs/internal/release-gates/qwen-depth3/result.json"))
+                artifact: "docs/internal/release-gates/qwen-depth3/result.json",
+                baselineTokensPerSecond: 24.0,
+                bestTokensPerSecond: 36.0,
+                speedupVsBaseline: 1.5))
 
         let shouldLoad = try await NativeMTPActivation.withExplicitRequest(true) {
             try NativeMTPActivation.shouldLoadNativeMTPWeights(
@@ -490,7 +528,10 @@ struct MTPRuntimeFocusedTests {
                 bestDepth: 3,
                 validated: true,
                 outputEquivalent: true,
-                artifact: "docs/internal/release-gates/qwen-depth3/result.json"))
+                artifact: "docs/internal/release-gates/qwen-depth3/result.json",
+                baselineTokensPerSecond: 24.0,
+                bestTokensPerSecond: 36.0,
+                speedupVsBaseline: 1.5))
 
         let active = try await NativeMTPActivation.withExplicitRequest(true) {
             try NativeMTPActivation.shouldLoadNativeMTPWeights(
@@ -664,7 +705,10 @@ struct MTPRuntimeFocusedTests {
                 bestDepth: 3,
                 validated: true,
                 outputEquivalent: true,
-                artifact: "docs/internal/release-gates/qwen-depth3/result.json"))
+                artifact: "docs/internal/release-gates/qwen-depth3/result.json",
+                baselineTokensPerSecond: 24.0,
+                bestTokensPerSecond: 36.0,
+                speedupVsBaseline: 1.5))
         let configuration = ModelConfiguration(
             directory: root,
             mtpStatus: status)
@@ -703,7 +747,10 @@ struct MTPRuntimeFocusedTests {
                 bestDepth: 3,
                 validated: true,
                 outputEquivalent: true,
-                artifact: "docs/internal/release-gates/qwen-depth3/result.json"))
+                artifact: "docs/internal/release-gates/qwen-depth3/result.json",
+                baselineTokensPerSecond: 24.0,
+                bestTokensPerSecond: 36.0,
+                speedupVsBaseline: 1.5))
         let verified = MTPBundleStatus(
             bundleHasMTP: true,
             configuredLayers: 1,
@@ -714,7 +761,10 @@ struct MTPRuntimeFocusedTests {
                 bestDepth: 3,
                 validated: true,
                 outputEquivalent: true,
-                artifact: "docs/internal/release-gates/qwen-depth3/result.json"))
+                artifact: "docs/internal/release-gates/qwen-depth3/result.json",
+                baselineTokensPerSecond: 24.0,
+                bestTokensPerSecond: 36.0,
+                speedupVsBaseline: 1.5))
         let blockedTuning = MTPBundleStatus(
             bundleHasMTP: true,
             configuredLayers: 1,

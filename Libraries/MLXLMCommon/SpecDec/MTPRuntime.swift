@@ -115,7 +115,13 @@ public struct NativeMTPTuning: Codable, Sendable, Equatable {
               validated,
               outputEquivalent,
               let bestDepth,
-              bestDepth > 0
+              bestDepth > 0,
+              let baselineTokensPerSecond,
+              let bestTokensPerSecond,
+              let speedupVsBaseline,
+              baselineTokensPerSecond > 0,
+              bestTokensPerSecond > baselineTokensPerSecond,
+              speedupVsBaseline > 1
         else {
             return nil
         }

@@ -175,7 +175,10 @@ struct VMLXServerRuntimeSettingsTests {
                 bestDepth: 3,
                 validated: true,
                 outputEquivalent: true,
-                artifact: "docs/internal/release-gates/qwen-depth3/result.json"))
+                artifact: "docs/internal/release-gates/qwen-depth3/result.json",
+                baselineTokensPerSecond: 24.0,
+                bestTokensPerSecond: 36.0,
+                speedupVsBaseline: 1.5))
 
         #expect(settings.effectiveMTPLaunchMode(for: missingTuning) == .off)
         #expect(settings.effectiveMTPLaunchMode(for: tuned) == .speculative)
@@ -200,7 +203,10 @@ struct VMLXServerRuntimeSettingsTests {
                 bestDepth: 3,
                 validated: true,
                 outputEquivalent: true,
-                artifact: "docs/internal/release-gates/qwen-depth3/result.json"))
+                artifact: "docs/internal/release-gates/qwen-depth3/result.json",
+                baselineTokensPerSecond: 24.0,
+                bestTokensPerSecond: 36.0,
+                speedupVsBaseline: 1.5))
         let metadataOnly = MTPBundleStatus(
             bundleHasMTP: false,
             configuredLayers: 4,
@@ -249,7 +255,10 @@ struct VMLXServerRuntimeSettingsTests {
                 bestDepth: 3,
                 validated: true,
                 outputEquivalent: true,
-                artifact: "docs/internal/release-gates/qwen-depth3/result.json"))
+                artifact: "docs/internal/release-gates/qwen-depth3/result.json",
+                baselineTokensPerSecond: 24.0,
+                bestTokensPerSecond: 36.0,
+                speedupVsBaseline: 1.5))
         var settings = VMLXServerRuntimeSettings()
         settings.mtp.mode = .auto
         settings.mtp.draftTokenLimit = 2
@@ -294,7 +303,10 @@ struct VMLXServerRuntimeSettingsTests {
                 bestDepth: 3,
                 validated: true,
                 outputEquivalent: true,
-                artifact: "docs/internal/release-gates/qwen-depth3/result.json"))
+                artifact: "docs/internal/release-gates/qwen-depth3/result.json",
+                baselineTokensPerSecond: 24.0,
+                bestTokensPerSecond: 36.0,
+                speedupVsBaseline: 1.5))
         var settings = VMLXServerRuntimeSettings()
         settings.mtp.mode = .auto
 

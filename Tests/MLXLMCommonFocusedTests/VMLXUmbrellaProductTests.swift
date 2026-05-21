@@ -111,7 +111,10 @@ struct VMLXUmbrellaProductTests {
                 outputEquivalent: true,
                 blocked: false,
                 cacheMode: "paged+ssm",
-                artifact: "docs/internal/release-gates/qwen36_mxfp8/result.json"))
+                artifact: "docs/internal/release-gates/qwen36_mxfp8/result.json",
+                baselineTokensPerSecond: 24.0,
+                bestTokensPerSecond: 36.0,
+                speedupVsBaseline: 1.5))
         let configuration = ModelConfiguration(
             directory: URL(fileURLWithPath: "/tmp/Qwen3.6-27B-MXFP8-MTP"),
             toolCallFormat: .xmlFunction,
