@@ -660,9 +660,10 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
             speculativeSampler: speculativeSampler,
             verifierMode: verifierModeSetting)
         let checkpointStart = Date.timeIntervalSinceReferenceDate
+        let needsBatchedVerifierRecovery = speculativeSampler.isGreedy && processor == nil
         let checkpoint =
             (canCommitVerifierCache && !requiresSequentialRepair && !replayChunkCommit
-                && !lazyChunkRepair)
+                && !lazyChunkRepair && !needsBatchedVerifierRecovery)
             ? nil
             : NativeMTPCacheCheckpoint(cache)
         cacheSnapshotRestoreTime += Date.timeIntervalSinceReferenceDate - checkpointStart
@@ -679,13 +680,22 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
         chunkVerifierCount += 1
 
         let sampleStart = Date.timeIntervalSinceReferenceDate
-        let verifyDecision = Self.verifyDrafts(
+        guard let verifyDecision = Self.verifyDrafts(
             logits: verifier.logits,
             drafts: drafts,
             draftProbabilities: draftProbabilities,
             sampler: sampler,
             speculativeSampler: speculativeSampler,
             processor: processor)
+        else {
+            if let checkpoint {
+                let restoreStart = Date.timeIntervalSinceReferenceDate
+                checkpoint.restore(into: &cache)
+                cacheSnapshotRestoreTime += Date.timeIntervalSinceReferenceDate - restoreStart
+            }
+            try verifyCycleSequential(primary: primary)
+            return
+        }
         materializeSyncTime += verifyDecision.materializeSyncTime
         samplingTime += Date.timeIntervalSinceReferenceDate - sampleStart
 
@@ -723,9 +733,14 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
             var repaired = replayPrefix(count: accepted + 1)
 
             if speculativeSampler.isGreedy, processor == nil {
-                let audited = Self.batchedGreedyTargetTokenIds(
+                guard let audited = Self.batchedGreedyTargetTokenIds(
                     logits: repaired.logits,
                     count: accepted + 1)
+                else {
+                    restoreCheckpoint()
+                    try verifyCycleSequential(primary: primary)
+                    return
+                }
                 materializeSyncTime += audited.materializeSyncTime
 
                 var auditedAccepted = 0
@@ -743,9 +758,14 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
                     repaired = replayPrefix(count: accepted + 1)
                 }
 
-                let verified = Self.batchedGreedyTargetTokenIds(
+                guard let verified = Self.batchedGreedyTargetTokenIds(
                     logits: repaired.logits,
                     count: accepted + 1)
+                else {
+                    restoreCheckpoint()
+                    try verifyCycleSequential(primary: primary)
+                    return
+                }
                 materializeSyncTime += verified.materializeSyncTime
                 nextVerifiedToken = verified.tokens[accepted]
             }
@@ -1191,15 +1211,18 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
         sampler: LogitSampler,
         speculativeSampler: SpeculativeSamplingController,
         processor: LogitProcessor?
-    ) -> VerifyDecision {
+    ) -> VerifyDecision? {
         if speculativeSampler.isGreedy {
             var materializeSyncTime: TimeInterval = 0
             let sampled: [MLXArray]
             let sampledIDs: [Int]
             if processor == nil {
-                let batch = batchedGreedyTargetTokenIds(
+                guard let batch = batchedGreedyTargetTokenIds(
                     logits: logits,
                     count: drafts.count + 1)
+                else {
+                    return nil
+                }
                 sampled = batch.tokens
                 sampledIDs = batch.tokenIds
                 materializeSyncTime += batch.materializeSyncTime
@@ -1523,15 +1546,36 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
         return speculativeSampler.sample(logits: logits)
     }
 
+    static func greedyTargetTokenIdsForTesting(
+        logits: MLXArray,
+        count: Int
+    ) -> [Int]? {
+        batchedGreedyTargetTokenIds(logits: logits, count: count)?.tokenIds
+    }
+
     private static func batchedGreedyTargetTokenIds(
         logits: MLXArray,
         count: Int
-    ) -> (tokens: [MLXArray], tokenIds: [Int], materializeSyncTime: TimeInterval) {
+    ) -> (tokens: [MLXArray], tokenIds: [Int], materializeSyncTime: TimeInterval)? {
+        guard count > 0,
+              logits.ndim >= 3,
+              logits.shape.count >= 2,
+              logits.shape[1] >= count
+        else {
+            return nil
+        }
+
         let candidateLogits = logits[0..., 0 ..< count, 0...]
         let tokenBatch = argMax(candidateLogits, axis: -1).asType(.int32)
         let syncStart = Date.timeIntervalSinceReferenceDate
         MLX.eval(tokenBatch)
+        guard tokenBatch.size == count else {
+            return nil
+        }
         let tokenIds = tokenBatch.reshaped(-1).asArray(Int32.self).map { Int($0) }
+        guard tokenIds.count == count else {
+            return nil
+        }
         let materializeSyncTime = Date.timeIntervalSinceReferenceDate - syncStart
         let tokens = tokenIds.map { MLXArray([Int32($0)]) }
         return (

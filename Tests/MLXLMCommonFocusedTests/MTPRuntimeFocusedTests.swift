@@ -4,12 +4,25 @@
 import Foundation
 import MLX
 import MLXLLM
-import MLXLMCommon
+@testable import MLXLMCommon
 import MLXNN
 import Testing
 
 @Suite("MTP runtime metadata", .serialized)
 struct MTPRuntimeFocusedTests {
+    @Test("native MTP greedy verifier rejects short logits before materialization")
+    func nativeMTPGreedyVerifierRejectsShortLogitsBeforeMaterialization() {
+        FocusedMLXTestSupport.withLock {
+            let logits = MLXArray.zeros([1, 1, 8])
+
+            let batch = NativeMTPTokenIterator.greedyTargetTokenIdsForTesting(
+                logits: logits,
+                count: 2)
+
+            #expect(batch == nil)
+        }
+    }
+
     @Test("cached multi-token verifier mask carries cache offset")
     func cachedMultiTokenVerifierMaskCarriesCacheOffset() {
         FocusedMLXTestSupport.withLock {
