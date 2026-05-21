@@ -3,6 +3,19 @@
 import Cmlx
 import Foundation
 
+private func mlxSwiftCompileAllowedByPolicy() -> Bool {
+    let env = ProcessInfo.processInfo.environment
+    if env["MLX_DISABLE_COMPILE"] != nil {
+        return false
+    }
+
+    let raw = env["VMLX_ENABLE_UNSAFE_COMPILE"]
+        ?? env["MLXPRESS_ENABLE_UNSAFE_COMPILE"]
+        ?? env["MLX_ENABLE_UNSAFE_COMPILE"]
+        ?? ""
+    return raw == "1" || raw.lowercased() == "true"
+}
+
 // Note: this is all immutable state -- the `id` property is only set at init time
 final class CompiledFunction: @unchecked (Sendable) {
 
@@ -37,7 +50,12 @@ final class CompiledFunction: @unchecked (Sendable) {
     }
 
     func call(_ arguments: [MLXArray]) -> [MLXArray] {
-        lock.withLock {
+        if !mlxSwiftCompileAllowedByPolicy() {
+            mlx_disable_compile()
+            return f(arguments)
+        }
+
+        return lock.withLock {
             innerCall(arguments)
         }
     }

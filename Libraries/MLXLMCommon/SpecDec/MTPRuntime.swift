@@ -621,8 +621,6 @@ public enum NativeMTPActivation {
             || normalized == "qwen3_5_text"
             || normalized == "qwen3_5_moe"
             || normalized == "qwen3_5_moe_text"
-            || normalized == "qwen3_5_vl"
-            || normalized == "qwen3_vl"
     }
 }
 
@@ -757,8 +755,6 @@ public enum NativeMTPAutoDecodePolicy {
             || value == "qwen3_5_text"
             || value == "qwen3_5_moe"
             || value == "qwen3_5_moe_text"
-            || value == "qwen3_5_vl"
-            || value == "qwen3_vl"
     }
 
     private static func normalize(_ value: String) -> String {
@@ -909,10 +905,17 @@ public enum NativeMTPVerifierStatePolicy {
         case lazyRepair = "lazy_repair"
     }
 
+    @TaskLocal public static var requestVerifierMode: String?
+
     public static var mode: Mode {
+        mode(for: requestVerifierMode)
+    }
+
+    public static func mode(for requestedMode: String?) -> Mode {
         let env = ProcessInfo.processInfo.environment
         let raw =
-            (env["VMLX_NATIVE_MTP_STATE_COMMIT"]
+            (requestedMode
+                ?? env["VMLX_NATIVE_MTP_STATE_COMMIT"]
                 ?? env["VMLINUX_NATIVE_MTP_STATE_COMMIT"]
                 ?? env["VMLX_NATIVE_MTP_HYBRID_VERIFY"]
                 ?? env["VMLINUX_NATIVE_MTP_HYBRID_VERIFY"]
@@ -924,6 +927,8 @@ public enum NativeMTPVerifierStatePolicy {
             return .lazyRepair
         }
         switch raw {
+        case "chunk_repair", "chunk_step_repair":
+            return .captureCommit
         case "chunk_lazy_repair", "lazy_repair", "lazy", "fast_lazy":
             return .lazyRepair
         case "chunk_fast", "fast", "capture_commit", "chunk_commit":
@@ -933,6 +938,13 @@ public enum NativeMTPVerifierStatePolicy {
         default:
             return .strictCapture
         }
+    }
+
+    public static func withVerifierMode<R>(
+        _ verifierMode: String?,
+        operation: () throws -> R
+    ) rethrows -> R {
+        try $requestVerifierMode.withValue(verifierMode, operation: operation)
     }
 
     public static var shouldRecordAcceptedPrefixStates: Bool {

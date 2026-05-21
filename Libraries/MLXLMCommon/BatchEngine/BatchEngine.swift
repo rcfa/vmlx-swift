@@ -843,7 +843,8 @@ public actor BatchEngine {
         let generationTask: Task<Void, Never>
         do {
             if let strategy = soloParameters.draftStrategy,
-                case .nativeMTP(let depth) = strategy
+                case .nativeMTP(depth: let depth, verifierMode: _) = strategy,
+                soloParameters.canUseNativeMTP(for: input)
             {
                 guard let nativeModel = context.model as? any NativeMTPModel else {
                     throw NativeMTPRuntimeError.modelDoesNotExposeNativeMTP

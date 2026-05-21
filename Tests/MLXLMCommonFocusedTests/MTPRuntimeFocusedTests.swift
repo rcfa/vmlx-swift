@@ -4,12 +4,25 @@
 import Foundation
 import MLX
 import MLXLLM
-import MLXLMCommon
+@testable import MLXLMCommon
 import MLXNN
 import Testing
 
 @Suite("MTP runtime metadata", .serialized)
 struct MTPRuntimeFocusedTests {
+    @Test("native MTP greedy verifier rejects short logits before materialization")
+    func nativeMTPGreedyVerifierRejectsShortLogitsBeforeMaterialization() {
+        FocusedMLXTestSupport.withLock {
+            let logits = MLXArray.zeros([1, 1, 8])
+
+            let batch = NativeMTPTokenIterator.greedyTargetTokenIdsForTesting(
+                logits: logits,
+                count: 2)
+
+            #expect(batch == nil)
+        }
+    }
+
     @Test("cached multi-token verifier mask carries cache offset")
     func cachedMultiTokenVerifierMaskCarriesCacheOffset() {
         FocusedMLXTestSupport.withLock {
@@ -861,8 +874,10 @@ struct MTPRuntimeFocusedTests {
         #expect(runtime.contains("\"chunk_lazy_repair\""))
         #expect(runtime.contains("mode != .lazyRepair"))
         #expect(iterator.contains("private static func requiresLazyChunkRepair"))
-        #expect(iterator.contains("lazyChunkRepair && accepted < drafts.count"))
-        #expect(iterator.contains("verifierMode = NativeMTPVerifierStatePolicy.mode == .lazyRepair"))
+        #expect(iterator.contains("let shouldReplayAcceptedPrefix = replayChunkCommit"))
+        #expect(iterator.contains("|| (lazyChunkRepair && accepted < drafts.count)"))
+        #expect(iterator.contains("&& accepted < drafts.count"))
+        #expect(iterator.contains("NativeMTPVerifierStatePolicy.mode(for: verifierModeSetting) == .lazyRepair"))
     }
 
     @Test("native MTP partial reject refreshes private draft cache")
@@ -894,7 +909,7 @@ struct MTPRuntimeFocusedTests {
         #expect(source.contains("private static func nativeMTPHybridVerifySetting"))
         #expect(source.contains("env[\"VMLX_NATIVE_MTP_HYBRID_VERIFY\"]"))
         #expect(source.contains("env[\"VMLINUX_NATIVE_MTP_HYBRID_VERIFY\"]"))
-        #expect(source.contains("switch nativeMTPHybridVerifySetting()?"))
+        #expect(source.contains("switch nativeMTPHybridVerifySetting(verifierMode)?.lowercased()"))
     }
 
     @Test("RunBench perf can use bundle generation defaults")
@@ -936,8 +951,8 @@ struct MTPRuntimeFocusedTests {
         #expect(source.contains("sequential_repair"))
     }
 
-    @Test("native MTP chunk verifier stays opt-in for Mamba cache")
-    func nativeMTPChunkVerifierStaysOptInForMambaCache() throws {
+    @Test("native MTP defaults greedy Mamba cache to chunk verifier")
+    func nativeMTPDefaultsGreedyMambaCacheToChunkVerifier() throws {
         let source = try Self.source(
             "Libraries/MLXLMCommon/SpecDec/NativeMTPTokenIterator.swift")
 
@@ -949,7 +964,8 @@ struct MTPRuntimeFocusedTests {
         #expect(source.contains("case invalidDepth(Int)"))
         #expect(source.contains("throw NativeMTPRuntimeError.invalidDepth(requestedDepth)"))
         #expect(source.contains("case \"sequential\", \"sequential_repair\", \"repair\":"))
-        #expect(source.contains("return cache.contains { $0 is MambaCache }"))
+        #expect(source.contains("if !speculativeSampler.isGreedy && cache.contains(where: { $0 is MambaCache })"))
+        #expect(source.contains("return false"))
     }
 
     @Test("native MTP chunk-lazy env overrides stochastic Mamba fallback")
@@ -958,11 +974,32 @@ struct MTPRuntimeFocusedTests {
             "Libraries/MLXLMCommon/SpecDec/NativeMTPTokenIterator.swift")
 
         let overrideSwitch = try #require(source.range(
-            of: "switch nativeMTPHybridVerifySetting()?.lowercased()"))
+            of: "switch nativeMTPHybridVerifySetting(verifierMode)?.lowercased()"))
         let stochasticMambaFallback = try #require(source.range(
             of: "if !speculativeSampler.isGreedy && cache.contains(where: { $0 is MambaCache })"))
 
         #expect(overrideSwitch.lowerBound < stochasticMambaFallback.lowerBound)
+    }
+
+    @Test("native MTP request eligibility is greedy text-only")
+    func nativeMTPRequestEligibilityIsGreedyTextOnly() {
+        let text = LMInput.Text(tokens: MLXArray([Int32(3), 5, 7]))
+        let textOnly = LMInput(text: text)
+        let pixels = MLXArray((0..<48).map { Float($0) }).reshaped([1, 3, 4, 4])
+        let imageInput = LMInput(text: text, image: .init(pixels: pixels))
+
+        #expect(GenerateParameters(maxTokens: 4, temperature: 0)
+            .canUseNativeMTP(for: textOnly))
+        #expect(!GenerateParameters(maxTokens: 4, temperature: 0.7)
+            .canUseNativeMTP(for: textOnly))
+        #expect(!GenerateParameters(maxTokens: 4, temperature: 0, topP: 0.9)
+            .canUseNativeMTP(for: textOnly))
+        #expect(!GenerateParameters(maxTokens: 4, temperature: 0, topK: 40)
+            .canUseNativeMTP(for: textOnly))
+        #expect(!GenerateParameters(maxTokens: 4, temperature: 0, repetitionPenalty: 1.05)
+            .canUseNativeMTP(for: textOnly))
+        #expect(!GenerateParameters(maxTokens: 4, temperature: 0)
+            .canUseNativeMTP(for: imageInput))
     }
 
     @Test("BatchEngine.generate rejects native MTP without an active MTP head")

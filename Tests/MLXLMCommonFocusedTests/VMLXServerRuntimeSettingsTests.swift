@@ -31,6 +31,23 @@ struct VMLXServerRuntimeSettingsTests {
         #expect(settings.mtp.acceptedTokensOnlyEnterBaseCache)
     }
 
+    @Test("Osaurus production preset enables MLXPress auto while preserving MTP resolution")
+    func osaurusProductionPresetEnablesMLXPressAutoWhilePreservingMTPResolution() {
+        let settings = VMLXServerRuntimeSettings()
+
+        let resolved = settings.resolvedLoadConfiguration(
+            base: .osaurusProduction,
+            configData: nil,
+            jangConfig: nil,
+            status: nil)
+
+        #expect(resolved.jangPress == .auto(envFallback: true))
+        #expect(resolved.maxResidentBytes == .default)
+        #expect(resolved.memoryLimit == .default)
+        #expect(resolved.useMmapSafetensors)
+        #expect(!resolved.nativeMTP)
+    }
+
     @Test("paged cache rejects legacy disk cache conflict")
     func pagedCacheRejectsLegacyDiskCacheConflict() {
         var settings = VMLXServerRuntimeSettings()
@@ -246,12 +263,13 @@ struct VMLXServerRuntimeSettingsTests {
         #expect(launch.recommendation?.depth == 2)
         #expect(launch.recommendation?.verifierMode == "chunk_lazy_repair")
         #expect(launch.recommendation?.evidence.contains("server_draft_token_limit=2") == true)
-        if case .nativeMTP(let depth)? = settings.resolvedMTPDraftStrategy(
+        if case .nativeMTP(depth: let depth, verifierMode: let verifierMode)? = settings.resolvedMTPDraftStrategy(
             configData: config,
             jangConfig: nil,
             status: verified)
         {
             #expect(depth == 2)
+            #expect(verifierMode == "chunk_lazy_repair")
         } else {
             Issue.record("Resolved MTP draft strategy did not carry the capped native depth")
         }
@@ -300,12 +318,13 @@ struct VMLXServerRuntimeSettingsTests {
         #expect(settings.effectiveMTPLaunchMode(for: preserved) == .speculative)
         #expect(launch.launchMode == .speculative)
         #expect(loadConfiguration.nativeMTP)
-        if case .nativeMTP(let depth)? = settings.resolvedMTPDraftStrategy(
+        if case .nativeMTP(depth: let depth, verifierMode: let verifierMode)? = settings.resolvedMTPDraftStrategy(
             configData: config,
             jangConfig: nil,
             status: preserved)
         {
             #expect(depth == 3)
+            #expect(verifierMode == "chunk_lazy_repair")
         } else {
             Issue.record("Tensor-proven Qwen MTP should resolve a native-MTP draft strategy")
         }

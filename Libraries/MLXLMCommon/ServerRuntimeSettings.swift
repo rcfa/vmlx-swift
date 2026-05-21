@@ -397,7 +397,7 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
         else {
             return nil
         }
-        return .nativeMTP(depth: depth)
+        return .nativeMTP(depth: depth, verifierMode: launch.recommendation?.verifierMode)
     }
 
     /// Resolve the load-time switch that preserves native-MTP sidecar weights.

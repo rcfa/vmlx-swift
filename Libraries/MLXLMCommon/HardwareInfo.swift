@@ -36,27 +36,21 @@ public enum HardwareInfo {
     ///
     /// Re-enable when Apple fixes the Metal JIT in a future macOS update.
     public static var isCompiledDecodeSupported: Bool {
-        // Re-enabled 2026-04-13 after direct measurement on M4 Max + mlx-swift osaurus-0.31.3:
+        // 2026-05-20: keep MLX compile off by default for host apps. A live
+        // Osaurus PR #1173 switch test reproduced process-local decode
+        // corruption after loading Qwen3.6 JANG_2K and switching back to the
+        // MXFP4 MTP sibling; the same sequence passed when launched with
+        // MLX_DISABLE_COMPILE=1. The failure also reproduced on an explicit
+        // sampler request that bypassed native MTP, so this gate must cover
+        // both single-slot compiled decode and the small shapeless micro-fusion
+        // helpers until MLX compile is proven model-switch-safe.
         //
-        // The broad kill-switch was set in commit a8a6a6f citing MLX#3329 "compiledState
-        // callsToFill[0] index out of range" on M4 Pro. That crash was empirically tied to
-        // the whole-model compile path (setupCompiledDecode + CompilableKVCache), not to
-        // the small fixed-shape micro-fusions this flag now controls.
-        //
-        // Commit cf55f6d re-enabled compile(shapeless: true) for compute_g on M4 Max with
-        // no crash and a measurable +1.9 tok/s on Qwen 3.5-35B decode. Python mlx_lm 0.31.2
-        // on the same machine runs ~9 tok/s faster with its compile islands vs without
-        // (120/117/114/106/104 w/ compile vs 110/105/103/100/98 with mx.disable_compile()),
-        // which is where Swift's decode gap comes from.
-        //
-        // This flag now gates only the per-op micro-fusion helpers (swiglu, precise_swiglu,
-        // geglu, softcap, sigmoid-gate etc.). The whole-model compile path in
-        // setupCompiledDecode is still gated separately by `GenerateParameters.enableCompiledDecode`
-        // and remains off by default, so flipping this flag cannot revive the MLX#3329 crash.
-        //
-        // If the crash is observed again on any specific site, opt that site out individually
-        // instead of flipping this flag back to false globally.
-        return true
+        // Keep an explicit opt-in for controlled benchmarks and diagnostics.
+        let env = ProcessInfo.processInfo.environment
+        let raw = env["VMLX_ENABLE_UNSAFE_COMPILE"]
+            ?? env["MLXPRESS_ENABLE_UNSAFE_COMPILE"]
+            ?? ""
+        return raw == "1" || raw.lowercased() == "true"
     }
 
     /// Returns `true` if running on Apple Silicon hardware.

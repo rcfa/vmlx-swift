@@ -635,9 +635,7 @@ struct HarmonyParserStreamingTests {
         segs.append(contentsOf: p.flush())
         let reasoning = segs.compactMap { if case .reasoning(let r) = $0 { return r } else { return nil } }.joined()
         let content = segs.compactMap { if case .content(let c) = $0 { return c } else { return nil } }.joined()
-        // With bare `<|channel>` start, the channel name is part of
-        // the reasoning delta.
-        #expect(reasoning == "thought\ninner reasoning")
+        #expect(reasoning == "inner reasoning")
         #expect(content == "prefixafter")
     }
 
@@ -661,7 +659,7 @@ struct HarmonyParserStreamingTests {
             case .content(let c): content += c
             }
         }
-        #expect(reasoning == "thought\nthinking")
+        #expect(reasoning == "thinking")
         #expect(content == "preanswer")
     }
 
@@ -673,8 +671,7 @@ struct HarmonyParserStreamingTests {
         segs.append(contentsOf: p.flush())
         let reasoning = segs.compactMap { if case .reasoning(let r) = $0 { return r } else { return nil } }.joined()
         let content = segs.compactMap { if case .content(let c) = $0 { return c } else { return nil } }.joined()
-        // Both channel-name prefixes + inner reasoning join together.
-        #expect(reasoning == "thought\nathought\nb")
+        #expect(reasoning == "ab")
         #expect(content == "midend")
     }
 
@@ -718,7 +715,7 @@ struct HarmonyParserStreamingTests {
             segs.append(contentsOf: p.flush())
             let reasoning = segs.compactMap { if case .reasoning(let r) = $0 { return r } else { return nil } }.joined()
             let content = segs.compactMap { if case .content(let c) = $0 { return c } else { return nil } }.joined()
-            #expect(reasoning == "\(name)\n\(innerText)",
+            #expect(reasoning == innerText,
                 "channel name `\(name)`: full envelope should route to reasoning")
             #expect(content == "ab",
                 "channel name `\(name)`: only pre/post envelope should remain as content")
@@ -732,10 +729,46 @@ struct HarmonyParserStreamingTests {
         segs.append(contentsOf: p.flush())
         let reasoning = segs.compactMap { if case .reasoning(let r) = $0 { return r } else { return nil } }.joined()
         let content = segs.compactMap { if case .content(let c) = $0 { return c } else { return nil } }.joined()
-        // With bare `<|channel>` start, the channel-name bytes
-        // (`thought\n`) are part of the reasoning delta.
-        #expect(reasoning == "thought\ntruncated mid-thought")
+        #expect(reasoning == "truncated mid-thought")
         #expect(content == "visible")
+    }
+
+    @Test("JSON action body without channel name stays intact")
+    func testJsonActionBodyWithoutChannelNameStaysIntact() {
+        var p = harmonyParser
+        let input =
+            "<|channel>{\n" +
+            " \"action\": \"google_search\"\n" +
+            "}\n<channel|>done"
+        var segs = p.feed(input)
+        segs.append(contentsOf: p.flush())
+        let reasoning = segs.compactMap { if case .reasoning(let r) = $0 { return r } else { return nil } }.joined()
+        let content = segs.compactMap { if case .content(let c) = $0 { return c } else { return nil } }.joined()
+        #expect(reasoning.hasPrefix("{\n"))
+        #expect(reasoning.contains("google_search"))
+        #expect(content == "done")
+    }
+
+    @Test("identifier-only channel header at EOS is stripped")
+    func testIdentifierOnlyChannelHeaderAtEOSIsStripped() {
+        var p = harmonyParser
+        var segs = p.feed("visible<|channel>thought")
+        segs.append(contentsOf: p.flush())
+        let reasoning = segs.compactMap { if case .reasoning(let r) = $0 { return r } else { return nil } }.joined()
+        let content = segs.compactMap { if case .content(let c) = $0 { return c } else { return nil } }.joined()
+        #expect(reasoning.isEmpty)
+        #expect(content == "visible")
+    }
+
+    @Test("single-line JSON action body at EOS stays intact")
+    func testSingleLineJsonActionBodyAtEOSStaysIntact() {
+        var p = harmonyParser
+        var segs = p.feed("<|channel>{\"action\":\"google_search\"}")
+        segs.append(contentsOf: p.flush())
+        let reasoning = segs.compactMap { if case .reasoning(let r) = $0 { return r } else { return nil } }.joined()
+        let content = segs.compactMap { if case .content(let c) = $0 { return c } else { return nil } }.joined()
+        #expect(reasoning == "{\"action\":\"google_search\"}")
+        #expect(content.isEmpty)
     }
 
     @Test("no harmony markers → all content, zero reasoning")
@@ -803,7 +836,7 @@ struct HarmonyParserStreamingTests {
         segs += p.flush()
         let reasoning = segs.compactMap { if case .reasoning(let r) = $0 { return r } else { return nil } }.joined()
         let content = segs.compactMap { if case .content(let c) = $0 { return c } else { return nil } }.joined()
-        #expect(reasoning == "thought\ninner reasoning")
+        #expect(reasoning == "inner reasoning")
         #expect(content == "visible answer")
     }
 
@@ -816,7 +849,7 @@ struct HarmonyParserStreamingTests {
         segs += p.flush()
         let reasoning = segs.compactMap { if case .reasoning(let r) = $0 { return r } else { return nil } }.joined()
         let content = segs.compactMap { if case .content(let c) = $0 { return c } else { return nil } }.joined()
-        #expect(reasoning == "thought\ninner")
+        #expect(reasoning == "inner")
         #expect(content == "prefixafter")
     }
 
@@ -843,7 +876,7 @@ struct HarmonyParserStreamingTests {
         segs.append(contentsOf: p.flush())
         let reasoning = segs.compactMap { if case .reasoning(let r) = $0 { return r } else { return nil } }.joined()
         let content = segs.compactMap { if case .content(let c) = $0 { return c } else { return nil } }.joined()
-        #expect(reasoning == "thought\nlots of reasoning<chann")
+        #expect(reasoning == "lots of reasoning<chann")
         #expect(content.isEmpty)
     }
 }
