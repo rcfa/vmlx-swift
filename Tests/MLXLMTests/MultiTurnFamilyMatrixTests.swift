@@ -91,7 +91,7 @@ struct ReasoningStampFamilyMatrixTests {
         "bitnet", "falcon_h1",
         // VLM-only that don't route through think_xml
         "paligemma", "idefics3", "smolvlm", "fastvlm", "llava_qwen2",
-        "pixtral", "lfm2_vl", "glm_ocr",
+        "pixtral", "lfm2_vl", "glm_ocr", "zaya1_vl",
         // Empty/nil
         "", "unknown_model_type",
     ])

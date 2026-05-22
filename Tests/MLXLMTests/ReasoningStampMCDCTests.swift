@@ -159,6 +159,8 @@ struct ReasoningStampMCDCTests {
         #expect(reasoningStampFromModelType("zaya1") == "think_xml")
         #expect(reasoningStampFromModelType("ZAYA") == "think_xml",
             "case-insensitive match")
+        #expect(reasoningStampFromModelType("zaya1_vl") == "none",
+            "ZAYA1-VL uses its multimodal template sidecar; do not inherit the text-ZAYA reasoning parser by model_type prefix")
     }
 
     /// All 10 prefixes FALSE simultaneously → D3 disjunction is FALSE → "none".

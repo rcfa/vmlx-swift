@@ -858,6 +858,14 @@ public func reasoningStampFromModelType(_ modelType: String?) -> String {
         return "harmony"
     }
 
+    // ZAYA1-VL is a sibling multimodal architecture, not the text
+    // `zaya` chat-template path. Its production template is selected via
+    // the VL sidecar / JANG capability contract and does not open the text
+    // ZAYA `<think>` rail by model_type alone.
+    if compact.hasPrefix("zaya1vl") {
+        return "none"
+    }
+
     // Explicit allowlist of model families that emit `<think>` /
     // `</think>` in their native chat template. These all resolve
     // via `ReasoningParser.fromCapabilityName` to the think_xml
