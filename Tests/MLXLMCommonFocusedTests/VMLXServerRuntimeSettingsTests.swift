@@ -26,7 +26,7 @@ struct VMLXServerRuntimeSettingsTests {
         #expect(settings.generation.topK == nil)
         #expect(settings.generation.minP == nil)
         #expect(settings.generation.repetitionPenalty == nil)
-        #expect(settings.mtp.mode == .off)
+        #expect(settings.mtp.mode == .auto)
         #expect(settings.mtp.keepDraftCacheSeparate)
         #expect(settings.mtp.acceptedTokensOnlyEnterBaseCache)
     }
@@ -216,6 +216,58 @@ struct VMLXServerRuntimeSettingsTests {
         #expect(settings.effectiveMTPLaunchMode(for: missingTuning) == .off)
         #expect(settings.effectiveMTPLaunchMode(for: tuned) == .speculative)
         #expect(settings.validationIssues(mtpStatus: tuned).isEmpty)
+    }
+
+    @Test("server runtime defaults auto-launch tuned native MTP bundles")
+    func serverRuntimeDefaultsAutoLaunchTunedNativeMTPBundles() {
+        let config = """
+        {
+          "model_type": "qwen3_vl",
+          "text_config": { "model_type": "qwen3_5", "mtp_num_hidden_layers": 1 },
+          "quantization": { "mode": "mxfp8", "bits": 8 }
+        }
+        """.data(using: .utf8)!
+        let tuned = MTPBundleStatus(
+            bundleHasMTP: true,
+            configuredLayers: 1,
+            tensorCount: 31,
+            visionTensorCount: 333,
+            mode: .preservedEnabled,
+            nativeMTPTuning: NativeMTPTuning(
+                bestDepth: 3,
+                validated: true,
+                outputEquivalent: true,
+                artifact: "docs/internal/release-gates/qwen-depth3/result.json",
+                baselineTokensPerSecond: 24.0,
+                bestTokensPerSecond: 36.0,
+                speedupVsBaseline: 1.5,
+                quantizationMode: "mxfp8",
+                quantizationBits: 8))
+        let settings = VMLXServerRuntimeSettings()
+
+        let launch = settings.resolvedMTPLaunch(
+            configData: config,
+            jangConfig: nil,
+            status: tuned)
+        let loadConfiguration = settings.resolvedLoadConfiguration(
+            base: .default,
+            configData: config,
+            jangConfig: nil,
+            status: tuned)
+
+        #expect(settings.mtp.mode == .auto)
+        #expect(launch.launchMode == .speculative)
+        #expect(loadConfiguration.nativeMTP)
+        if case .nativeMTP(depth: let depth, verifierMode: let verifierMode)? = settings.resolvedMTPDraftStrategy(
+            configData: config,
+            jangConfig: nil,
+            status: tuned)
+        {
+            #expect(depth == 3)
+            #expect(verifierMode == "chunk_lazy_repair")
+        } else {
+            Issue.record("Default server settings should auto-resolve tuned native MTP")
+        }
     }
 
     @Test("MTP force-on requires complete tensor evidence and tuning")
