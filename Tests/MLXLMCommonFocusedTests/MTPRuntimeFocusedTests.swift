@@ -232,6 +232,27 @@ struct MTPRuntimeFocusedTests {
                 "best_depth": 2,
                 "validated": true,
                 "output_equivalent": true,
+                "artifact": "docs/internal/release-gates/qwen36_27b_mxfp8_depth_sweep/result.json",
+                "baseline_tok_s": 24.655,
+                "best_tok_s": 45.712,
+                "speedup_vs_baseline": 1.854,
+            ] as [String: Any],
+        ], to: root.appendingPathComponent("vmlx_mtp_tuning.json"))
+
+        let inferredStatus = try MTPBundleInspector.inspect(modelDirectory: root)
+        let inferredRecommendation = NativeMTPAutoDecodePolicy.recommendation(
+            configData: configData,
+            jangConfig: try? JangLoader.loadConfig(at: root),
+            status: inferredStatus)
+
+        #expect(inferredRecommendation?.depth == 2)
+        #expect(inferredRecommendation?.evidence.contains("tuning.quantization_inferred_from_artifact=mxfp8") == true)
+
+        try writeJSON([
+            "native_mtp": [
+                "best_depth": 2,
+                "validated": true,
+                "output_equivalent": true,
                 "quantization_mode": "mxfp8",
                 "quantization_bits": 8,
                 "model_types": ["qwen3_5_moe_text"],

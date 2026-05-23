@@ -758,6 +758,9 @@ public enum NativeMTPAutoDecodePolicy {
             if let quantizationBits = tuning.quantizationBits {
                 tuningEvidence.append("tuning.quantization_bits=\(quantizationBits)")
             }
+            if inferredMXFP8TuningFromArtifact(tuning, mode: mode, bits: bits) {
+                tuningEvidence.append("tuning.quantization_inferred_from_artifact=mxfp8")
+            }
             if !tuning.modelTypes.isEmpty {
                 tuningEvidence.append(
                     "tuning.model_types=\(tuning.modelTypes.map(normalize).sorted().joined(separator: ","))")
@@ -897,8 +900,10 @@ public enum NativeMTPAutoDecodePolicy {
         let bundleMode = mode.map(normalize)
         let tuningMode = tuning.quantizationMode.map(normalize)
         if bundleMode == "mxfp8" {
-            guard tuningMode == "mxfp8", tuning.quantizationBits == 8 else {
-                return "\(NativeMTPTuning.fileName) must explicitly match quantization_mode=mxfp8 and quantization_bits=8 before MXFP8 native MTP can launch."
+            guard (tuningMode == "mxfp8" && tuning.quantizationBits == 8)
+                || inferredMXFP8TuningFromArtifact(tuning, mode: mode, bits: bits)
+            else {
+                return "\(NativeMTPTuning.fileName) must match quantization_mode=mxfp8 and quantization_bits=8, either explicitly or through a bundle-local MXFP8 tuning artifact, before MXFP8 native MTP can launch."
             }
         }
         if let tuningMode, let bundleMode, tuningMode != bundleMode {
@@ -908,6 +913,19 @@ public enum NativeMTPAutoDecodePolicy {
             return "\(NativeMTPTuning.fileName) quantization_bits=\(tuningBits) does not match bundle quantization_bits=\(bits)."
         }
         return nil
+    }
+
+    private static func inferredMXFP8TuningFromArtifact(
+        _ tuning: NativeMTPTuning,
+        mode: String?,
+        bits: Int
+    ) -> Bool {
+        guard mode.map(normalize) == "mxfp8", bits == 8 else { return false }
+        guard tuning.quantizationMode == nil, tuning.quantizationBits == nil else { return false }
+        guard let artifact = tuning.artifact.map(normalize), artifact.contains("mxfp8") else {
+            return false
+        }
+        return true
     }
 
     private static func isSupportedQwenMTPModelType(_ value: String) -> Bool {
