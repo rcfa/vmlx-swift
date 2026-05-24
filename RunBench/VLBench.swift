@@ -1,4 +1,5 @@
 import CoreImage
+import Darwin
 import Foundation
 import MLX
 import MLXHuggingFace
@@ -128,6 +129,12 @@ enum VLBench {
         var text = ""
         var ttft: Double?
         var chunkCount = 0
+        var generationTokens = 0
+        var promptTokensPerSecond = 0.0
+        var decodeTokensPerSecond = 0.0
+        var stopReason = "unknown"
+        let rssBefore = currentRSSMiB()
+        let footprintBefore = currentPhysFootprintMiB()
         for await event in stream {
             switch event {
             case .chunk(let chunk):
@@ -135,14 +142,26 @@ enum VLBench {
                 text += chunk
                 chunkCount += 1
                 if chunkCount > maxNew * 2 { break }
-            case .reasoning, .info, .toolCall:
+            case .info(let info):
+                generationTokens = info.generationTokenCount
+                promptTokensPerSecond = info.promptTokensPerSecond
+                decodeTokensPerSecond = info.tokensPerSecond
+                stopReason = String(describing: info.stopReason)
+            case .reasoning, .toolCall:
                 break
             }
         }
         let total = CFAbsoluteTimeGetCurrent() - t0
+        let rssAfter = currentRSSMiB()
+        let footprintAfter = currentPhysFootprintMiB()
         let preview = text.count > 200 ? String(text.prefix(200)) + "..." : text
         print(String(format: "    TTFT %dms, total %.2fs, chunks=%d",
             Int((ttft ?? 0) * 1000), total, chunkCount))
+        print(String(format:
+            "    telemetry tokens=%d promptTok/s=%.1f decodeTok/s=%.1f stop=%@ rssMiB=%.0f footprintMiB=%.0f rssDeltaMiB=%+.0f footprintDeltaMiB=%+.0f",
+            generationTokens, promptTokensPerSecond, decodeTokensPerSecond,
+            stopReason, rssAfter, footprintAfter, rssAfter - rssBefore,
+            footprintAfter - footprintBefore))
         print("    \"\(preview)\"")
 
         let visible = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -182,6 +201,38 @@ enum VLBench {
     private static func containsAnyWord(_ text: String, words: Set<String>) -> Bool {
         let tokens = text.lowercased().components(separatedBy: CharacterSet.letters.inverted)
         return tokens.contains { words.contains($0) }
+    }
+
+    private static func currentRSSMiB() -> Double {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<mach_task_basic_info>.stride / MemoryLayout<natural_t>.stride)
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(MACH_TASK_BASIC_INFO),
+                    $0, &count)
+            }
+        }
+        guard kr == KERN_SUCCESS else { return -1 }
+        return Double(info.resident_size) / (1024.0 * 1024.0)
+    }
+
+    private static func currentPhysFootprintMiB() -> Double {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(TASK_VM_INFO),
+                    $0, &count)
+            }
+        }
+        guard kr == KERN_SUCCESS else { return -1 }
+        return Double(info.phys_footprint) / (1024.0 * 1024.0)
     }
 
     private static func makeProofCoordinator(

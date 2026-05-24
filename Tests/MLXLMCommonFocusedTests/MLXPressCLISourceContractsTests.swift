@@ -17,6 +17,20 @@ struct MLXPressCLISourceContractsTests {
         #expect(!source.contains("var temperature: Float = 0"))
         #expect(!source.contains("var topP: Float = 1"))
     }
+
+    @Test("thinking-on validation guidance rejects private-reasoning-only prompts")
+    func thinkingOnValidationGuidanceRejectsPrivateReasoningOnlyPrompts() throws {
+        let source = try repositoryFile("Sources/MLXPressCLI/main.swift")
+
+        #expect(source.contains("--thinking is tri-state: omitted leaves the model's template default untouched"))
+        #expect(source.contains("var enableThinking: Bool?"))
+        #expect(source.contains("if let enableThinking"))
+        #expect(!source.contains("var enableThinking = false"))
+        #expect(source.contains("thinking-on validation prompts must ask for a visible final answer"))
+        #expect(source.contains("Do not use prompts that ask the model to think privately"))
+        #expect(source.contains("--min-visible-chars"))
+        #expect(source.contains("--fail-on-length-stop"))
+    }
 }
 
 private func repositoryFile(_ relativePath: String) throws -> String {

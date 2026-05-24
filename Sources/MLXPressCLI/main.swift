@@ -128,7 +128,7 @@ struct MLXPressCLI {
                 "prefill_step_size": resolvedGenerateParameters.prefillStepSize,
                 "temperature": jsonFloat(resolvedGenerateParameters.temperature),
                 "top_p": jsonFloat(resolvedGenerateParameters.topP),
-                "thinking": options.enableThinking,
+                "thinking": options.enableThinking.map { NSNumber(value: $0) } ?? NSNull(),
                 "compiled_decode": options.enableCompiledDecode,
                 "compiled_max_cache_length": jsonOptionalNumber(
                     options.compiledMaxCacheLength.map(UInt64.init)),
@@ -1102,7 +1102,7 @@ private struct Options {
     var enableCompiledDecode: Bool
     var compiledMaxCacheLength: Int?
     var allowMiniMaxCompiledDecode: Bool
-    var enableThinking: Bool
+    var enableThinking: Bool?
     var reasoningEffort: String?
     var minVisibleChars: Int
     var minGenerationTokens: Int
@@ -1119,10 +1119,11 @@ private struct Options {
     }
 
     var chatTemplateContext: [String: any Sendable] {
-        var context: [String: any Sendable] = [
-            "enable_thinking": enableThinking,
-            "thinking": enableThinking,
-        ]
+        var context: [String: any Sendable] = [:]
+        if let enableThinking {
+            context["enable_thinking"] = enableThinking
+            context["thinking"] = enableThinking
+        }
         if let reasoningEffort, !reasoningEffort.isEmpty {
             context["reasoning_effort"] = reasoningEffort
         }
@@ -1141,8 +1142,11 @@ private struct Options {
       --prefill-step-size N bounds prompt prefill activation peaks; default is \(MLXPressDefaultPrefillStepSize).
       --turn may be repeated to run a multi-turn chat in one loaded session.
       --expect may be repeated to require visible generated text to contain each expected answer.
-      --thinking defaults to off so validation measures final visible answers, not reasoning-only streams.
+      --thinking is tri-state: omitted leaves the model's template default untouched; on/off explicitly sets enable_thinking.
       --reasoning-effort passes the model-family chat-template effort knob (for example no_think, low, high, max).
+      For strict thinking-on validation, thinking-on validation prompts must ask for a visible final answer.
+      Do not use prompts that ask the model to think privately; pair thinking-on proof rows with
+      --min-visible-chars and --fail-on-length-stop so reasoning-only length stops remain failures.
       --cache-stack defaults to on: paged cache, disk L2, TurboQuant KV defaulting, and long-prompt KV cap are enabled.
       --disk-cache-dir isolates disk L2 state for cold/warm validation runs.
       --ephemeral-prestack builds a temporary routed JANGTQ overlay under the system temp directory, uses the mmap loader, and removes the overlay after mmap load with a process-exit fallback. It is a MiniMax-class resident-compute diagnostic, not a permanent prestack cache.
@@ -1189,7 +1193,7 @@ private struct Options {
         var metricsJSONLURL: URL?
         var turns: [String] = []
         var expectedOutputs: [String] = []
-        var enableThinking = false
+        var enableThinking: Bool?
         var reasoningEffort: String?
         var minVisibleChars = 0
         var minGenerationTokens = 0

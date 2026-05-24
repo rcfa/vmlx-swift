@@ -8,6 +8,18 @@ machine context, and useful commands.
 For any MLXPress, JANGTQ, cache-stack, model-runtime, or Osaurus-facing work,
 agents must treat these as hard gates, not nice-to-have follow-ups:
 
+- Never add forced-behavior "fixes" to make a model look coherent. This
+  includes forced thinking tags, forced reasoning closers/openers, hidden
+  repetition penalties, synthetic temperature/top-p/top-k overrides, decode-loop
+  close-token biasing, or prompt/template coercion that is not part of the
+  model's own template/config contract. If any such guard exists, treat it as a
+  bug: document where it came from, remove it, and fix the real root cause in
+  template parsing, runtime/decode, cache, matmul/Hadamard/2D/3D kernels, model
+  loading, or API wiring.
+- Default generation parameters must come from the active model's
+  `generation_config.json` or equivalent bundle config. Chat/API/CLI defaults
+  may pass user-explicit overrides, but must not silently invent sampler,
+  repetition-penalty, or thinking-mode defaults to hide a runtime issue.
 - Low RAM means Activity Monitor physical footprint stays low. A load or
   generation row that reaches full model size in Activity Monitor is a failure,
   even if the output is coherent.
@@ -48,6 +60,5 @@ agents must treat these as hard gates, not nice-to-have follow-ups:
 - Activity Monitor gates must measure/enforce `phys_footprint`, not secretly
   throttle `MLX.Memory.memoryLimit`. Throttling can turn a valid MiniMax
   compiled row from ~49 tok/s into ~22 tok/s while footprint remains low.
-
 If any of RAM, speed, coherency, multi-turn, or cache/VL proof is missing, say
 the row is blocked or partial and record the exact artifact path and reason.
