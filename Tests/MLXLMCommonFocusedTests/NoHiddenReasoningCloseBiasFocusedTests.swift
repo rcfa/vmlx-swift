@@ -277,6 +277,42 @@ struct HarmonyParserFocusedTests {
         }
     }
 
+    @Test("Gemma4 prompt-tail open harmony channel routes first bytes to reasoning")
+    func gemma4PromptTailOpenHarmonyChannelRoutesFirstBytesToReasoning() {
+        var parser = ReasoningParser.forPrompt(
+            stampName: "gemma4",
+            promptTail: "<start_of_turn>model\n<|channel>thought\n")
+        var segments: [ReasoningSegment] = []
+        for chunk in chunked("hidden plan<channel|>visible answer", by: 5) {
+            segments.append(contentsOf: parser?.feed(chunk) ?? [])
+        }
+        segments.append(contentsOf: parser?.flush() ?? [])
+
+        let (reasoning, content) = collect(segments)
+        #expect(reasoning == "hidden plan")
+        #expect(content == "visible answer")
+        #expect(!reasoning.contains("thought"))
+        #expect(!content.contains("thought"))
+    }
+
+    @Test("Gemma4 prompt-tail partial harmony channel name does not leak thought")
+    func gemma4PromptTailPartialHarmonyChannelNameDoesNotLeakThought() {
+        var parser = ReasoningParser.forPrompt(
+            stampName: "gemma4",
+            promptTail: "<start_of_turn>model\n<|channel>tho")
+        var segments: [ReasoningSegment] = []
+        for chunk in chunked("ught\nhidden plan<channel|>visible answer", by: 3) {
+            segments.append(contentsOf: parser?.feed(chunk) ?? [])
+        }
+        segments.append(contentsOf: parser?.flush() ?? [])
+
+        let (reasoning, content) = collect(segments)
+        #expect(reasoning == "hidden plan")
+        #expect(content == "visible answer")
+        #expect(!reasoning.contains("thought"))
+        #expect(!content.contains("thought"))
+    }
+
     @Test("GPT-OSS model types resolve to Harmony, not think XML")
     func gptOSSModelTypesResolveToHarmony() {
         for modelType in ["gpt_oss", "gpt_oss_20b", "gpt_oss_120b", "GPT_OSS"] {
@@ -1252,6 +1288,30 @@ struct Mistral3JANGTQDispatchFocusedTests {
 
 @Suite("Gemma4 VLM focused source contracts")
 struct Gemma4VLMFocusedSourceContractsTests {
+    @Test("Tokenizer addGenerationPrompt overload preserves Gemma4 fallback")
+    func tokenizerAddGenerationPromptOverloadPreservesGemma4Fallback() throws {
+        let source = try focusedRepositoryFile(
+            "Libraries/MLXHuggingFaceMacros/HuggingFaceIntegrationMacros.swift")
+        let overloadMarker = """
+        func applyChatTemplate(
+                                messages: [[String: any Sendable]],
+                                tools: [[String: any Sendable]]?,
+                                additionalContext: [String: any Sendable]?,
+                                addGenerationPrompt: Bool
+        """
+        guard let overloadRange = source.range(of: overloadMarker) else {
+            Issue.record("Tokenizer bridge addGenerationPrompt overload not found")
+            return
+        }
+        let overload = String(source[overloadRange.lowerBound...])
+
+        #expect(overload.contains("ChatTemplateFallbacks.gemma4Minimal"))
+        #expect(overload.contains("ChatTemplateFallbacks.gemma4WithTools"))
+        #expect(overload.contains("ChatTemplateFallbacks.dsv4Minimal"))
+        #expect(overload.contains("ChatTemplateFallbacks.nemotronMinimal"))
+        #expect(overload.contains("addGenerationPrompt: addGenerationPrompt"))
+    }
+
     @Test("Gemma4 prepare rejects unsupported audio explicitly")
     func audioGuardIsPresent() throws {
         let source = try gemma4VLMSource()
@@ -1273,6 +1333,11 @@ struct Gemma4VLMFocusedSourceContractsTests {
 
     private func gemma4VLMSource() throws -> String {
         let url = URL(fileURLWithPath: "Libraries/MLXVLM/Models/Gemma4.swift")
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private func focusedRepositoryFile(_ relativePath: String) throws -> String {
+        let url = URL(fileURLWithPath: relativePath)
         return try String(contentsOf: url, encoding: .utf8)
     }
 }

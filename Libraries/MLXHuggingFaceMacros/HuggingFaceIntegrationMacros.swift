@@ -417,6 +417,29 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                 throw MLXLMCommon.TokenizerError.missingChatTemplate
                             }
                         }
+                        let lagunaEos =
+                            String(UnicodeScalar(0x3008)!)
+                            + "|EOS|"
+                            + String(UnicodeScalar(0x3009)!)
+                        let hasLagunaSentinel =
+                            upstream.bosToken == lagunaEos
+                            && upstream.eosToken == lagunaEos
+                            && upstream.convertTokenToId("<assistant>") != nil
+                            && upstream.convertTokenToId("</assistant>") != nil
+                            && upstream.convertTokenToId("<think>") != nil
+                            && upstream.convertTokenToId("</think>") != nil
+                        if hasLagunaSentinel
+                            && (env["VMLX_CHAT_TEMPLATE_FALLBACK_DISABLE"] ?? "0") != "1" {
+                            return try upstream.applyChatTemplate(
+                                messages: messages,
+                                chatTemplate: VMLXTokenizers.ChatTemplateArgument.literal(
+                                    MLXLMCommon.ChatTemplateFallbacks.lagunaMinimal),
+                                addGenerationPrompt: addGenerationPrompt,
+                                truncation: false,
+                                maxLength: nil,
+                                tools: tools,
+                                additionalContext: additionalContext)
+                        }
                         if let ctx = additionalContext,
                            let enableThinking = ctx["enable_thinking"] as? Bool,
                            enableThinking == false,
@@ -432,6 +455,26 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                 tools: tools,
                                 additionalContext: additionalContext)
                         }
+                        var mistral4AdjustedContext = additionalContext
+                        if mistral4AdjustedContext?["reasoning_effort"] == nil,
+                           upstream.convertTokenToId("[MODEL_SETTINGS]") != nil,
+                           let enableThinking = mistral4AdjustedContext?["enable_thinking"] as? Bool {
+                            var ctx = mistral4AdjustedContext ?? [:]
+                            ctx["reasoning_effort"] = enableThinking ? "high" : "none"
+                            mistral4AdjustedContext = ctx
+                        }
+                        let dsv4Bos =
+                            "<" + String(UnicodeScalar(0xFF5C)!)
+                            + "begin" + String(UnicodeScalar(0x2581)!) + "of"
+                            + String(UnicodeScalar(0x2581)!) + "sentence"
+                            + String(UnicodeScalar(0xFF5C)!) + ">"
+                        var adjustedContext = mistral4AdjustedContext
+                        if upstream.bosToken == dsv4Bos,
+                           let enableThinking = adjustedContext?["enable_thinking"] as? Bool,
+                           enableThinking == false,
+                           adjustedContext?["reasoning_effort"] != nil {
+                            adjustedContext?.removeValue(forKey: "reasoning_effort")
+                        }
                         do {
                             return try upstream.applyChatTemplate(
                                 messages: messages,
@@ -440,8 +483,57 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                 truncation: false,
                                 maxLength: nil,
                                 tools: tools,
-                                additionalContext: additionalContext)
+                                additionalContext: adjustedContext)
                         } catch VMLXTokenizers.TokenizerError.missingChatTemplate {
+                            if (env["VMLX_CHAT_TEMPLATE_FALLBACK_DISABLE"] ?? "0") != "1" {
+                                if hasLagunaSentinel {
+                                    return try upstream.applyChatTemplate(
+                                        messages: messages,
+                                        chatTemplate: VMLXTokenizers.ChatTemplateArgument.literal(
+                                            MLXLMCommon.ChatTemplateFallbacks.lagunaMinimal),
+                                        addGenerationPrompt: addGenerationPrompt,
+                                        truncation: false,
+                                        maxLength: nil,
+                                        tools: tools,
+                                        additionalContext: adjustedContext)
+                                }
+                                if upstream.bosToken == dsv4Bos {
+                                    return try upstream.applyChatTemplate(
+                                        messages: messages,
+                                        chatTemplate: VMLXTokenizers.ChatTemplateArgument.literal(
+                                            MLXLMCommon.ChatTemplateFallbacks.dsv4Minimal),
+                                        addGenerationPrompt: addGenerationPrompt,
+                                        truncation: false,
+                                        maxLength: nil,
+                                        tools: tools,
+                                        additionalContext: adjustedContext)
+                                }
+                                if upstream.bosToken == "<bos>" {
+                                    let template = (tools?.isEmpty ?? true)
+                                        ? MLXLMCommon.ChatTemplateFallbacks.gemma4Minimal
+                                        : MLXLMCommon.ChatTemplateFallbacks.gemma4WithTools
+                                    return try upstream.applyChatTemplate(
+                                        messages: messages,
+                                        chatTemplate: VMLXTokenizers.ChatTemplateArgument.literal(template),
+                                        addGenerationPrompt: addGenerationPrompt,
+                                        truncation: false,
+                                        maxLength: nil,
+                                        tools: tools,
+                                        additionalContext: additionalContext)
+                                }
+                                if upstream.bosToken == "<s>",
+                                   upstream.convertTokenToId("<|im_end|>") != nil {
+                                    return try upstream.applyChatTemplate(
+                                        messages: messages,
+                                        chatTemplate: VMLXTokenizers.ChatTemplateArgument.literal(
+                                            MLXLMCommon.ChatTemplateFallbacks.nemotronMinimal),
+                                        addGenerationPrompt: addGenerationPrompt,
+                                        truncation: false,
+                                        maxLength: nil,
+                                        tools: tools,
+                                        additionalContext: additionalContext)
+                                }
+                            }
                             if upstream.bosToken == "]~!b[",
                                upstream.eosToken == "[e~[" {
                                 return try upstream.applyChatTemplate(
@@ -455,6 +547,48 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                     additionalContext: additionalContext)
                             }
                             throw MLXLMCommon.TokenizerError.missingChatTemplate
+                        } catch {
+                            if (env["VMLX_CHAT_TEMPLATE_FALLBACK_DISABLE"] ?? "0") == "1" {
+                                throw error
+                            }
+                            let isGemma = upstream.bosToken == "<bos>"
+                            let hasNemotronSentinel =
+                                upstream.convertTokenToId("<|im_start|>") != nil
+                                || upstream.convertTokenToId("<|im_end|>") != nil
+                            let ordered: [(label: String, template: String)]
+                            if hasLagunaSentinel {
+                                ordered = [
+                                    ("LagunaMinimal", MLXLMCommon.ChatTemplateFallbacks.lagunaMinimal),
+                                ]
+                            } else if isGemma {
+                                ordered = [
+                                    ("Gemma4WithTools", MLXLMCommon.ChatTemplateFallbacks.gemma4WithTools),
+                                    ("Gemma4Minimal",   MLXLMCommon.ChatTemplateFallbacks.gemma4Minimal),
+                                ]
+                            } else if hasNemotronSentinel {
+                                ordered = [
+                                    ("NemotronMinimal", MLXLMCommon.ChatTemplateFallbacks.nemotronMinimal),
+                                    ("Gemma4WithTools", MLXLMCommon.ChatTemplateFallbacks.gemma4WithTools),
+                                    ("Gemma4Minimal",   MLXLMCommon.ChatTemplateFallbacks.gemma4Minimal),
+                                ]
+                            } else {
+                                ordered = MLXLMCommon.ChatTemplateFallbacks.orderedFallbacks
+                            }
+                            for candidate in ordered {
+                                do {
+                                    return try upstream.applyChatTemplate(
+                                        messages: messages,
+                                        chatTemplate: VMLXTokenizers.ChatTemplateArgument.literal(candidate.template),
+                                        addGenerationPrompt: addGenerationPrompt,
+                                        truncation: false,
+                                        maxLength: nil,
+                                        tools: tools,
+                                        additionalContext: additionalContext)
+                                } catch {
+                                    continue
+                                }
+                            }
+                            throw error
                         }
                     }
                 }

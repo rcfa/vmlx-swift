@@ -764,7 +764,7 @@ extension ReasoningParser {
             startInReasoning = false
         }
 
-        return ReasoningParser(
+        var parser = ReasoningParser(
             startTag: startTag,
             endTag: endTag,
             startInReasoning: startInReasoning,
@@ -773,6 +773,20 @@ extension ReasoningParser {
             // keeps `false`. Without this carry-over, harmony lost
             // its A2/A3 contract whenever `forPrompt(...)` was used.
             stripStrayTags: base.stripStrayTags)
+        if startInReasoning && parser.isHarmonyChannelParser {
+            parser.insideHarmonyChannel = true
+            parser.harmonyChannelIsReasoning = true
+            parser.harmonyChannelEndTags = [endTag]
+            parser.insideReasoning = true
+            if let lastOpener {
+                let promptChannelTail = String(promptTail[lastOpener.upperBound...])
+                if !promptChannelTail.contains("\n") {
+                    parser.harmonyChannelShouldStripName = true
+                    parser.harmonyChannelNameBuffer = promptChannelTail
+                }
+            }
+        }
+        return parser
     }
 }
 
