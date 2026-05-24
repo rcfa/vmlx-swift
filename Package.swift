@@ -749,6 +749,7 @@ let package = Package(
                 "MediaCachePlaceholderTests.swift",
                 "NemotronHOmniPreEncodedAudioTests.swift",
                 "MTPRuntimeFocusedTests.swift",
+                "MLXPressCLISourceContractsTests.swift",
                 "VMLXServerRuntimeSettingsTests.swift",
                 "NoHiddenReasoningCloseBiasFocusedTests.swift",
                 "TokenizerAddedTokenRegexFocusedTests.swift",

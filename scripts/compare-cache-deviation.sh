@@ -197,9 +197,11 @@ fi
 for turn in "${TURNS[@]}"; do
   COMMON_ARGS+=(--turn "$turn")
 done
-for expect in "${EXPECTS[@]}"; do
-  COMMON_ARGS+=(--expect "$expect")
-done
+if [[ ${#EXPECTS[@]} -gt 0 ]]; then
+  for expect in "${EXPECTS[@]}"; do
+    COMMON_ARGS+=(--expect "$expect")
+  done
+fi
 
 run_case() {
   local name="$1"
@@ -294,6 +296,10 @@ REPORT_ONLY_ARGS=()
 if [[ "$ACTIVITY_GATE_REPORT_ONLY" -eq 1 ]]; then
   REPORT_ONLY_ARGS+=(--activity-gate-report-only)
 fi
+ACTIVITY_GATE_ARGS=(--activity-gate "$ACTIVITY_GATE")
+if [[ ${#REPORT_ONLY_ARGS[@]} -gt 0 ]]; then
+  ACTIVITY_GATE_ARGS+=("${REPORT_ONLY_ARGS[@]}")
+fi
 
 if [[ "$SKIP_OFF" -eq 0 ]]; then
   run_case "cache_off" --mlxpress off --cache-stack off --disk-cache off || RUN_FAILURE=1
@@ -305,8 +311,7 @@ run_case "mlxpress_cold" \
   --disk-cache on \
   --disk-cache-dir "$CACHE_DIR" \
   --kv-cache "$KV_CACHE" \
-  --activity-gate "$ACTIVITY_GATE" \
-  "${REPORT_ONLY_ARGS[@]}" || RUN_FAILURE=1
+  "${ACTIVITY_GATE_ARGS[@]}" || RUN_FAILURE=1
 run_case "mlxpress_warm" \
   --mlxpress auto \
   --router-advice \
@@ -314,8 +319,7 @@ run_case "mlxpress_warm" \
   --disk-cache on \
   --disk-cache-dir "$CACHE_DIR" \
   --kv-cache "$KV_CACHE" \
-  --activity-gate "$ACTIVITY_GATE" \
-  "${REPORT_ONLY_ARGS[@]}" || RUN_FAILURE=1
+  "${ACTIVITY_GATE_ARGS[@]}" || RUN_FAILURE=1
 
 normalize_stdout "${RUN_DIR}/mlxpress_cold.out" >"${RUN_DIR}/mlxpress_cold.normalized"
 normalize_stdout "${RUN_DIR}/mlxpress_warm.out" >"${RUN_DIR}/mlxpress_warm.normalized"

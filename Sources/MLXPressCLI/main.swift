@@ -50,26 +50,6 @@ struct MLXPressCLI {
             guard preflightFacts.totalSafetensorsBytes > 0 else {
                 throw CLIError.loadRequiresLocalWeights
             }
-            try metricsWriter?.write([
-                "type": "run_start",
-                "timestamp": isoTimestamp(),
-                "model_path": options.modelDirectory.path,
-                "model_name": options.modelDirectory.lastPathComponent,
-                "model_bytes": jsonNumber(preflightFacts.totalSafetensorsBytes),
-                "turn_count": options.turns.count,
-                "max_tokens": options.maxTokens,
-                "prefill_step_size": options.prefillStepSize,
-                "temperature": jsonFloat(options.temperature),
-                "top_p": jsonFloat(options.topP),
-                "thinking": options.enableThinking,
-                "compiled_decode": options.enableCompiledDecode,
-                "compiled_max_cache_length": jsonOptionalNumber(
-                    options.compiledMaxCacheLength.map(UInt64.init)),
-                "allow_minimax_compiled_decode": options.allowMiniMaxCompiledDecode,
-                "file_read_gate_mb_per_generated_token": jsonOptionalDouble(
-                    options.fileReadGateMBPerGeneratedToken),
-                "active_expert_trace": options.activeExpertTrace,
-            ])
             if let preRunPressure {
                 try metricsWriter?.writeSystemPressure(
                     phase: "pre_load",
@@ -122,6 +102,42 @@ struct MLXPressCLI {
                     stderr)
             }
 
+            var resolvedGenerateParameters = await session.container.defaultGenerateParameters(
+                fallback: GenerateParameters(
+                    maxTokens: options.maxTokens,
+                    prefillStepSize: options.prefillStepSize))
+            resolvedGenerateParameters.maxTokens = options.maxTokens
+            resolvedGenerateParameters.prefillStepSize = options.prefillStepSize
+            if let temperature = options.temperature {
+                resolvedGenerateParameters.temperature = temperature
+            }
+            if let topP = options.topP {
+                resolvedGenerateParameters.topP = topP
+            }
+            resolvedGenerateParameters.enableCompiledDecode = options.enableCompiledDecode
+            resolvedGenerateParameters.compiledMaxCacheLength = options.compiledMaxCacheLength
+
+            try metricsWriter?.write([
+                "type": "run_start",
+                "timestamp": isoTimestamp(),
+                "model_path": options.modelDirectory.path,
+                "model_name": options.modelDirectory.lastPathComponent,
+                "model_bytes": jsonNumber(preflightFacts.totalSafetensorsBytes),
+                "turn_count": options.turns.count,
+                "max_tokens": options.maxTokens,
+                "prefill_step_size": resolvedGenerateParameters.prefillStepSize,
+                "temperature": jsonFloat(resolvedGenerateParameters.temperature),
+                "top_p": jsonFloat(resolvedGenerateParameters.topP),
+                "thinking": options.enableThinking,
+                "compiled_decode": options.enableCompiledDecode,
+                "compiled_max_cache_length": jsonOptionalNumber(
+                    options.compiledMaxCacheLength.map(UInt64.init)),
+                "allow_minimax_compiled_decode": options.allowMiniMaxCompiledDecode,
+                "file_read_gate_mb_per_generated_token": jsonOptionalDouble(
+                    options.fileReadGateMBPerGeneratedToken),
+                "active_expert_trace": options.activeExpertTrace,
+            ])
+
             if let maxFootprintPercent = options.activityGatePercent,
                 let preLoadMemory,
                 let postLoadMemory
@@ -171,13 +187,7 @@ struct MLXPressCLI {
                 nonisolated(unsafe) let userInput = UserInput(
                     chat: chatHistory,
                     additionalContext: options.chatTemplateContext)
-                var parameters = GenerateParameters(
-                    maxTokens: options.maxTokens,
-                    temperature: options.temperature,
-                    topP: options.topP,
-                    prefillStepSize: options.prefillStepSize)
-                parameters.enableCompiledDecode = options.enableCompiledDecode
-                parameters.compiledMaxCacheLength = options.compiledMaxCacheLength
+                let parameters = resolvedGenerateParameters
                 let stream = try await session.generate(
                     input: userInput,
                     parameters: parameters)
@@ -1079,8 +1089,8 @@ private struct Options {
     var turns: [String]
     var maxTokens: Int
     var prefillStepSize: Int
-    var temperature: Float
-    var topP: Float
+    var temperature: Float?
+    var topP: Float?
     var expectedOutputs: [String]
     var inspectOnly: Bool
     var printMemory: Bool
@@ -1161,8 +1171,8 @@ private struct Options {
         var positional: [String] = []
         var maxTokens = 256
         var prefillStepSize = MLXPressDefaultPrefillStepSize
-        var temperature: Float = 0
-        var topP: Float = 1
+        var temperature: Float?
+        var topP: Float?
         var compression: MLXPressCompressionPolicy = .auto(envFallback: true)
         var prestack: MLXPressPrestackPolicy = .disabled
         var enableCompiledDecode = false
