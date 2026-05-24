@@ -1180,8 +1180,10 @@ func runBatchEngineToolCall(modelPath: String, maxNew: Int) async throws {
         Emit only the tool call. Do not answer in prose.
         """
 
+    let fallbackParams = GenerateParameters(maxTokens: maxNew, prefillStepSize: 512)
     var params = GenerateParameters(
-        maxTokens: maxNew, temperature: 0, prefillStepSize: 512)
+        generationConfig: ctx.configuration.generationDefaults,
+        fallback: fallbackParams)
     params.enableCompiledBatchDecode = false
 
     let input = try await ctx.processor.prepare(input: UserInput(
