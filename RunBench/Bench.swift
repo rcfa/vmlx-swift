@@ -1217,6 +1217,7 @@ func runBatchEngineToolCall(modelPath: String, maxNew: Int) async throws {
     }
 
     nonisolated(unsafe) let sendable = input
+    let generationStart = CFAbsoluteTimeGetCurrent()
     let stream = await engine.generate(input: sendable, parameters: params)
 
     var chunkText = ""
@@ -1247,10 +1248,22 @@ func runBatchEngineToolCall(modelPath: String, maxNew: Int) async throws {
         }
     }
 
+    let total = CFAbsoluteTimeGetCurrent() - generationStart
+    let emittedEvents = chunkText.count + reasoningChars + toolCallCount
+    let tokps: Double
+    if let tokens = info?.generationTokenCount, total > 0 {
+        tokps = Double(tokens) / total
+    } else if total > 0 {
+        tokps = Double(emittedEvents) / total
+    } else {
+        tokps = 0
+    }
     let preview = chunkText.count > 240 ? String(chunkText.prefix(240)) + "..." : chunkText
     let stop = info.map { "\($0.stopReason)" } ?? "nil"
     let genTokens = info.map { "\($0.generationTokenCount)" } ?? "nil"
-    print("  chunks: \(chunkText.count) chars, reasoning: \(reasoningChars) chars, toolCalls: \(toolCallCount), stop: \(stop), genTokens: \(genTokens)")
+    print(String(format:
+        "  chunks: %d chars, reasoning: %d chars, toolCalls: %d, stop: %@, genTokens: %@, total=%.2fs, tokps=%.2f",
+        chunkText.count, reasoningChars, toolCallCount, stop, genTokens, total, tokps))
     print("  tool calls: \(toolCallDetails.joined(separator: "; "))")
     print("  text preview: \"\(preview)\"")
 

@@ -428,6 +428,10 @@ struct HarmonyParserFocusedTests {
                 && function.body.contains("trimmingCharacters(in: .whitespacesAndNewlines).isEmpty"),
             "The live probe must fail empty-output/no-tool rows instead of counting them as leak-free."
         )
+        #expect(function.body.contains("generationConfig: ctx.configuration.generationDefaults"))
+        #expect(function.body.contains("tokps"))
+        #expect(function.body.contains("genTokens"))
+        #expect(function.body.contains("Tool schema was supplied, but the generation produced no structured .toolCall event."))
     }
 
     @Test("Harmony live reasoning probe honors generation defaults")
