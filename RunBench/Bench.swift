@@ -288,6 +288,14 @@ struct Bench {
             return
         }
 
+        // BENCH_DSV4_AGENTIC_TOOL=1: DSV4-specific structured tool row.
+        // It proves DSML parser/tool autodetection, bundle-derived sampler
+        // defaults, multi-turn tool history, and L2 disk cache reuse.
+        if (env["BENCH_DSV4_AGENTIC_TOOL"] ?? "0") == "1" {
+            try await runDSV4AgenticToolCheck(modelPath: modelPath, maxNew: maxNew)
+            return
+        }
+
         // BENCH_REASONING_TURN_MATRIX=1: generic BatchEngine multi-turn
         // reasoning gate. It keeps one loaded model, appends assistant
         // reasoning_content back into the transcript, and verifies that
@@ -6610,6 +6618,253 @@ func runDSV4CoherenceGate(modelPath: String, maxNew: Int) async throws {
     }
     try? await Task.sleep(nanoseconds: 100_000_000)
     print("\n=== BENCH_DSV4_COHERENCE: PASS ===")
+}
+
+func runDSV4AgenticToolCheck(modelPath: String, maxNew: Int) async throws {
+    let modelDir = URL(fileURLWithPath: modelPath)
+    let env = ProcessInfo.processInfo.environment
+    let maxTokens = max(96, min(maxNew, 192))
+    let cacheDir = URL(fileURLWithPath: env["BENCH_DSV4_AGENTIC_CACHE_DIR"]
+        ?? "/tmp/vmlx-dsv4-agentic-cache/\(modelDir.lastPathComponent)")
+
+    print("\n=== BENCH_DSV4_AGENTIC_TOOL: DSML tool + chat history coherence ===")
+    let loadStart = CFAbsoluteTimeGetCurrent()
+    let context = try await MLXLMCommon.loadModel(
+        from: modelDir, using: #huggingFaceTokenizerLoader())
+    print(String(format: "Load: %.2fs", CFAbsoluteTimeGetCurrent() - loadStart))
+    print("Model: \(type(of: context.model))")
+    print("Tool format: \(context.configuration.toolCallFormat.map { "\($0)" } ?? "json (default)")")
+    print("Reasoning stamp: \(context.configuration.reasoningParserName ?? "nil")")
+    guard context.configuration.toolCallFormat == .dsml else {
+        throw NSError(
+            domain: "BENCH_DSV4_AGENTIC_TOOL",
+            code: 1,
+            userInfo: [
+                NSLocalizedDescriptionKey:
+                    "DSV4 agentic row requires DSML tool-call format, got \(context.configuration.toolCallFormat.map { "\($0)" } ?? "nil")",
+            ])
+    }
+    guard context.configuration.reasoningParserName == "think_xml" else {
+        throw NSError(
+            domain: "BENCH_DSV4_AGENTIC_TOOL",
+            code: 2,
+            userInfo: [
+                NSLocalizedDescriptionKey:
+                    "DSV4 agentic row requires think_xml reasoning parser, got \(context.configuration.reasoningParserName ?? "nil")",
+            ])
+    }
+
+    nonisolated(unsafe) let ctx = context
+    var coordConfig = CacheCoordinatorConfig()
+    coordConfig.usePagedCache = true
+    coordConfig.enableDiskCache = true
+    coordConfig.diskCacheDir = cacheDir
+    coordConfig.diskCacheMaxGB = 4
+    coordConfig.pagedBlockSize = 256
+    coordConfig.maxCacheBlocks = 1024
+    coordConfig.modelKey = "\(modelDir.lastPathComponent)|dsv4-agentic-tool"
+    let coordinator = CacheCoordinator(config: coordConfig)
+    let engine = BatchEngine(context: ctx, maxBatchSize: 1, cacheCoordinator: coordinator)
+    defer { Task { await engine.shutdown() } }
+
+    let fallbackParams = GenerateParameters(maxTokens: maxTokens, prefillStepSize: 512)
+    var params = GenerateParameters(
+        generationConfig: ctx.configuration.generationDefaults,
+        fallback: fallbackParams)
+    params.maxTokens = maxTokens
+    params.prefillStepSize = 512
+    params.enableCompiledBatchDecode = false
+    print(String(format:
+        "Sampling: maxTokens=%d temp=%.3f topP=%.3f topK=%d minP=%.3f rep=%@ seed=%@",
+        params.maxTokens ?? -1,
+        Double(params.temperature),
+        Double(params.topP),
+        params.topK,
+        Double(params.minP),
+        params.repetitionPenalty.map { String(format: "%.3f", Double($0)) } ?? "nil",
+        params.randomSeed.map(String.init) ?? "nil"))
+
+    let lookupParams: [String: any Sendable] = [
+        "type": "object",
+        "properties": [
+            "launch_id": [
+                "type": "string",
+                "description": "Launch identifier to look up.",
+            ] as [String: any Sendable],
+        ] as [String: any Sendable],
+        "required": ["launch_id"],
+    ]
+    let lookupTool: ToolSpec = [
+        "type": "function",
+        "function": [
+            "name": "lookup_launch_status",
+            "description": "Look up launch readiness status.",
+            "parameters": lookupParams,
+        ] as [String: any Sendable],
+    ]
+
+    struct DSV4ToolTurn {
+        var text = ""
+        var reasoning = ""
+        var toolCalls: [ToolCall] = []
+        var promptTokens = 0
+        var genTokens = 0
+        var tokps = 0.0
+        var stop = "nil"
+        var unclosedReasoning = false
+    }
+
+    func fail(_ code: Int, _ message: String) throws -> Never {
+        throw NSError(
+            domain: "BENCH_DSV4_AGENTIC_TOOL",
+            code: code,
+            userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    func markerLeaks(in text: String) -> [String] {
+        [
+            "<think>", "</think>", "<tool_call>", "<|tool_call>",
+            "[TOOL_CALLS]", "<｜tool▁calls｜>", "<｜tool▁call▁begin｜>",
+            "<\u{FF5C}DSML\u{FF5C}tool_calls>", "<\u{FF5C}DSML\u{FF5C}invoke",
+        ].filter { text.contains($0) }
+    }
+
+    func printBlock(_ label: String, _ text: String) {
+        print("--- \(label)_BEGIN ---")
+        print(text)
+        print("--- \(label)_END ---")
+    }
+
+    func runTurn(
+        label: String,
+        chat: [Chat.Message],
+        tools: [ToolSpec]? = nil,
+        enableThinking: Bool
+    ) async throws -> DSV4ToolTurn {
+        let input = try await ctx.processor.prepare(input: UserInput(
+            chat: chat,
+            tools: tools,
+            additionalContext: ["enable_thinking": enableThinking]))
+        let promptTokens = input.text.tokens.size
+        nonisolated(unsafe) let sendable = input
+        print("  \(label): prepared prompt=\(promptTokens) tools=\(tools?.count ?? 0)")
+
+        var result = DSV4ToolTurn(promptTokens: promptTokens)
+        let start = CFAbsoluteTimeGetCurrent()
+        let stream = await engine.generate(input: sendable, parameters: params)
+        for await event in stream {
+            switch event {
+            case .chunk(let chunk):
+                result.text += chunk
+            case .reasoning(let reasoning):
+                result.reasoning += reasoning
+            case .toolCall(let call):
+                result.toolCalls.append(call)
+            case .info(let info):
+                result.genTokens = info.generationTokenCount
+                result.stop = "\(info.stopReason)"
+                result.unclosedReasoning = info.unclosedReasoning
+            default:
+                break
+            }
+        }
+        let elapsed = max(CFAbsoluteTimeGetCurrent() - start, 0.001)
+        result.tokps = Double(result.genTokens) / elapsed
+        let preview = (result.text.isEmpty ? "[empty]" : result.text)
+            .replacingOccurrences(of: "\n", with: "\\n")
+        print(String(format:
+            "  %@: text=%d reasoning=%d toolCalls=%d gen=%d stop=%@ unclosed=%@ tokps=%.2f sample=\"%@\"",
+            label, result.text.count, result.reasoning.count, result.toolCalls.count,
+            result.genTokens, result.stop, result.unclosedReasoning ? "true" : "false",
+            result.tokps, String(preview.prefix(180))))
+        if !markerLeaks(in: result.text).isEmpty {
+            try fail(10, "\(label): raw parser marker leaked into visible chunk")
+        }
+        if result.unclosedReasoning {
+            try fail(11, "\(label): stream ended with unclosed reasoning")
+        }
+        return result
+    }
+
+    var chat: [Chat.Message] = [
+        .system("You are a concise assistant. Use tools when requested."),
+        .user("Use lookup_launch_status for launch_id DSV4-77. Emit only the tool call."),
+    ]
+    let toolTurn = try await runTurn(
+        label: "turn1-tool-call",
+        chat: chat,
+        tools: [lookupTool],
+        enableThinking: false)
+    printBlock("DSV4_AGENTIC_T1_TEXT", toolTurn.text)
+    if !toolTurn.reasoning.isEmpty {
+        printBlock("DSV4_AGENTIC_T1_REASONING", toolTurn.reasoning)
+    }
+    guard !toolTurn.toolCalls.isEmpty else {
+        try fail(20, "turn1 did not emit a structured .toolCall")
+    }
+    let toolCalls = toolTurn.toolCalls
+    let toolText = toolTurn.text
+    let toolCall = toolCalls[0]
+    let toolCallId = toolCall.id ?? "call_0_\(toolCall.function.name)"
+    guard toolCall.function.name == "lookup_launch_status" else {
+        try fail(21, "unexpected tool name \(toolCall.function.name)")
+    }
+    let toolArgs = toolCall.function.arguments.mapValues { $0.anyValue }
+    print("DSV4_AGENTIC_TOOL_CALL name=\(toolCall.function.name) id=\(toolCallId) args=\(toolArgs)")
+    let toolResultJSON = #"{"launch_id":"DSV4-77","status":"green","window":"04:30Z"}"#
+    chat.append(.assistant(toolText, toolCalls: toolCalls))
+    chat.append(.tool(toolResultJSON, toolCallId: toolCallId))
+    chat.append(.user("Summarize the launch status and window from the tool result. Answer in one short sentence."))
+
+    let summaryTurn = try await runTurn(
+        label: "turn2-tool-result-summary",
+        chat: chat,
+        enableThinking: false)
+    printBlock("DSV4_AGENTIC_T2_TEXT", summaryTurn.text)
+    if !summaryTurn.reasoning.isEmpty {
+        printBlock("DSV4_AGENTIC_T2_REASONING", summaryTurn.reasoning)
+    }
+    let summaryLower = summaryTurn.text.lowercased()
+    if !summaryLower.contains("green") || !summaryTurn.text.contains("04:30") {
+        try fail(30, "turn2 did not use tool result status/window")
+    }
+    chat.append(.assistant(summaryTurn.text))
+    chat.append(.user("What launch id did the tool result describe? Answer with only the id."))
+
+    let recallTurn = try await runTurn(
+        label: "turn3-tool-history-recall",
+        chat: chat,
+        enableThinking: false)
+    printBlock("DSV4_AGENTIC_T3_TEXT", recallTurn.text)
+    if !recallTurn.text.uppercased().contains("DSV4-77") {
+        try fail(31, "turn3 did not recall DSV4-77 from tool history")
+    }
+
+    let snapshot = coordinator.snapshotStats()
+    let paged = snapshot.pagedStats.map {
+        "hits=\($0.cacheHits),misses=\($0.cacheMisses),allocated=\($0.allocatedBlocks),free=\($0.freeBlocks),evictions=\($0.evictions)"
+    } ?? "disabled"
+    let disk = snapshot.diskStats.map {
+        "hits=\($0.hits),misses=\($0.misses),stores=\($0.stores),maxBytes=\($0.maxSizeBytes)"
+    } ?? "disabled"
+    let ssm = snapshot.ssmStats
+    print(
+        "DSV4_AGENTIC_CACHE_STATS hybrid=\(snapshot.isHybrid) pagedIncompatible=\(snapshot.isPagedIncompatible) paged{\(paged)} disk{\(disk)} ssm{hits=\(ssm.hits),misses=\(ssm.misses),reDerives=\(ssm.reDerives)}"
+    )
+    guard snapshot.isPagedIncompatible else {
+        try fail(40, "DSV4 agentic row did not mark cache as paged-incompatible")
+    }
+    guard let diskStats = snapshot.diskStats else {
+        try fail(41, "DSV4 agentic row did not enable disk L2 cache")
+    }
+    guard diskStats.stores > 0 else {
+        try fail(42, "DSV4 agentic row did not store any disk L2 cache entries")
+    }
+    guard diskStats.hits > 0 else {
+        try fail(43, "DSV4 agentic row did not observe any disk L2 cache hits")
+    }
+    await engine.shutdown()
+    print("=== BENCH_DSV4_AGENTIC_TOOL: PASS ===")
 }
 
 /// Side-by-side decode on the same simple factual prompt across DSV4's
