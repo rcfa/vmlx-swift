@@ -84,6 +84,36 @@ struct DSMLToolCallParserFocusedTests {
         #expect(!visible.contains("invoke name"))
     }
 
+    @Test("DSML processor accepts live tool_ccalls/tool_cs alias without visible markup leak")
+    func processorAcceptsLiveToolCCallsToolCSAlias() {
+        let dsml = DeepseekV4Tokens.dsml
+        let output = """
+            <\(dsml)tool_ccalls>
+            <\(dsml)invoke name="file_read">
+            <\(dsml)parameter name="path" string="true">/Users/eric/Desktop/testmandel/mandelbrot.py</\(dsml)parameter>
+            </\(dsml)inv>
+            </\(dsml)tool_cs>
+            """
+        let processor = ToolCallProcessor(format: .dsml)
+        var visible = ""
+        for ch in output {
+            visible += processor.processChunk(String(ch)) ?? ""
+        }
+        visible += processor.processEOS() ?? ""
+
+        #expect(processor.toolCalls.count == 1)
+        #expect(processor.toolCalls.first?.function.name == "file_read")
+        #expect(
+            processor.toolCalls.first?.function.arguments["path"]
+                == .string("/Users/eric/Desktop/testmandel/mandelbrot.py")
+        )
+        #expect(visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(!visible.contains("DSML"))
+        #expect(!visible.contains("tool_ccalls"))
+        #expect(!visible.contains("tool_cs"))
+        #expect(!visible.contains("invoke name"))
+    }
+
     @Test("DSV4 instruct prompt routes DSML output to tool calls without reasoning leakage")
     func instructPromptRoutesDSMLWithoutReasoningLeakage() {
         let prompt = DeepseekV4ChatEncoder().encode(

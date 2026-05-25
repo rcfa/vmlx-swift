@@ -49,10 +49,16 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
         "<\u{FF5C}DSML\u{FF5C}tool_calls>",
         // Live DeepSeek V4 Flash sometimes drops the second "l".
         "<\u{FF5C}DSML\u{FF5C}tool_cals>",
+        // Live DSV4 JANGTQ2 app decode has also emitted an extra "c"
+        // after the underscore while preserving a valid invoke body.
+        "<\u{FF5C}DSML\u{FF5C}tool_ccalls>",
     ]
     public let endTagAliases: [String] = [
         "</\u{FF5C}DSML\u{FF5C}tool_calls>",
         "</\u{FF5C}DSML\u{FF5C}tool_cals>",
+        // Same live alias family as `tool_ccalls`, abbreviated at the
+        // suffix rather than the middle of the token.
+        "</\u{FF5C}DSML\u{FF5C}tool_cs>",
     ]
 
     public init() {}
