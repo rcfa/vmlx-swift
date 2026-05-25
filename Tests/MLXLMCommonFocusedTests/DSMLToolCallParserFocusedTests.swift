@@ -259,8 +259,8 @@ struct DSMLToolCallParserFocusedTests {
         #expect(call?.function.arguments["end_line"] == .int(41))
     }
 
-    @Test("DSML inline JSON fallback leaves schema-invalid tool-shaped answers visible")
-    func inlineJSONFallbackLeavesSchemaInvalidToolShapedAnswersVisible() {
+    @Test("DSML inline JSON fallback quarantines known malformed tool-shaped answers")
+    func inlineJSONFallbackQuarantinesKnownMalformedToolShapedAnswers() {
         let output = """
             {"tool":"file_read","r":"np.clip(esc * 4.0 - 1.0, 0.0, 1.0)","g":"np.clip(1.0 - np.abs(esc * 2.0 - 1.0), 0.0, 1.0)","b":"np.clip(1.0 - esc * 2.0, 0.0, 1.0)"}
             """
@@ -271,9 +271,17 @@ struct DSMLToolCallParserFocusedTests {
         }
         visible += processor.processEOS() ?? ""
 
-        #expect(processor.toolCalls.isEmpty)
-        #expect(visible.contains("\"tool\":\"file_read\""))
-        #expect(visible.contains("np.clip"))
+        #expect(visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(!visible.contains("\"tool\":\"file_read\""))
+        #expect(!visible.contains("np.clip"))
+        #expect(processor.toolCalls.count == 1)
+        let call = processor.toolCalls.first
+        #expect(call?.function.name == "file_read")
+        #expect(call?.function.arguments["path"] == nil)
+        #expect(
+            call?.function.arguments["r"]
+                == .string("np.clip(esc * 4.0 - 1.0, 0.0, 1.0)")
+        )
     }
 
     @Test("DSV4 instruct prompt routes DSML output to tool calls without reasoning leakage")
