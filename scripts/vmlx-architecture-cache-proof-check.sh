@@ -167,8 +167,24 @@ require_text "$TQ_LIST" 'CompilableCacheList' "compilable cache-list coverage ex
 
 require_text "$QG_PROOF" "check_family.*Qwen.*SSM\\|MTP\\|TurboQuant\\|TQ\\|KV\\|hybrid\\|rederive" \
   "Qwen proof checker requires hybrid SSM/TQ cache evidence"
+require_text "$QG_PROOF" 'check_qwen_hybrid_specific_artifacts' \
+  "Qwen proof checker has explicit hybrid-specific artifact gate"
+require_text "$QG_PROOF" 'Qwen cache topology names SSM companion' \
+  "Qwen proof checker requires SSM companion topology evidence"
+require_text "$QG_PROOF" 'Qwen disk restore writes SSM companion state' \
+  "Qwen proof checker requires SSM companion disk state"
+require_text "$QG_PROOF" 'Qwen SSM companion cache hit evidence' \
+  "Qwen proof checker requires SSM companion hit evidence"
+require_text "$QG_PROOF" 'Qwen TurboQuant compression counter evidence' \
+  "Qwen proof checker requires TurboQuant compression counters"
 require_text "$QG_PROOF" "check_family.*Gemma.*SWA\\|sliding\\|rotating\\|KV\\|TurboQuant\\|TQ" \
   "Gemma proof checker requires SWA/TQ cache evidence"
+require_text "$QG_PROOF" 'check_gemma_cache_specific_artifacts' \
+  "Gemma proof checker has explicit cache-specific artifact gate"
+require_text "$QG_PROOF" 'Gemma rotating/SWA topology evidence' \
+  "Gemma proof checker requires rotating/SWA topology evidence"
+require_text "$QG_PROOF" 'Gemma TurboQuant compression counter evidence' \
+  "Gemma proof checker requires TurboQuant compression counters"
 
 reject_text "$MATRIX" 'deepseek-v4.*BENCH_BATCH_TQ_B2=1|BENCH_BATCH_TQ_B2=1.*deepseek-v4' \
   "DSV4 generic TurboQuant KV row"

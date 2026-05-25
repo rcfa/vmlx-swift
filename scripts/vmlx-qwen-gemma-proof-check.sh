@@ -34,13 +34,13 @@ fail_msg() { echo "FAIL $*" >&2; fail=1; }
 check_active_processes() {
   local active
   active="$({ ps -axo pid,ppid,rss,etime,command || true; } \
-    | rg -i 'xcodebuild|codesign( |$)|notarytool|/usr/bin/security( |$)|DerivedData|vmlx_engine\.cli|python.*vmlx|RunBench|vmlx-live-model-matrix|/Users/eric/osaurus-staging.*(swift-test|xcrun swift|swift test|swift build|swift-driver|swift-frontend|PackagePlugin|\\.build/.*/Cmlx\\.build|/usr/bin/clang .*osaurus-staging)' \
+    | rg -i 'CodeSigningHelper|xcodebuild|codesign( |$)|notarytool|/usr/bin/security( |$)|DerivedData|vmlx_engine\.cli|python.*vmlx|RunBench|vmlx-live-model-matrix|/Users/eric/osaurus-staging.*(swift-test|xcrun swift|swift test|swift build|swift-driver|swift-frontend|PackagePlugin|\\.build/.*/Cmlx\\.build|/usr/bin/clang .*osaurus-staging)' \
     | rg -v 'rg -i|vmlx-qwen-gemma-proof-check|assert-osaurus-vmlx-pr-readiness|assert-keychain-free-proof-path|assert-vmlx-gemma4-parser-fix-wired|assert-no-hidden-local-sampler-defaults|assert-openresponses-cache-proof-wiring' || true)"
   if [[ -n "$active" ]]; then
     fail_msg "active heavy/keychain-sensitive process detected before proof classification"
     echo "$active" >&2
   else
-    pass "no active model/build/signing process"
+    pass "no active model/build/signing/keychain process"
   fi
 }
 
@@ -119,6 +119,29 @@ check_family() {
     cat /tmp/vmlx-proof-lowlevel-think.$$.txt >&2
   fi
   rm -f /tmp/vmlx-proof-lowlevel-think.$$.txt
+}
+
+check_qwen_hybrid_specific_artifacts() {
+  local dir="$1"
+  require_dir "$dir" "Qwen hybrid-specific" || return
+  require_text "$dir" 'companion=ssm' "Qwen cache topology names SSM companion"
+  require_text "$dir" 'ssm_companion' "Qwen disk restore writes SSM companion state"
+  require_text "$dir" 'ssm\{hits=[1-9]' "Qwen SSM companion cache hit evidence"
+  require_text "$dir" 'disk\{hits=[1-9]' "Qwen disk L2 hit evidence"
+  require_text "$dir" 'Coord.*HIT.*disk|Coordinator probe.*HIT.*disk' "Qwen coordinator disk-hit probe evidence"
+  require_text "$dir" 'BatchEngine TurboQuant B=2' "Qwen TurboQuant B=2 row exists"
+  require_text "$dir" 'Slot [01] \(TQ|TQ\(4,4\)\)' "Qwen TurboQuant encoded slot evidence"
+  require_text "$dir" 'tqCompressionsA=[1-9]|tqCompressionsB=[1-9]' "Qwen TurboQuant compression counter evidence"
+}
+
+check_gemma_cache_specific_artifacts() {
+  local dir="$1"
+  require_dir "$dir" "Gemma cache-specific" || return
+  require_text "$dir" 'rotatingLayers=[1-9]|SWA|sliding' "Gemma rotating/SWA topology evidence"
+  require_text "$dir" 'disk\{hits=[1-9]' "Gemma disk L2 hit evidence"
+  require_text "$dir" 'BatchEngine TurboQuant B=2' "Gemma TurboQuant B=2 row exists"
+  require_text "$dir" 'Slot [01] \(TQ|TQ\(4,4\)\)' "Gemma TurboQuant encoded slot evidence"
+  require_text "$dir" 'tqCompressionsA=[1-9]|tqCompressionsB=[1-9]' "Gemma TurboQuant compression counter evidence"
 }
 
 check_osaurus_source() {
@@ -225,10 +248,35 @@ check_vmlx_gemma_parser_source() {
   require_text "$REPO_ROOT/Package.swift" 'Gemma4ThoughtChannelParserFocusedTests\.swift' "vMLX Gemma parser regression target wiring"
 }
 
+check_vmlx_no_hidden_defaults_source() {
+  local no_hidden="$REPO_ROOT/Tests/MLXLMCommonFocusedTests/NoHiddenReasoningCloseBiasFocusedTests.swift"
+  local matrix="$REPO_ROOT/scripts/vmlx-live-model-matrix.sh"
+  local jangpress="$REPO_ROOT/RunBench/JangPressRegressionBench.swift"
+  local bench="$REPO_ROOT/RunBench/Bench.swift"
+
+  require_file "$no_hidden" "vMLX no-hidden-behavior focused tests"
+  require_file "$matrix" "vMLX live model matrix script"
+  require_file "$jangpress" "vMLX JangPress regression bench"
+  require_file "$bench" "vMLX RunBench"
+
+  require_text "$no_hidden" 'sampler_defaults' "vMLX source guard requires bundle sampler defaults"
+  require_text "$no_hidden" 'fail:missing-bundle-sampler-defaults-would-use-engine-fallback' "vMLX source guard fails missing sampler defaults"
+  require_text "$no_hidden" 'missing bundle sampler defaults are failing evidence' "vMLX source guard rejects engine-fallback sampler promotion"
+  require_text "$matrix" 'sampler_defaults' "live matrix records sampler defaults"
+  require_text "$matrix" 'fail:missing-bundle-sampler-defaults-would-use-engine-fallback' "live matrix fails missing bundle sampler defaults"
+  require_text "$matrix" 'bundle-derived' "live matrix reports bundle-derived defaults"
+  reject_text "$jangpress" 'var p = GenerateParameters\(maxTokens: maxNewTokens, temperature: 0\)' "JangPress forced temperature zero"
+  reject_text "$bench" 'BENCH_DSV4_REPETITION_PENALTY"\] \?\? "1\.0"|BENCH_DSV4_MAX_REPETITION_PENALTY"\] \?\? "1\.05"|dsv4MaxReasoningRepetitionPenalty' "DSV4 hidden repetition-penalty rescue"
+  reject_text "$bench" 'text\.isEmpty \? reasoning : text|reasoning\.isEmpty \? r\.text : r\.reasoning|let combined = text \+ reasoning' "reasoning-only output counted as visible answer"
+}
+
 check_active_processes
 check_vmlx_gemma_parser_source
+check_vmlx_no_hidden_defaults_source
 check_family "$QWEN_DIR" "Qwen" 'SSM|MTP|TurboQuant|TQ|KV|hybrid|rederive'
+check_qwen_hybrid_specific_artifacts "$QWEN_DIR"
 check_family "$GEMMA_DIR" "Gemma" 'SWA|sliding|rotating|KV|TurboQuant|TQ'
+check_gemma_cache_specific_artifacts "$GEMMA_DIR"
 check_osaurus_source "$OSAURUS_ROOT"
 check_osaurus_vmlx_pin_reproducible "$OSAURUS_ROOT"
 
