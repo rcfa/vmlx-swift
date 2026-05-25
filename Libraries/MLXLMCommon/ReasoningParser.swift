@@ -230,7 +230,7 @@ public struct ReasoningParser: Sendable {
                     before,
                     into: &out,
                     final: true,
-                    stripIdentifierOnlyAtEnd: true)
+                    stripIdentifierOnlyAtEnd: false)
                 buffer.removeSubrange(buffer.startIndex..<range.upperBound)
                 insideHarmonyChannel = false
                 harmonyChannelIsReasoning = false
@@ -466,7 +466,6 @@ public struct ReasoningParser: Sendable {
             "<|start|>tool",
             "<|start|>",
             "<|channel|>",
-            "<channel|>",
             "<|message|>",
             "<|end|>",
             "<|return|>",
