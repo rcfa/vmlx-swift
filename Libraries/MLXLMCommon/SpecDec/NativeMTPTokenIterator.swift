@@ -594,6 +594,10 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
             return trimmed
         }
 
+        if String(describing: Swift.type(of: model)).contains("Gemma3n") {
+            return nil
+        }
+
         do {
             let boundaryTokens = MLXArray(tokens.map { Int32($0) })
                 .reshaped(1, tokens.count)

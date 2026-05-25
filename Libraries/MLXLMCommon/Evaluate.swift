@@ -1837,6 +1837,13 @@ public struct TokenIterator: TokenIteratorProtocol {
             return trimmed
         }
 
+        if String(describing: Swift.type(of: model)).contains("Gemma3n") {
+            Self.logger.debug(
+                "TokenIterator: skipped Gemma3n history-boundary cache rederive after trim miss"
+            )
+            return nil
+        }
+
         do {
             let boundaryTokens = MLXArray(tokens.map { Int32($0) })
                 .reshaped(1, tokens.count)

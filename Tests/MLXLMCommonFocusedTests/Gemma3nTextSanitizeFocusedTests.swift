@@ -65,6 +65,21 @@ struct Gemma3nTextSanitizeFocusedTests {
         #expect(prodSource.contains("missing expected UTF-8 words in visible output"))
     }
 
+    @Test("Gemma3n cache store skips unsafe history-boundary rederive after trim miss")
+    func cacheStoreSkipsUnsafeHistoryBoundaryRederiveAfterTrimMiss() throws {
+        let evaluate = try String(contentsOfFile: Self.repoFile("Libraries/MLXLMCommon/Evaluate.swift"))
+        let batch = try String(contentsOfFile: Self.repoFile("Libraries/MLXLMCommon/BatchEngine/BatchEngine.swift"))
+        let nativeMTP = try String(contentsOfFile: Self.repoFile("Libraries/MLXLMCommon/SpecDec/NativeMTPTokenIterator.swift"))
+
+        for source in [evaluate, batch, nativeMTP] {
+            #expect(source.contains("String(describing: Swift.type(of:"))
+            #expect(source.contains("contains(\"Gemma3n\")"))
+            #expect(!source.contains("forced </think>"))
+        }
+        #expect(evaluate.contains("TokenIterator: skipped Gemma3n history-boundary cache rederive after trim miss"))
+        #expect(batch.contains("Skipped Gemma3n history-boundary cache rederive"))
+    }
+
     @Test("text-only config keeps the LM text embedding path")
     func textOnlyConfigKeepsLMTextEmbeddingPath() throws {
         let config = try Self.makeConfig(vocabSize: 4, architectures: nil)
