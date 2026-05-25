@@ -231,6 +231,12 @@ else
   fail_msg "Osaurus no-forced-behavior guard exists"
 fi
 
+if [[ -x "$OSAURUS_ROOT/scripts/live-proof/assert-no-hidden-local-sampler-defaults.sh" ]]; then
+  run_gate osaurus-no-hidden-sampler-defaults "$OSAURUS_ROOT/scripts/live-proof/assert-no-hidden-local-sampler-defaults.sh"
+else
+  fail_msg "Osaurus no-hidden-local-sampler-defaults guard exists"
+fi
+
 if [[ -x "$OSAURUS_ROOT/scripts/live-proof/assert-openresponses-cache-proof-wiring.sh" ]]; then
   run_gate osaurus-openresponses-cache "$OSAURUS_ROOT/scripts/live-proof/assert-openresponses-cache-proof-wiring.sh"
 else
