@@ -18,9 +18,11 @@ struct VMLXServerRuntimeSettingsTests {
         #expect(settings.cache.pagedKV.enabled)
         #expect(settings.cache.blockDisk.enabled)
         #expect(settings.cache.legacyDisk.enabled == false)
+        #expect(settings.cache.liveKVCodec == .engineSelected)
         #expect(settings.cache.enableSSMReDerive)
         #expect(settings.cache.defaultMaxKVSize == nil)
         #expect(settings.cache.longPromptMultiplier == 2.0)
+        #expect(settings.cache.defaultKVMode == .turboQuant(keyBits: 3, valueBits: 3))
         #expect(settings.generation.temperature == nil)
         #expect(settings.generation.topP == nil)
         #expect(settings.generation.topK == nil)
@@ -728,6 +730,61 @@ struct VMLXServerRuntimeSettingsTests {
             // Expected: do not silently choose hidden TQ bit widths.
         } else {
             Issue.record("TurboQuant KV mode should not be inferred without bit widths")
+        }
+    }
+
+    @Test("engine-selected cache codec enables automatic TurboQuant KV")
+    func engineSelectedCacheCodecEnablesAutomaticTurboQuantKV() {
+        var settings = VMLXServerRuntimeSettings()
+        settings.cache.liveKVCodec = .engineSelected
+
+        if case .turboQuant(let keyBits, let valueBits) = settings.cacheCoordinatorConfig().defaultKVMode {
+            #expect(keyBits == 3)
+            #expect(valueBits == 3)
+        } else {
+            Issue.record("Engine-selected cache codec should resolve the production TurboQuant KV default")
+        }
+
+        settings.cache.liveKVCodec = .native
+        #expect(settings.cacheCoordinatorConfig().defaultKVMode == .none)
+    }
+
+    @Test("automatic runtime cache policy covers downloaded architecture families")
+    func automaticRuntimeCachePolicyCoversDownloadedArchitectureFamilies() {
+        let rows: [(modelType: String, tool: ToolCallFormat?, reasoning: String)] = [
+            ("qwen3_6", .xmlFunction, "think_xml"),
+            ("bailing_hybrid", .glm4, "think_xml"),
+            ("zaya", .zayaXml, "think_xml"),
+            ("deepseek_v4_flash", .dsml, "think_xml"),
+            ("gemma4", .gemma4, "harmony"),
+            ("hy3", .hunyuan, "think_xml"),
+        ]
+        let settings = VMLXServerRuntimeSettings()
+        let config = settings.cacheCoordinatorConfig(
+            modelKey: "matrix|reasoning=auto|tools=auto",
+            diskCacheDirectory: URL(fileURLWithPath: "/tmp/vmlx-auto-matrix"),
+            ssmMaxEntries: 64)
+        let resolvedPolicy = config.resolveKVPolicy(
+            kvMode: .none,
+            maxKVSize: nil,
+            promptTokenCount: 32_768)
+
+        #expect(settings.concurrency.continuousBatching)
+        #expect(config.usePagedCache)
+        #expect(config.enableDiskCache)
+        #expect(config.enableSSMReDerive)
+        #expect(config.modelKey == "matrix|reasoning=auto|tools=auto")
+        #expect(resolvedPolicy.maxKVSize == nil)
+        if case .turboQuant(let keyBits, let valueBits) = resolvedPolicy.kvMode {
+            #expect(keyBits == 3)
+            #expect(valueBits == 3)
+        } else {
+            Issue.record("Engine-selected automatic cache policy did not resolve TurboQuant KV")
+        }
+
+        for row in rows {
+            #expect(ToolCallFormat.infer(from: row.modelType) == row.tool)
+            #expect(reasoningStampFromModelType(row.modelType) == row.reasoning)
         }
     }
 

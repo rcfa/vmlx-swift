@@ -174,7 +174,7 @@ reject_text "$MATRIX" 'deepseek-v4.*BENCH_BATCH_TQ_B2=1|BENCH_BATCH_TQ_B2=1.*dee
   "DSV4 generic TurboQuant KV row"
 
 active_forbidden="$({ ps -axo pid,ppid,rss,etime,command || true; } \
-  | rg -i 'xcodebuild|codesign( |$)|notarytool|/usr/bin/security( |$)|/Users/eric/osaurus-staging.*(swift-test|xcrun swift|swift test|swift build|swift-driver|swift-frontend|PackagePlugin|\\.build/.*/Cmlx\\.build|/usr/bin/clang .*osaurus-staging)' \
+  | rg -i 'CodeSigningHelper|xcodebuild|codesign( |$)|notarytool|/usr/bin/security( |$)|/Users/eric/osaurus-staging.*(swift-test|xcrun swift|swift test|swift build|swift-driver|swift-frontend|PackagePlugin|\\.build/.*/Cmlx\\.build|/usr/bin/clang .*osaurus-staging)' \
   | rg -v 'rg -i|vmlx-architecture-cache-proof-check|assert-keychain-free-proof-path' || true)"
 if [[ -n "$active_forbidden" ]]; then
   echo "FAIL active Osaurus keychain-sensitive validation process detected:" >&2

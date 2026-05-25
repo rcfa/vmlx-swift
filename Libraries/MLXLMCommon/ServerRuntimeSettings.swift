@@ -553,9 +553,10 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
     /// `BatchEngine`.
     ///
     /// This is the server-panel bridge for prefix/paged/L2-disk/SSM/TurboQuant
-    /// KV settings. It performs no hidden quality rescue: `engine_selected` and
-    /// `native` map to plain coordinator KV defaults, and TurboQuant KV is only
-    /// selected when the caller explicitly supplies both bit widths.
+    /// KV settings. It performs no hidden quality rescue: `engine_selected`
+    /// chooses the engine's production KV codec, `native` and `none` preserve
+    /// float/native cache behavior, and explicit TurboQuant still requires
+    /// caller-supplied bit widths.
     public func cacheCoordinatorConfig(
         modelKey: String? = nil,
         diskCacheDirectory: URL? = nil,
@@ -748,13 +749,19 @@ public struct VMLXServerCacheSettings: Codable, Sendable, Equatable {
     }
 
     public var defaultKVMode: KVQuantizationMode {
-        guard liveKVCodec == .turboQuant,
-              let keyBits = turboQuantKeyBits,
-              let valueBits = turboQuantValueBits
-        else {
+        switch liveKVCodec {
+        case .engineSelected:
+            return .turboQuant()
+        case .native, .none:
             return .none
+        case .turboQuant:
+            guard let keyBits = turboQuantKeyBits,
+                  let valueBits = turboQuantValueBits
+            else {
+                return .none
+            }
+            return .turboQuant(keyBits: keyBits, valueBits: valueBits)
         }
-        return .turboQuant(keyBits: keyBits, valueBits: valueBits)
     }
 }
 
