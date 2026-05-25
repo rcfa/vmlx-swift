@@ -113,6 +113,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                         tools: [[String: any Sendable]]?,
                         additionalContext: [String: any Sendable]?
                     ) throws -> [Int] {
+                        let chatTemplateTools = MLXLMCommon.normalizedToolsForChatTemplate(tools)
                         // Iter 50 escape hatch: `VMLX_CHAT_TEMPLATE_OVERRIDE=/path/to/template.jinja`
                         // bypasses the tokenizer's shipped chat template. Motivation: Gemma-4's
                         // native template trips a swift-jinja 1.3.0 interaction bug — all
@@ -131,7 +132,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                     addGenerationPrompt: true,
                                     truncation: false,
                                     maxLength: nil,
-                                    tools: tools,
+                                    tools: chatTemplateTools,
                                     additionalContext: additionalContext)
                             } catch VMLXTokenizers.TokenizerError.missingChatTemplate {
                                 throw MLXLMCommon.TokenizerError.missingChatTemplate
@@ -162,7 +163,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                 addGenerationPrompt: true,
                                 truncation: false,
                                 maxLength: nil,
-                                tools: tools,
+                                tools: chatTemplateTools,
                                 additionalContext: additionalContext)
                         }
                         // MiniMax-M2 native template auto-correction: every shipping
@@ -195,7 +196,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                 addGenerationPrompt: true,
                                 truncation: false,
                                 maxLength: nil,
-                                tools: tools,
+                                tools: chatTemplateTools,
                                 additionalContext: additionalContext)
                         }
                         // Mistral 4 effort coercion (mirrors Python
@@ -235,7 +236,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                         }
                         do {
                             return try upstream.applyChatTemplate(
-                                messages: messages, tools: tools, additionalContext: adjustedContext)
+                                messages: messages, tools: chatTemplateTools, additionalContext: adjustedContext)
                         } catch VMLXTokenizers.TokenizerError.missingChatTemplate {
                             // Missing-template fallbacks for bundles that ship
                             // tokenizer special tokens but no tokenizer_config
@@ -255,7 +256,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                         addGenerationPrompt: true,
                                         truncation: false,
                                         maxLength: nil,
-                                        tools: tools,
+                                        tools: chatTemplateTools,
                                         additionalContext: adjustedContext)
                                 }
                                 if upstream.bosToken == dsv4Bos {
@@ -271,7 +272,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                         addGenerationPrompt: true,
                                         truncation: false,
                                         maxLength: nil,
-                                        tools: tools,
+                                        tools: chatTemplateTools,
                                         additionalContext: adjustedContext)
                                 }
                                 if upstream.bosToken == "]~!b[",
@@ -288,7 +289,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                         addGenerationPrompt: true,
                                         truncation: false,
                                         maxLength: nil,
-                                        tools: tools,
+                                        tools: chatTemplateTools,
                                         additionalContext: additionalContext)
                                 }
                                 if upstream.bosToken == "<bos>" {
@@ -306,7 +307,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                         addGenerationPrompt: true,
                                         truncation: false,
                                         maxLength: nil,
-                                        tools: tools,
+                                        tools: chatTemplateTools,
                                         additionalContext: additionalContext)
                                 }
                                 if upstream.bosToken == "<s>",
@@ -323,7 +324,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                         addGenerationPrompt: true,
                                         truncation: false,
                                         maxLength: nil,
-                                        tools: tools,
+                                        tools: chatTemplateTools,
                                         additionalContext: additionalContext)
                                 }
                             }
@@ -379,7 +380,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                         addGenerationPrompt: true,
                                         truncation: false,
                                         maxLength: nil,
-                                        tools: tools,
+                                        tools: chatTemplateTools,
                                         additionalContext: additionalContext)
                                     if (env["VMLX_CHAT_TEMPLATE_FALLBACK_LOG"] ?? "0") == "1" {
                                         FileHandle.standardError.write(
@@ -401,6 +402,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                         additionalContext: [String: any Sendable]?,
                         addGenerationPrompt: Bool
                     ) throws -> [Int] {
+                        let chatTemplateTools = MLXLMCommon.normalizedToolsForChatTemplate(tools)
                         let env = ProcessInfo.processInfo.environment
                         if let path = env["VMLX_CHAT_TEMPLATE_OVERRIDE"], !path.isEmpty,
                            let src = try? String(contentsOfFile: path, encoding: .utf8) {
@@ -411,7 +413,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                     addGenerationPrompt: addGenerationPrompt,
                                     truncation: false,
                                     maxLength: nil,
-                                    tools: tools,
+                                    tools: chatTemplateTools,
                                     additionalContext: additionalContext)
                             } catch VMLXTokenizers.TokenizerError.missingChatTemplate {
                                 throw MLXLMCommon.TokenizerError.missingChatTemplate
@@ -437,7 +439,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                 addGenerationPrompt: addGenerationPrompt,
                                 truncation: false,
                                 maxLength: nil,
-                                tools: tools,
+                                tools: chatTemplateTools,
                                 additionalContext: additionalContext)
                         }
                         if let ctx = additionalContext,
@@ -452,7 +454,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                 addGenerationPrompt: addGenerationPrompt,
                                 truncation: false,
                                 maxLength: nil,
-                                tools: tools,
+                                tools: chatTemplateTools,
                                 additionalContext: additionalContext)
                         }
                         var mistral4AdjustedContext = additionalContext
@@ -482,7 +484,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                 addGenerationPrompt: addGenerationPrompt,
                                 truncation: false,
                                 maxLength: nil,
-                                tools: tools,
+                                tools: chatTemplateTools,
                                 additionalContext: adjustedContext)
                         } catch VMLXTokenizers.TokenizerError.missingChatTemplate {
                             if (env["VMLX_CHAT_TEMPLATE_FALLBACK_DISABLE"] ?? "0") != "1" {
@@ -494,7 +496,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                         addGenerationPrompt: addGenerationPrompt,
                                         truncation: false,
                                         maxLength: nil,
-                                        tools: tools,
+                                        tools: chatTemplateTools,
                                         additionalContext: adjustedContext)
                                 }
                                 if upstream.bosToken == dsv4Bos {
@@ -505,7 +507,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                         addGenerationPrompt: addGenerationPrompt,
                                         truncation: false,
                                         maxLength: nil,
-                                        tools: tools,
+                                        tools: chatTemplateTools,
                                         additionalContext: adjustedContext)
                                 }
                                 if upstream.bosToken == "<bos>" {
@@ -518,7 +520,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                         addGenerationPrompt: addGenerationPrompt,
                                         truncation: false,
                                         maxLength: nil,
-                                        tools: tools,
+                                        tools: chatTemplateTools,
                                         additionalContext: additionalContext)
                                 }
                                 if upstream.bosToken == "<s>",
@@ -530,7 +532,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                         addGenerationPrompt: addGenerationPrompt,
                                         truncation: false,
                                         maxLength: nil,
-                                        tools: tools,
+                                        tools: chatTemplateTools,
                                         additionalContext: additionalContext)
                                 }
                             }
@@ -543,7 +545,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                     addGenerationPrompt: addGenerationPrompt,
                                     truncation: false,
                                     maxLength: nil,
-                                    tools: tools,
+                                    tools: chatTemplateTools,
                                     additionalContext: additionalContext)
                             }
                             throw MLXLMCommon.TokenizerError.missingChatTemplate
@@ -582,7 +584,7 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                         addGenerationPrompt: addGenerationPrompt,
                                         truncation: false,
                                         maxLength: nil,
-                                        tools: tools,
+                                        tools: chatTemplateTools,
                                         additionalContext: additionalContext)
                                 } catch {
                                     continue

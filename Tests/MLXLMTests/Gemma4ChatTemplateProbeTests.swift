@@ -16,6 +16,7 @@
 import Foundation
 import XCTest
 
+import MLXLMCommon
 import VMLXJinja
 
 // Convert a heterogeneous `[String: Any]` context into the
@@ -203,6 +204,49 @@ final class Gemma4ChatTemplateProbeTests: XCTestCase {
         } catch {
             XCTFail("Gemma-4 template regressed in swift-jinja: \(error)")
         }
+    }
+
+    func testGemma4TemplateRendersNullableToolSchemaAfterNormalization() throws {
+        guard let src = try loadGemma4Template() else {
+            throw XCTSkip("Gemma-4 template not available on this machine.")
+        }
+        let template = try Template(src)
+        let rawTools: [ToolSpec] = [[
+            "type": "function",
+            "function": [
+                "name": "lookup",
+                "description": "Looks up an optional label.",
+                "parameters": [
+                    "type": "object",
+                    "properties": [
+                        "label": [
+                            "type": ["string", "null"],
+                            "description": "Optional label.",
+                        ] as [String: any Sendable],
+                    ] as [String: any Sendable],
+                    "required": ["label"],
+                ] as [String: any Sendable],
+            ] as [String: any Sendable],
+        ]]
+
+        let context: ([ToolSpec]) -> [String: Any] = { tools in
+            [
+                "bos_token": "<bos>",
+                "messages": [
+                    ["role": "user", "content": "look this up"] as [String: String],
+                ],
+                "tools": tools,
+                "add_generation_prompt": true,
+                "enable_thinking": false,
+            ]
+        }
+
+        XCTAssertThrowsError(try template.renderAny(context(rawTools)))
+
+        let normalizedTools = try XCTUnwrap(normalizedToolsForChatTemplate(rawTools))
+        let rendered = try template.renderAny(context(normalizedTools))
+        XCTAssertTrue(rendered.contains("nullable:true"))
+        XCTAssertTrue(rendered.contains("type:<|\"|>STRING<|\"|>"))
     }
 
     /// Iter 52: the minimal template must emit image / video placeholder

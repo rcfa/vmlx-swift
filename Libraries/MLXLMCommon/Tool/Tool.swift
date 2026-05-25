@@ -4,6 +4,69 @@ import Foundation
 
 public typealias ToolSpec = [String: any Sendable]
 
+public func normalizedToolsForChatTemplate(_ tools: [ToolSpec]?) -> [ToolSpec]? {
+    tools?.map(normalizedToolForChatTemplate)
+}
+
+public func normalizedToolForChatTemplate(_ tool: ToolSpec) -> ToolSpec {
+    normalizeChatTemplateValue(tool) as? ToolSpec ?? tool
+}
+
+private func normalizeChatTemplateValue(_ value: any Sendable) -> any Sendable {
+    if var object = value as? [String: any Sendable] {
+        for (key, child) in object {
+            object[key] = normalizeChatTemplateValue(child)
+        }
+        normalizeNullableTypeUnion(&object)
+        return object
+    }
+
+    if let array = value as? [any Sendable] {
+        return array.map { normalizeChatTemplateValue($0) } as [any Sendable]
+    }
+
+    return value
+}
+
+private func normalizeNullableTypeUnion(_ object: inout [String: any Sendable]) {
+    guard let entries = stringTypeArray(object["type"]) else { return }
+
+    var hasNull = false
+    var scalar: String?
+    for entry in entries {
+        if entry == "null" {
+            hasNull = true
+        } else if scalar == nil {
+            scalar = entry
+        } else {
+            return
+        }
+    }
+
+    guard let scalar else { return }
+    object["type"] = scalar
+    if hasNull {
+        object["nullable"] = true
+    }
+}
+
+private func stringTypeArray(_ value: (any Sendable)?) -> [String]? {
+    if let strings = value as? [String] {
+        return strings
+    }
+
+    if let entries = value as? [any Sendable] {
+        var strings: [String] = []
+        for entry in entries {
+            guard let string = entry as? String else { return nil }
+            strings.append(string)
+        }
+        return strings
+    }
+
+    return nil
+}
+
 /// Protocol defining the requirements for a tool.
 public protocol ToolProtocol: Sendable {
     /// The JSON Schema describing the tool's interface.
