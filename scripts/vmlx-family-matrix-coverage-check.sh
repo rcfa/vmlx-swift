@@ -51,11 +51,15 @@ reject_text() {
 MATRIX="$ROOT/scripts/vmlx-live-model-matrix.sh"
 RELEASE_LEDGER="$ROOT/.agents/vmlx-osaurus/codex/RELEASE-READINESS.md"
 PR_CHECKLIST="$ROOT/.agents/vmlx-osaurus/codex/PR-PROOF-CHECKLIST.md"
+RUNBENCH="$ROOT/RunBench/Bench.swift"
+NO_HIDDEN_TESTS="$ROOT/Tests/MLXLMCommonFocusedTests/NoHiddenReasoningCloseBiasFocusedTests.swift"
 ARCH_GUARD="$ROOT/scripts/vmlx-architecture-cache-proof-check.sh"
 QG_GUARD="$ROOT/scripts/vmlx-qwen-gemma-proof-check.sh"
 OSAURUS_UI_GUARD="$OSAURUS_ROOT/scripts/live-proof/assert-chat-ui-reasoning-routing.sh"
 
 require_file "$MATRIX" "live model matrix"
+require_file "$RUNBENCH" "RunBench live harness"
+require_file "$NO_HIDDEN_TESTS" "focused no-hidden-reasoning tests"
 require_file "$RELEASE_LEDGER" "release readiness ledger"
 require_file "$PR_CHECKLIST" "PR proof checklist"
 require_file "$ARCH_GUARD" "architecture cache guard"
@@ -83,6 +87,14 @@ require_text "$MATRIX" 'Refusing to start matrix while another RunBench live row
   "matrix refuses contaminated concurrent RunBench lanes"
 require_text "$MATRIX" 'Matrix live proof must not reuse a stale RunBench binary' \
   "matrix refuses stale RunBench binaries"
+require_text "$RUNBENCH" 'requiresToolCall' \
+  "Qwen multi-turn tool row marks tool-required turns"
+require_text "$RUNBENCH" '\$0\.requiresToolCall && \$0\.toolCalls == 0' \
+  "Qwen multi-turn tool row fails missing structured tool events"
+require_text "$RUNBENCH" 'tool-required turn .* produced no structured \.toolCall event' \
+  "Qwen multi-turn tool row reports missing structured tool event"
+require_text "$NO_HIDDEN_TESTS" '\$0\.requiresToolCall && \$0\.toolCalls == 0' \
+  "focused tests guard Qwen tool-required event failure"
 
 echo "--- source guard coverage ---"
 require_text "$ARCH_GUARD" 'DSV4.*CSA/HSA/SWA|CSA HSA pools|dsv4_0_pool_comp' \

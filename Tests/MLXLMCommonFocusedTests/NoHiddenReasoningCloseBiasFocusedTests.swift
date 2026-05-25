@@ -459,6 +459,10 @@ struct HarmonyParserFocusedTests {
         #expect(function.body.contains("tokps"))
         #expect(function.body.contains("emptyVisible"))
         #expect(function.body.contains("reasoning-only"))
+        #expect(function.body.contains("requiresToolCall"))
+        #expect(function.body.contains("$0.requiresToolCall && $0.toolCalls == 0"))
+        #expect(function.body.contains("tool-required turn"))
+        #expect(function.body.contains("structured .toolCall event"))
     }
 
     private func chunked(_ text: String, by size: Int) -> [String] {

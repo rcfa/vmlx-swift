@@ -6715,6 +6715,7 @@ func runQwenMultiturnToolCheck(modelPath: String, maxNew: Int) async throws {
 
     struct TurnResult {
         let idx: Int
+        let requiresToolCall: Bool
         let promptTokens: Int
         let chunks: Int
         let reasoningDeltas: Int
@@ -6726,32 +6727,59 @@ func runQwenMultiturnToolCheck(modelPath: String, maxNew: Int) async throws {
         let emptyVisible: Bool
     }
 
-    // Simulated 3-turn conversation mirroring tpae's screenshots.
-    // Turn 1: user asks to create a README for their game.
-    // Turn 2: same request, but with a prior (fake) tool response
-    //         in the conversation history — the model re-plans.
-    // Turn 3: follow-up asking about the weather (fresh topic, second
-    //         tool-call-likely scenario).
-    let turns: [(label: String, messages: [[String: any Sendable]])] = [
+    let weatherParams: [String: any Sendable] = [
+        "type": "object",
+        "properties": [
+            "location": ["type": "string", "description": "City or region name"] as [String: any Sendable],
+        ] as [String: any Sendable],
+        "required": ["location"],
+    ]
+    let weatherTool: [String: any Sendable] = [
+        "type": "function",
+        "function": [
+            "name": "get_weather",
+            "description": "Get current weather for a location.",
+            "parameters": weatherParams,
+        ] as [String: any Sendable],
+    ]
+
+    // Three concrete parser surfaces. Keep the prompts bounded so the row
+    // proves parser/tool behavior instead of failing because an open-ended
+    // prompt spends the whole token cap in the reasoning channel.
+    let turns: [(
+        label: String,
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]?,
+        enableThinking: Bool,
+        requiresToolCall: Bool
+    )] = [
         (
-            "Turn 1 — first request",
+            "Turn 1 — thinking visible answer",
             [
-                ["role": "user", "content": "Can you generate a README for my game?"]
-            ]
+                ["role": "user", "content": "What is 7+8-11? Reply with just the number."]
+            ],
+            nil,
+            true,
+            false
         ),
         (
-            "Turn 2 — pre-loaded context, just generate",
+            "Turn 2 — structured tool call",
             [
                 ["role": "user", "content":
-                    "I have a tic-tac-toe game in HTML/CSS/JS with two-player "
-                    + "gameplay and win detection. Write a brief README for it."]
-            ]
+                    "Call get_weather for location Tokyo. Emit only the tool call."]
+            ],
+            [weatherTool],
+            false,
+            true
         ),
         (
-            "Turn 3 — follow-up, different topic",
+            "Turn 3 — thinking off visible answer",
             [
-                ["role": "user", "content": "What's the weather in Irvine? Think briefly."]
-            ]
+                ["role": "user", "content": "Reply with exactly qwen-visible-ok."]
+            ],
+            nil,
+            false,
+            false
         ),
     ]
 
@@ -6763,11 +6791,12 @@ func runQwenMultiturnToolCheck(modelPath: String, maxNew: Int) async throws {
         do {
             promptTokens = try context.tokenizer.applyChatTemplate(
                 messages: turn.messages,
-                tools: nil,
-                additionalContext: ["enable_thinking": true])
+                tools: turn.tools,
+                additionalContext: ["enable_thinking": turn.enableThinking])
         } catch {
             promptTokens = try context.tokenizer.applyChatTemplate(
-                messages: turn.messages)
+                messages: turn.messages,
+                tools: turn.tools)
         }
         let promptIds = MLXArray(promptTokens.map { Int32($0) })
             .reshaped(1, promptTokens.count)
@@ -6818,6 +6847,7 @@ func runQwenMultiturnToolCheck(modelPath: String, maxNew: Int) async throws {
         let emptyVisible = chunkText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let r = TurnResult(
             idx: idx + 1,
+            requiresToolCall: turn.requiresToolCall,
             promptTokens: promptTokens.count,
             chunks: chunkCount,
             reasoningDeltas: reasoningCount,
@@ -6848,12 +6878,17 @@ func runQwenMultiturnToolCheck(modelPath: String, maxNew: Int) async throws {
         fputs("\nFAIL: at least one turn leaked reasoning envelope markers in .chunk\n", stderr)
         exit(1)
     }
-    if results.contains(where: \.emptyVisible) {
-        fputs("\nFAIL: at least one turn produced reasoning-only output with no visible chunk\n", stderr)
+    if results.contains(where: { $0.emptyVisible && $0.toolCalls == 0 }) {
+        fputs("\nFAIL: at least one non-tool turn produced reasoning-only output with no visible chunk\n", stderr)
         exit(2)
     }
+    if let missingTool = results.first(where: { $0.requiresToolCall && $0.toolCalls == 0 }) {
+        fputs("\nFAIL: tool-required turn \(missingTool.idx) produced no structured .toolCall event\n", stderr)
+        exit(3)
+    }
     print("\nPASS: all turns have zero reasoning envelope markers in .chunk")
-    print("PASS: no reasoning-only empty-visible turns")
+    print("PASS: no non-tool reasoning-only empty-visible turns")
+    print("PASS: all tool-required turns emitted structured .toolCall events")
     print("=== BENCH_QWEN_MULTITURN_TOOL: passed ===")
 }
 
