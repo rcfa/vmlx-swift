@@ -253,19 +253,22 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
         in text: String,
         tools: [[String: any Sendable]]?
     ) -> ToolCall? {
-        guard let tools, !tools.isEmpty else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix("{"), trimmed.hasSuffix("}"),
             let data = trimmed.data(using: .utf8),
             let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
 
-        guard let name = fallbackToolName(in: object),
-            functionSpec(named: name, in: tools) != nil
-        else { return nil }
         // Tool result envelopes can also carry a `"tool"` field. Those
         // are not new invocations, so leave them to the visible/text path.
         guard object["ok"] == nil, object["result"] == nil else { return nil }
+
+        let hasSchemaList = tools?.isEmpty == false
+        guard let name = fallbackToolName(in: object, allowBareName: hasSchemaList)
+        else { return nil }
+        if let tools, !tools.isEmpty {
+            guard functionSpec(named: name, in: tools) != nil else { return nil }
+        }
 
         let argsObject: Any
         if let function = object["function"] as? [String: Any] {
@@ -289,15 +292,15 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
         return ToolCall(function: .init(name: name, arguments: args))
     }
 
-    private func fallbackToolName(in object: [String: Any]) -> String? {
+    private func fallbackToolName(in object: [String: Any], allowBareName: Bool) -> String? {
         if let tool = object["tool"] as? String { return tool }
         if let toolName = object["tool_name"] as? String { return toolName }
-        if let name = object["name"] as? String { return name }
         if let function = object["function"] as? [String: Any],
             let name = function["name"] as? String
         {
             return name
         }
+        if allowBareName, let name = object["name"] as? String { return name }
         return nil
     }
 
