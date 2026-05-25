@@ -195,6 +195,12 @@ else
   fail_msg "vmlx Qwen/Gemma proof gate exists"
 fi
 
+if [[ -x "$ROOT/scripts/vmlx-family-matrix-coverage-check.sh" ]]; then
+  run_gate vmlx-family-matrix-coverage "$ROOT/scripts/vmlx-family-matrix-coverage-check.sh"
+else
+  fail_msg "vmlx family matrix coverage gate exists"
+fi
+
 if [[ -x "$OSAURUS_ROOT/scripts/live-proof/assert-keychain-free-proof-path.sh" ]]; then
   run_gate osaurus-keychain-free "$OSAURUS_ROOT/scripts/live-proof/assert-keychain-free-proof-path.sh"
 else
