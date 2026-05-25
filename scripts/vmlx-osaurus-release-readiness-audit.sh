@@ -255,6 +255,12 @@ else
   fail_msg "Osaurus chat reasoning delta guard exists"
 fi
 
+if [[ -x "$OSAURUS_ROOT/scripts/live-proof/assert-chat-ui-reasoning-routing.sh" ]]; then
+  run_gate osaurus-chat-ui-reasoning "$OSAURUS_ROOT/scripts/live-proof/assert-chat-ui-reasoning-routing.sh"
+else
+  fail_msg "Osaurus chat UI reasoning guard exists"
+fi
+
 if [[ -x "$OSAURUS_ROOT/scripts/live-proof/assert-http-channel-load-cancellation.sh" ]]; then
   run_gate osaurus-http-cancellation "$OSAURUS_ROOT/scripts/live-proof/assert-http-channel-load-cancellation.sh"
 else
