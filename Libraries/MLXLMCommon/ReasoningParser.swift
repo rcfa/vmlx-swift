@@ -230,7 +230,7 @@ public struct ReasoningParser: Sendable {
                     before,
                     into: &out,
                     final: true,
-                    stripIdentifierOnlyAtEnd: false)
+                    stripIdentifierOnlyAtEnd: true)
                 buffer.removeSubrange(buffer.startIndex..<range.upperBound)
                 insideHarmonyChannel = false
                 harmonyChannelIsReasoning = false
@@ -270,6 +270,28 @@ public struct ReasoningParser: Sendable {
                     of: gptMessage,
                     range: range.upperBound..<buffer.endIndex)
                 else {
+                    if let newlineRange = buffer.range(
+                        of: "\n",
+                        range: range.upperBound..<buffer.endIndex)
+                    {
+                        let channelName = String(buffer[range.upperBound..<newlineRange.lowerBound])
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .lowercased()
+                        if channelName == "thought" || channelName == "thinking" {
+                            let before = stripHarmonyControlText(String(buffer[..<range.lowerBound]))
+                            if !before.isEmpty {
+                                out.append(.content(before))
+                            }
+                            buffer.removeSubrange(buffer.startIndex..<newlineRange.upperBound)
+                            insideHarmonyChannel = true
+                            harmonyChannelIsReasoning = true
+                            harmonyChannelEndTags = [endTag]
+                            harmonyChannelShouldStripName = false
+                            harmonyChannelNameBuffer.removeAll(keepingCapacity: false)
+                            insideReasoning = true
+                            continue
+                        }
+                    }
                     let before = stripHarmonyControlText(String(buffer[..<range.lowerBound]))
                     if !before.isEmpty {
                         out.append(.content(before))
@@ -444,6 +466,7 @@ public struct ReasoningParser: Sendable {
             "<|start|>tool",
             "<|start|>",
             "<|channel|>",
+            "<channel|>",
             "<|message|>",
             "<|end|>",
             "<|return|>",
@@ -664,11 +687,10 @@ extension ReasoningParser {
             // followed by a JSON action block then `<channel|>` for
             // ReAct-style tool hints, `<|channel>analysis…<channel|>`
             // etc. We latch on the bare `<|channel>` opener so ANY
-            // channel routes to `.reasoning` and nothing in the
-            // envelope leaks into `.chunk`. The channel-name bytes
-            // after `<|channel>` are emitted as part of the reasoning
-            // delta — osaurus-side UIs can show them raw or split on
-            // the first newline if they want channel routing.
+            // Gemma-style channel routes to `.reasoning` and nothing in
+            // the envelope leaks into `.chunk`. Simple identifier channel
+            // headers after `<|channel>` (for example `thought\n`) are
+            // stripped before the reasoning delta reaches osaurus.
             return ReasoningParser(
                 startTag: "<|channel>",
                 endTag: "<channel|>",

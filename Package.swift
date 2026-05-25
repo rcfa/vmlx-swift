@@ -745,6 +745,7 @@ let package = Package(
                 "JangPressPrestackerCleanupTests.swift",
                 "DeepseekV4IndexerCausalTopKTests.swift",
                 "DeepseekV4ReasoningPolicyTests.swift",
+                "Gemma4ThoughtChannelParserFocusedTests.swift",
                 "Gemma3nTextSanitizeFocusedTests.swift",
                 "MediaCachePlaceholderTests.swift",
                 "NemotronHOmniPreEncodedAudioTests.swift",
