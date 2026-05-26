@@ -876,6 +876,12 @@ The current assistant response MUST be a tool call. Reply only with a `<tool_cal
             {{- '\n\n<IMPORTANT>\nThe current assistant response MUST be a tool call. Reply only with a `<zyphra_tool_call>` block for one available function and no prose before the tool result. Include every required `<parameter=...>` value exactly as requested.' -}}
             {%- if required_tool_name -%}
                 {{- '\nUse the `' ~ required_tool_name ~ '` function.' -}}
+                {%- for tool in tools -%}
+                    {%- set selected_tool = tool['function'] if tool['function'] is defined else tool -%}
+                    {%- if selected_tool['name'] == required_tool_name and selected_tool['parameters'] is defined and selected_tool['parameters']['required'] is defined -%}
+                        {{- '\nRequired parameters for `' ~ required_tool_name ~ '`: ' ~ (selected_tool['parameters']['required'] | join(', ')) ~ '.' -}}
+                    {%- endif -%}
+                {%- endfor -%}
             {%- endif -%}
             {{- '\n</IMPORTANT>' -}}
         {%- endif -%}

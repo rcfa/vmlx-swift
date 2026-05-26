@@ -644,6 +644,7 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         #expect(rendered.contains("<zyphra_tool_call>"))
         #expect(rendered.contains("The current assistant response MUST be a tool call"))
         #expect(rendered.contains("Use the `osaurus_probe_tool_0` function."))
+        #expect(rendered.contains("Required parameters for `osaurus_probe_tool_0`: query."))
         #expect(rendered.hasSuffix("<|im_start|>assistant\n"))
         #expect(!rendered.contains("<think>"))
         #expect(!rendered.contains("enable_thinking"))

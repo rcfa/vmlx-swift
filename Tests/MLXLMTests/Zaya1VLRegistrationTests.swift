@@ -46,6 +46,13 @@ struct Zaya1VLRegistrationTests {
                 atPath: dir.appendingPathComponent("preprocessor_config.json").path)
     }
 
+    static var hasJANGTQ4TokenizerBundle: Bool {
+        let dir = URL(fileURLWithPath: bundlePath("ZAYA1-VL-8B-JANGTQ4"))
+        return FileManager.default.fileExists(atPath: dir.appendingPathComponent("tokenizer.json").path)
+            && FileManager.default.fileExists(
+                atPath: dir.appendingPathComponent("preprocessor_config.json").path)
+    }
+
     struct VisionPadTokenizer: MLXLMCommon.Tokenizer {
         var forcedImageCount: Int? = nil
         var bosToken: String? = nil
@@ -385,6 +392,59 @@ struct Zaya1VLRegistrationTests {
 
         #expect(decoded.contains("<|vision_start|>"), "decoded prompt: \(decoded)")
         #expect(decoded.contains("<image>") || tokens.contains(262_147),
+            "decoded prompt: \(decoded)")
+    }
+
+    @Test("Real ZAYA1-VL tokenizer renders text-only tool schemas from shimmed template",
+          .enabled(if: hasJANGTQ4TokenizerBundle))
+    func realTokenizerRendersTextOnlyToolSchemaFromShimmedTemplate() async throws {
+        let dir = URL(fileURLWithPath: Self.bundlePath("ZAYA1-VL-8B-JANGTQ4"))
+        let tokenizerDir = JangLoader.resolveTokenizerClassSubstitution(
+            for: JangLoader.resolveChatTemplateSidecarSubstitution(
+                for: JangLoader.resolveTokenizerDirectory(for: dir)))
+        let tokenizer = try await #huggingFaceTokenizerLoader().load(from: tokenizerDir)
+        let messages: [[String: any Sendable]] = [
+            [
+                "role": "user",
+                "content": "Count the lines in exactly this text: alpha\nbeta\ngamma",
+            ],
+        ]
+        let tools: [[String: any Sendable]] = [
+            [
+                "type": "function",
+                "function": [
+                    "name": "line_count",
+                    "description": "Count newline-delimited lines.",
+                    "parameters": [
+                        "type": "object",
+                        "properties": [
+                            "text": [
+                                "type": "string",
+                                "description": "Text whose lines should be counted.",
+                            ] as [String: any Sendable],
+                        ] as [String: any Sendable],
+                        "required": ["text"],
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable],
+            ] as [String: any Sendable],
+        ]
+        let tokens = try tokenizer.applyChatTemplate(
+            messages: messages,
+            tools: tools,
+            additionalContext: [
+                "enable_thinking": false,
+                "tool_choice": "required",
+                "tool_choice_name": "line_count",
+            ])
+        let decoded = tokenizer.decode(tokenIds: tokens, skipSpecialTokens: false)
+
+        #expect(decoded.contains("# Tools"), "decoded prompt: \(decoded)")
+        #expect(decoded.contains("<name>line_count</name>"), "decoded prompt: \(decoded)")
+        #expect(decoded.contains("<name>text</name>"), "decoded prompt: \(decoded)")
+        #expect(decoded.contains("<required>[\"text\"]</required>"), "decoded prompt: \(decoded)")
+        #expect(decoded.contains("<zyphra_tool_call>"), "decoded prompt: \(decoded)")
+        #expect(decoded.contains("Use the `line_count` function."), "decoded prompt: \(decoded)")
+        #expect(decoded.contains("Required parameters for `line_count`: text."),
             "decoded prompt: \(decoded)")
     }
 
