@@ -3065,7 +3065,9 @@ private func generateLoopTask<Handler: TokenLoopHandler>(
             Stream().synchronize()
             iterator.storeCacheAfterGeneration(
                 generatedTokenIds: generatedTokenIds,
-                includeGeneratedBoundary: stopReason == .stop && !handler.stopSequenceHit)
+                includeGeneratedBoundary: stopReason == .stop
+                    && !handler.stopSequenceHit
+                    && !handler.emittedToolCall)
 
             Stream().synchronize()
 
@@ -3349,11 +3351,19 @@ private protocol TokenLoopHandler: Sendable {
     /// terminal flush. Must be snapshotted before `onGenerationEnd`, because
     /// flushing drains and closes parser state.
     var unclosedReasoning: Bool { get }
+
+    /// True when this generation emitted a structured tool-call event.
+    /// Tool-call generations must not publish a generated/post-answer cache
+    /// boundary: the next turn's prompt includes tool history, and restoring
+    /// after the assistant's tool envelope can skip the required tool-call
+    /// decode on warm cache hits.
+    var emittedToolCall: Bool { get }
 }
 
 extension TokenLoopHandler {
     var stopSequenceHit: Bool { false }
     var unclosedReasoning: Bool { false }
+    var emittedToolCall: Bool { false }
 }
 
 private struct TextToolTokenLoopHandler: TokenLoopHandler, @unchecked Sendable {
@@ -3375,6 +3385,7 @@ private struct TextToolTokenLoopHandler: TokenLoopHandler, @unchecked Sendable {
     /// Flipped by `dispatch` when the stop matcher fires, so the loop
     /// task can signal `.stop` in its terminal `.info` event.
     private(set) var stopSequenceHit: Bool = false
+    private(set) var emittedToolCall: Bool = false
 
     init(
         tokenizer: Tokenizer,
@@ -3542,6 +3553,9 @@ private struct TextToolTokenLoopHandler: TokenLoopHandler, @unchecked Sendable {
             }
             return !stopSequenceHit
         case .reasoning, .toolCall, .info:
+            if case .toolCall = event {
+                emittedToolCall = true
+            }
             if case .terminated = emit(event) {
                 return false
             }

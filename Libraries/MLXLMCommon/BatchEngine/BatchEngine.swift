@@ -2310,6 +2310,7 @@ public actor BatchEngine {
             // it covers prompt + generated tokens exactly enough to resume.
             let generatedBoundaryTokens = promptTokens + slot.generatedTokenIds
             if reason == .stop,
+               !slot.disablesGeneratedCacheBoundary,
                !slot.generatedTokenIds.isEmpty,
                cacheCovers(generatedBoundaryTokens.count, cache: slot.cache)
             {

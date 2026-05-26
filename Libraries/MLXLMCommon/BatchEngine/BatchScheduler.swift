@@ -102,6 +102,15 @@ struct BatchSlot {
     /// the previous conversation prefix instead of missing every turn.
     var generatedTokenIds: [Int] = []
 
+    /// True when this request can emit structured tool calls.
+    ///
+    /// BatchEngine parses tool calls outside the actor that stores cache
+    /// entries, so finishSlot cannot observe the final `.toolCall` event
+    /// directly. Treat tool-enabled requests conservatively: store prompt and
+    /// history boundaries, but not generated/post-answer boundaries that could
+    /// make a warm required-tool replay resume after the tool envelope.
+    let disablesGeneratedCacheBoundary: Bool
+
     /// Number of prompt tokens (for completion info).
     let promptTokenCount: Int
 
@@ -185,6 +194,8 @@ extension BatchSlot {
         self.nextToken = nil
         self.generatedTokenCount = 0
         self.generatedTokenIds = []
+        self.disablesGeneratedCacheBoundary =
+            request.input.toolSchemas?.isEmpty == false
         self.promptTokenCount = request.input.text.tokens.size
         self.prefillStartTime = Date()
         self.prefillStepSize = request.parameters.prefillStepSize
