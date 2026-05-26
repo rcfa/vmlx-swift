@@ -141,7 +141,14 @@ public struct DeepseekV4ChatEncoder: Sendable {
             finalRendered.contains(where: { !($0.tools?.isEmpty ?? true) }),
             finalRendered.last?.role != .latestReminder
         {
-            finalRendered.append(Self.requiredToolChoiceReminder())
+            let reminder = Self.requiredToolChoiceReminder()
+            if let tailIndex = finalRendered.lastIndex(where: {
+                $0.role == .user || $0.role == .developer
+            }), tailIndex >= contextLen {
+                finalRendered.insert(reminder, at: tailIndex)
+            } else {
+                finalRendered.append(reminder)
+            }
         }
 
         for i in 0..<(finalRendered.count - contextLen) {

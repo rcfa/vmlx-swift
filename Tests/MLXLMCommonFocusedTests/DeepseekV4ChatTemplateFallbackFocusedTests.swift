@@ -150,14 +150,15 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
 
         let action = "<\u{FF5C}action\u{FF5C}>"
         let reminder = "<\u{FF5C}latest_reminder\u{FF5C}>"
+        let tail = "<\u{FF5C}Assistant\u{FF5C}></think><\u{FF5C}action\u{FF5C}>"
         let actionRange = rendered.range(of: action)
         let reminderRange = rendered.range(of: reminder)
         #expect(actionRange != nil)
         #expect(reminderRange != nil)
-        #expect(actionRange!.lowerBound < reminderRange!.lowerBound)
+        #expect(reminderRange!.lowerBound < actionRange!.lowerBound)
         #expect(rendered.contains("The active API tool_choice is required"))
         #expect(rendered.contains("<\u{FF5C}DSML\u{FF5C}tool_calls> block"))
-        #expect(rendered.hasSuffix("Do not answer in prose before the tool result."))
+        #expect(rendered.hasSuffix(tail))
     }
 
     @Test("Nemotron required tool choice keeps native XML tool contract")
