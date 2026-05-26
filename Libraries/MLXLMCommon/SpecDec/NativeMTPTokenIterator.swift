@@ -241,9 +241,7 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
                     if cacheLookupUsesPostPrepareAlias {
                         self.promptTokenIds = cacheLookupTokenIds
                     }
-                    let hasPathDependentLayer = self.cache.contains { layer in
-                        layer is MambaCache || layer is ArraysCache || layer is ZayaCCACache
-                    }
+                    let hasPathDependentLayer = cacheContainsPathDependentState(self.cache)
                     let unsafePartial =
                         input.cacheHitSuffixContainsMediaPlaceholder(remainingTokens)
                     let unsafeFullHit = remainingTokens.isEmpty && hasPathDependentLayer

@@ -25,7 +25,8 @@ struct BatchEngineGrowingChatCacheSourceTests {
         #expect(source.contains("slot.originalInput.cacheHitSuffixContainsMediaPlaceholder(remaining)"))
         #expect(source.contains("let unsafeFullHit = remaining.isEmpty && hasPathDependentLayer"))
         #expect(source.contains("!slot.originalInput.requiresPostPrepareCacheKey"))
-        #expect(source.contains("layer is MambaCache || layer is ArraysCache || layer is ZayaCCACache"))
+        #expect(source.contains("cacheContainsPathDependentState(slot.cache)"))
+        #expect(!source.contains("let hasPathDependentLayer = slot.cache.contains"))
         #expect(source.contains("shouldSkipHistoryBoundaryRederiveAfterTrimMiss(promptCacheSnapshot)"))
         #expect(source.contains("Skipped history-boundary cache rederive after trim miss for slot"))
         #expect(!source.contains("let unsafePartial = !remaining.isEmpty &&\n                        (hasMediaContent || hasSSMLayer)"))
@@ -46,7 +47,8 @@ struct BatchEngineGrowingChatCacheSourceTests {
         #expect(source.contains("includeGeneratedBoundary: stopReason == .stop && !handler.stopSequenceHit"))
         #expect(source.contains("input.cacheHitSuffixContainsMediaPlaceholder(remainingTokens)"))
         #expect(source.contains("let unsafeFullHit = remainingTokens.isEmpty && hasPathDependentLayer"))
-        #expect(source.contains("layer is MambaCache || layer is ArraysCache || layer is ZayaCCACache"))
+        #expect(source.contains("cacheContainsPathDependentState(self.cache)"))
+        #expect(!source.contains("let hasPathDependentLayer = self.cache.contains"))
         #expect(source.contains("shouldSkipHistoryBoundaryRederiveAfterTrimMiss(promptSnapshot)"))
         #expect(source.contains("TokenIterator: skipped history-boundary cache rederive after trim miss"))
         #expect(!source.contains("let unsafePartial = !remainingTokens.isEmpty &&\n                        (hasMediaContent || hasSSMLayer)"))
@@ -133,6 +135,7 @@ struct BatchEngineGrowingChatCacheSourceTests {
         }
         #expect(evaluate.contains("history-boundary cache rederive after trim miss"))
         #expect(batch.contains("history-boundary cache rederive after trim miss"))
+        #expect(nativeMTP.contains("cacheContainsPathDependentState(self.cache)"))
     }
 
     @Test("token iterator does not blanket-eval disk-backed cache snapshots before store")

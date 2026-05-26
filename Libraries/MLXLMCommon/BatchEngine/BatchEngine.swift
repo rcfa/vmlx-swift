@@ -1363,9 +1363,7 @@ public actor BatchEngine {
                     //    different: a complete state at boundary N plus
                     //    prefill over [N...M] is the intended Markov resume
                     //    path for MambaCache, ArraysCache, and ZayaCCACache.
-                    let hasPathDependentLayer = slot.cache.contains { layer in
-                        layer is MambaCache || layer is ArraysCache || layer is ZayaCCACache
-                    }
+                    let hasPathDependentLayer = cacheContainsPathDependentState(slot.cache)
                     // Full disk hit on hybrid-SSM is ALSO unsafe: the
                     // restored SSM state already includes the last
                     // token's recurrence contribution, so the
