@@ -1256,7 +1256,7 @@ enum OmniBench {
         }
         let visible = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return (
-            visible.isEmpty ? reasoning.trimmingCharacters(in: .whitespacesAndNewlines) : visible,
+            visible,
             reasoning,
             info?.generationTokenCount ?? events,
             info)

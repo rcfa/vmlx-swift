@@ -471,9 +471,7 @@ enum JangPressRegressionBench {
         var reasoning: String
         var info: GenerateCompletionInfo?
 
-        var visibleText: String {
-            text.isEmpty ? reasoning : text
-        }
+        var visibleText: String { text }
     }
 
     private static func ask(
@@ -485,15 +483,15 @@ enum JangPressRegressionBench {
         ui.additionalContext = ["enable_thinking": enableThinking]
         let lm = try await ctx.processor.prepare(input: ui)
         nonisolated(unsafe) let sendable = lm
-        var p = GenerateParameters(maxTokens: maxNewTokens, temperature: 0)
+        let fallback = GenerateParameters(maxTokens: maxNewTokens)
+        var p = GenerateParameters(
+            generationConfig: ctx.configuration.generationDefaults,
+            fallback: fallback)
+        p.maxTokens = maxNewTokens
         p.prefillStepSize = 512
         let stream = await engine.generate(input: sendable, parameters: p)
-        // Collect BOTH .chunk and .reasoning — MiniMax / Qwen3 thinking
-        // models emit visible content inside <think>...</think> which
-        // the ReasoningParser routes to `.reasoning`, leaving `.chunk`
-        // empty. Coherency is "did the model say anything coherent",
-        // so prefer `.chunk` when non-empty, else fall back to
-        // `.reasoning`.
+        // Collect BOTH .chunk and .reasoning, but keep them separate:
+        // reasoning-only output is not a visible-answer pass.
         var text = ""
         var reasoning = ""
         var info: GenerateCompletionInfo?

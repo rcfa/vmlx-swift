@@ -38,10 +38,15 @@ struct NoHiddenReasoningCloseBiasFocusedTests {
             "RunBench/StabilityBench.swift",
             "RunBench/VLBench.swift",
             "RunBench/OmniBench.swift",
+            "RunBench/JangPressRegressionBench.swift",
         ]
         for file in files {
             let source = try String(contentsOfFile: file, encoding: .utf8)
             #expect(!source.contains("text.isEmpty ? reasoning : text"))
+            #expect(!source.contains("visible.isEmpty ? reasoning : visible"))
+            #expect(!source.contains("visible.isEmpty ? r.reasoning : visible"))
+            #expect(!source.contains("r.text.isEmpty ? r.reasoning : r.text"))
+            #expect(!source.contains("visible.isEmpty ? reasoning.trimmingCharacters"))
             #expect(!source.contains("reasoning.isEmpty ? r.text : r.reasoning"))
             #expect(!source.contains("r1.reasoning.isEmpty ? r1.text : r1.reasoning"))
             #expect(!source.contains("r2.reasoning.isEmpty ? r2.text : r2.reasoning"))
@@ -58,6 +63,10 @@ struct NoHiddenReasoningCloseBiasFocusedTests {
             contentsOfFile: "RunBench/StabilityBench.swift",
             encoding: .utf8)
         #expect(stability.contains("empty visible output"))
+        let jangPress = try String(
+            contentsOfFile: "RunBench/JangPressRegressionBench.swift",
+            encoding: .utf8)
+        #expect(!jangPress.contains("var p = GenerateParameters(maxTokens: maxNewTokens, temperature: 0)"))
     }
 
     @Test("VL media-salt proof reports token rate and peak memory gate")
@@ -94,6 +103,19 @@ struct NoHiddenReasoningCloseBiasFocusedTests {
         #expect(source.contains("grep -q $'\\tfail:'"))
         #expect(source.contains("matrix completed with failing rows"))
         #expect(source.contains("exit 1"))
+        #expect(source.contains("bundle-derived"))
+        #expect(source.contains("sampler_defaults"))
+        #expect(source.contains("fail:missing-bundle-sampler-defaults-would-use-engine-fallback"))
+        #expect(source.contains("missing bundle sampler defaults are failing evidence"))
+        #expect(source.contains("assert_runbench_fresh"))
+        #expect(source.contains("VMLX_MATRIX_ALLOW_STALE_RUNBENCH"))
+        #expect(source.contains("Matrix live proof must not reuse a stale RunBench binary"))
+        #expect(source.contains("-newer \"$binary\""))
+        #expect(source.contains("assert_live_lane_clear"))
+        #expect(source.contains("VMLX_RUNBENCH_LOCK_DIR"))
+        #expect(source.contains("VMLX_MATRIX_ALLOW_ACTIVE_RUNBENCH"))
+        #expect(source.contains("Refusing to start matrix while another RunBench live row is active"))
+        #expect(source.contains("Removing stale RunBench lock before matrix start"))
     }
 
     @Test("terminal info snapshots unclosed reasoning before parser flush")
@@ -463,6 +485,25 @@ struct HarmonyParserFocusedTests {
         #expect(function.body.contains("$0.requiresToolCall && $0.toolCalls == 0"))
         #expect(function.body.contains("tool-required turn"))
         #expect(function.body.contains("structured .toolCall event"))
+    }
+
+    @Test("DSV4 coherence gate honors bundle defaults")
+    func dsv4CoherenceGateHonorsGenerationDefaults() throws {
+        let bench = try String(contentsOfFile: "RunBench/Bench.swift", encoding: .utf8)
+        let function = try #require(
+            Self.extractFunction(named: "runDSV4CoherenceGate", from: bench),
+            "runDSV4CoherenceGate not found"
+        )
+
+        #expect(function.body.contains("generationConfig: ctx.configuration.generationDefaults"))
+        #expect(function.body.contains("BENCH_DSV4_TEMP\"].flatMap(Float.init)"))
+        #expect(function.body.contains("BENCH_DSV4_TOP_P\"].flatMap(Float.init)"))
+        #expect(function.body.contains("BENCH_DSV4_REPETITION_PENALTY\"].flatMap(Float.init)"))
+        #expect(function.body.contains("BENCH_DSV4_MAX_REPETITION_PENALTY\"].flatMap(Float.init)"))
+        #expect(!function.body.contains("BENCH_DSV4_TEMP\"] ?? \"0\""))
+        #expect(!function.body.contains("BENCH_DSV4_TOP_P\"] ?? \"0.95\""))
+        #expect(!function.body.contains("BENCH_DSV4_REPETITION_PENALTY\"] ?? \"1.0\""))
+        #expect(!function.body.contains("BENCH_DSV4_MAX_REPETITION_PENALTY\"] ?? \"1.05\""))
     }
 
     private func chunked(_ text: String, by size: Int) -> [String] {

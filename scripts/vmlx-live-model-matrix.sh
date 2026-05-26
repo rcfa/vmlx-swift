@@ -315,11 +315,11 @@ discover_models() {
 }
 
 write_inventory() {
-  printf "status\tsize_gb\tbytes\tprofile\tmtp_tensors\tmtp_auto\tarchitecture\tmodel_type\tgen_max_new_tokens\tgen_temperature\tgen_top_p\tgen_top_k\tgen_min_p\tgen_repetition_penalty\tgen_do_sample\tpath\n" \
+  printf "status\tsize_gb\tbytes\tprofile\tmtp_tensors\tmtp_auto\tarchitecture\tmodel_type\tgen_max_new_tokens\tgen_temperature\tgen_top_p\tgen_top_k\tgen_min_p\tgen_repetition_penalty\tgen_do_sample\tsampler_defaults\tpath\n" \
     >"${RUN_DIR}/models.tsv"
   while IFS= read -r dir; do
     [[ -n "$dir" && -f "$dir/config.json" ]] || continue
-    local bytes size arch model_type profile mtp_tensors mtp_auto gen_config gen_max gen_temp gen_top_p gen_top_k gen_min_p gen_rep gen_do_sample
+    local bytes size arch model_type profile mtp_tensors mtp_auto gen_config gen_max gen_temp gen_top_p gen_top_k gen_min_p gen_rep gen_do_sample sampler_defaults
     bytes="$(model_size_bytes "$dir")"
     size="$(model_size_gb "$bytes")"
     arch="$(json_value "$dir/config.json" '.architectures?[0]' unknown)"
@@ -345,10 +345,19 @@ write_inventory() {
       gen_top_k="missing"; gen_min_p="missing"; gen_rep="missing"
       gen_do_sample="missing"
     fi
-    printf "discovered\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    sampler_defaults="partial"
+    if [[ "$gen_temp" =~ ^(nil|missing)$ && "$gen_top_p" =~ ^(nil|missing)$ \
+        && "$gen_top_k" =~ ^(nil|missing)$ && "$gen_min_p" =~ ^(nil|missing)$ \
+        && "$gen_rep" =~ ^(nil|missing)$ && "$gen_do_sample" =~ ^(nil|missing)$ ]]; then
+      sampler_defaults="missing"
+    elif [[ ! "$gen_temp" =~ ^(nil|missing)$ && ! "$gen_top_p" =~ ^(nil|missing)$ \
+        && ! "$gen_top_k" =~ ^(nil|missing)$ ]]; then
+      sampler_defaults="complete"
+    fi
+    printf "discovered\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$size" "$bytes" "$profile" "$mtp_tensors" "$mtp_auto" "$arch" "$model_type" \
       "$gen_max" "$gen_temp" "$gen_top_p" "$gen_top_k" "$gen_min_p" \
-      "$gen_rep" "$gen_do_sample" "$dir" \
+      "$gen_rep" "$gen_do_sample" "$sampler_defaults" "$dir" \
       >>"${RUN_DIR}/models.tsv"
   done < <(discover_models)
 }
@@ -593,7 +602,13 @@ safe_name() {
 }
 
 maybe_build() {
-  [[ "$BUILD" -eq 0 || "$PROFILE" == "inventory" ]] && return 0
+  if [[ "$PROFILE" == "inventory" ]]; then
+    return 0
+  fi
+  if [[ "$BUILD" -eq 0 ]]; then
+    assert_runbench_fresh
+    return 0
+  fi
   if [[ "$BUILD_CONFIGURATION" == "release" ]]; then
     run_logged build_runbench env DEVELOPER_DIR="$SWIFT_DEVELOPER_DIR" \
       swift build -c release --jobs "${VMLINUX_SWIFT_BUILD_JOBS:-2}" \
@@ -605,8 +620,60 @@ maybe_build() {
   fi
 }
 
+assert_runbench_fresh() {
+  local binary=".build/${BUILD_CONFIGURATION}/RunBench"
+  if [[ "${VMLX_MATRIX_ALLOW_STALE_RUNBENCH:-${VMLINUX_MATRIX_ALLOW_STALE_RUNBENCH:-0}}" == "1" ]]; then
+    echo "WARNING: allowing stale RunBench binary because VMLX_MATRIX_ALLOW_STALE_RUNBENCH=1" >&2
+    return 0
+  fi
+  if [[ ! -x "$binary" ]]; then
+    echo "--no-build requested but $binary is missing or not executable" >&2
+    echo "Re-run without --no-build, or set VMLX_MATRIX_ALLOW_STALE_RUNBENCH=1 for an explicit diagnostic override." >&2
+    exit 2
+  fi
+  local newer
+  newer="$(find Package.swift RunBench Libraries Tests scripts \
+    -type f \
+    \( -name '*.swift' -o -name '*.sh' -o -name 'Package.swift' \) \
+    -newer "$binary" -print -quit 2>/dev/null || true)"
+  if [[ -n "$newer" ]]; then
+    echo "--no-build requested but $binary is older than source file: $newer" >&2
+    echo "Matrix live proof must not reuse a stale RunBench binary. Re-run without --no-build, or set VMLX_MATRIX_ALLOW_STALE_RUNBENCH=1 for an explicit diagnostic override." >&2
+    exit 2
+  fi
+}
+
+assert_live_lane_clear() {
+  if [[ "$PROFILE" == "inventory" || "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ "${VMLX_MATRIX_ALLOW_ACTIVE_RUNBENCH:-${VMLINUX_MATRIX_ALLOW_ACTIVE_RUNBENCH:-0}}" == "1" ]]; then
+    echo "WARNING: allowing active RunBench lane because VMLX_MATRIX_ALLOW_ACTIVE_RUNBENCH=1" >&2
+    return 0
+  fi
+
+  local lock_dir="${VMLX_RUNBENCH_LOCK_DIR:-${VMLINUX_RUNBENCH_LOCK_DIR:-/tmp/vmlx-runbench-live.lock}}"
+  local pid_file="${lock_dir}/pid"
+  [[ -f "$pid_file" ]] || return 0
+
+  local owner_pid owner_started owner_cmd
+  owner_pid="$(sed -n '1p' "$pid_file" 2>/dev/null || true)"
+  owner_started="$(sed -n '2p' "$pid_file" 2>/dev/null || true)"
+  owner_cmd="$(sed -n '3p' "$pid_file" 2>/dev/null || true)"
+  if [[ "$owner_pid" =~ ^[0-9]+$ ]] && kill -0 "$owner_pid" 2>/dev/null; then
+    echo "Refusing to start matrix while another RunBench live row is active." >&2
+    echo "lock=${lock_dir} owner=${owner_pid} started=${owner_started} command=${owner_cmd}" >&2
+    echo "Wait for that row to finish, or set VMLX_MATRIX_ALLOW_ACTIVE_RUNBENCH=1 for an explicit diagnostic override." >&2
+    exit 2
+  fi
+
+  echo "Removing stale RunBench lock before matrix start: ${lock_dir}" >&2
+  rm -rf "$lock_dir"
+}
+
 write_inventory
 maybe_build
+assert_live_lane_clear
 
 if [[ "$PROFILE" == "inventory" ]]; then
   {
@@ -621,9 +688,16 @@ if [[ "$PROFILE" == "inventory" ]]; then
   exit 0
 fi
 
-while IFS=$'\t' read -r status size_gb bytes family_profile mtp_tensors mtp_auto arch model_type gen_max gen_temp gen_top_p gen_top_k gen_min_p gen_rep gen_do_sample dir; do
+while IFS=$'\t' read -r status size_gb bytes family_profile mtp_tensors mtp_auto arch model_type gen_max gen_temp gen_top_p gen_top_k gen_min_p gen_rep gen_do_sample sampler_defaults dir; do
   [[ "$status" == "discovered" ]] || continue
   name="$(safe_name "$dir")"
+  if [[ "$sampler_defaults" == "missing" ]]; then
+    mark_status "${name}.sampler_defaults" \
+      "fail:missing-bundle-sampler-defaults-would-use-engine-fallback"
+  elif [[ "$sampler_defaults" == "partial" ]]; then
+    mark_status "${name}.sampler_defaults" \
+      "partial:incomplete-bundle-sampler-defaults"
+  fi
   if [[ "$ALLOW_HUGE" -eq 0 ]] && is_gt_gb "$bytes" "$MAX_SIZE_GB"; then
     printf "%s\tskipped:size>%sGB\n" "$name" "$MAX_SIZE_GB" >>"${RUN_DIR}/status.tsv"
     continue
@@ -701,6 +775,14 @@ done <"${RUN_DIR}/models.tsv"
   printf -- "- batch/media max tokens: %s\n" "$(matrix_max_tokens)"
   printf -- "- allow huge: %s\n" "$ALLOW_HUGE"
   printf -- "- dry run: %s\n\n" "$DRY_RUN"
+  printf "## Acceptance contract\n\n"
+  printf -- "- no row is production-ready from load success alone\n"
+  printf -- "- every generated row must report token/s and memory evidence\n"
+  printf -- "- reasoning ON/OFF rows must not leak thinking/tool markers into visible chunks\n"
+  printf -- "- tool rows must emit structured tool-call events, not raw prompt markup\n"
+  printf -- "- sampling defaults must be bundle-derived unless explicitly overridden by the row\n"
+  printf -- "- missing bundle sampler defaults are failing evidence because they require engine fallback values\n"
+  printf -- "- cache rows must match architecture: KV/TurboQuant KV, hybrid SSM companion, CCA/HY3 companion, DSV4 CSA/HSA/SWA, and VL/video media cache where applicable\n\n"
   printf "## Status\n\n"
   printf "| Row | Status |\n|---|---|\n"
   while IFS=$'\t' read -r row row_status; do
