@@ -135,6 +135,23 @@ struct BatchEngineGrowingChatCacheSourceTests {
         #expect(batch.contains("history-boundary cache rederive after trim miss"))
     }
 
+    @Test("token iterator does not blanket-eval disk-backed cache snapshots before store")
+    func tokenIteratorDoesNotBlanketEvalDiskBackedSnapshotsBeforeStore() throws {
+        let source = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/Evaluate.swift",
+            encoding: .utf8)
+        let storeRange = try #require(source.range(of: "func store(\n            tokens: [Int],"))
+        let store = String(source[storeRange.lowerBound...])
+        let requiresRange = try #require(store.range(
+            of: "let requiresDiskBackedRestore =\n                cacheRequiresDiskBackedCoordinatorRestore(snapshot)"))
+        let evalRange = try #require(store.range(of: "if !requiresDiskBackedRestore {\n                MLX.eval(snapshot)\n            }"))
+        let perLayerRange = try #require(store.range(of: "let perLayerData = requiresDiskBackedRestore"))
+
+        #expect(requiresRange.lowerBound < evalRange.lowerBound)
+        #expect(evalRange.upperBound < perLayerRange.lowerBound)
+        #expect(!store.contains("let snapshot = cacheToStore.map { $0.copy() }\n            MLX.eval(snapshot)"))
+    }
+
     @Test("disk cache serializes MLX safetensors IO across model cache instances")
     func diskCacheSerializesMLXSafetensorsIOAcrossInstances() throws {
         let disk = try String(

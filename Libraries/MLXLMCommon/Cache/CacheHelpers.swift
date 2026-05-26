@@ -307,14 +307,14 @@ public func extractSSMStates(from cache: [any KVCache]) -> [MLXArray] {
             states.append(contentsOf: mamba.state)
         } else if let arrays = layer as? ArraysCache {
             states.append(contentsOf: arrays.state)
-        } else if let zaya = layer as? ZayaCCACache {
-            // ZAYA CCA-attention: conv_state + prev_hs are path-dependent
-            // and must round-trip alongside KV (per Zyphra runtime contract).
-            // Tagged here so the existing SSM rederive plumbing in
-            // BatchEngine.finishSlot picks them up automatically.
-            let (conv, prev) = zaya.readCCA()
-            states.append(conv)
-            states.append(prev)
+        } else if layer is ZayaCCACache {
+            // ZAYA CCA state is path-dependent, but it is not SSM state.
+            // TQDiskSerializer's LayerKind.zayaCCA stores keys, values,
+            // conv_state, and prev_hs together as one disk-backed layer.
+            // Sending those arrays through SSMStateCache as a second
+            // companion path duplicates ownership and can start another
+            // Metal eval while the ZAYA disk payload is still draining.
+            continue
         } else if let cacheList = layer as? CacheList {
             // Extract SSM sub-cache from composite layers
             for i in 0..<cacheList.count {
@@ -365,14 +365,10 @@ public func restoreSSMStates(_ states: [MLXArray], into cache: [any KVCache]) {
                     .map { $0[.ellipsis] }
                 stateIdx += existingCount
             }
-        } else if let zaya = layer as? ZayaCCACache {
-            // ZAYA CCA-attention: extracted as (conv_state, prev_hs) pair.
-            if stateIdx + 2 <= states.count {
-                let conv = states[stateIdx][.ellipsis]
-                let prev = states[stateIdx + 1][.ellipsis]
-                zaya.writeCCA(conv: conv, prev: prev)
-                stateIdx += 2
-            }
+        } else if layer is ZayaCCACache {
+            // ZAYA CCA restore is owned by the LayerKind.zayaCCA disk payload,
+            // not by the generic SSM companion list.
+            continue
         } else if let cacheList = layer as? CacheList {
             for i in 0..<cacheList.count {
                 if let mamba = cacheList[i] as? MambaCache {

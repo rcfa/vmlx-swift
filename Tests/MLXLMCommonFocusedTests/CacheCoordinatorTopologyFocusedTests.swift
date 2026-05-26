@@ -365,6 +365,19 @@ struct CacheCoordinatorTopologyFocusedTests {
         }
     }
 
+    @Test("ZAYA CCA state is not duplicated into SSM companion cache")
+    func zayaCCADoesNotUseSSMCompanionExtraction() throws {
+        let source = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/Cache/CacheHelpers.swift",
+            encoding: .utf8)
+
+        #expect(source.contains("} else if layer is ZayaCCACache {"))
+        #expect(source.contains("LayerKind.zayaCCA stores keys, values,"))
+        #expect(source.contains("ZAYA CCA restore is owned by the LayerKind.zayaCCA disk payload"))
+        #expect(!source.contains("let (conv, prev) = zaya.readCCA()"))
+        #expect(!source.contains("zaya.writeCCA(conv: conv, prev: prev)"))
+    }
+
     @Test("hybrid disk media-salt prompt boundary returns exact hit")
     func hybridDiskMediaSaltPromptBoundaryReturnsExactHit() {
         FocusedMLXTestSupport.withLock {

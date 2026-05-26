@@ -1752,9 +1752,11 @@ public struct TokenIterator: TokenIteratorProtocol {
         ) {
             guard !tokens.isEmpty else { return }
             let snapshot = cacheToStore.map { $0.copy() }
-            MLX.eval(snapshot)
             let requiresDiskBackedRestore =
                 cacheRequiresDiskBackedCoordinatorRestore(snapshot)
+            if !requiresDiskBackedRestore {
+                MLX.eval(snapshot)
+            }
             let perLayerData = requiresDiskBackedRestore
                 ? []
                 : extractLayerData(from: snapshot)
