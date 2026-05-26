@@ -145,6 +145,8 @@ struct BatchEngineGrowingChatCacheSourceTests {
             encoding: .utf8)
 
         #expect(disk.contains("enum MLXDiskCacheIOLock"))
+        #expect(disk.contains("public enum MLXCacheIOLock"))
+        #expect(disk.contains("withSerializedMLXCacheIO"))
         #expect(disk.contains("MLXDiskCacheIOLock.shared.lock()"))
         #expect(disk.contains("Stream.gpu.synchronize()"))
         #expect(disk.contains("try loadArraysAndMetadata(url: url)"))
@@ -163,12 +165,12 @@ struct BatchEngineGrowingChatCacheSourceTests {
         let store = try #require(source.range(of: "public func store("))
         let storeSource = String(source[store.lowerBound...])
 
-        #expect(storeSource.contains("MLXDiskCacheIOLock.shared.lock()"))
-        #expect(storeSource.contains("MLX.eval(copies)"))
+        #expect(storeSource.contains("MLXCacheIOLock.withSerializedMLXCacheIO"))
+        #expect(storeSource.contains("MLX.eval(materialized)"))
         #expect(storeSource.contains("Stream.gpu.synchronize()"))
         #expect(storeSource.contains("let disk: SSMCompanionDiskStore?"))
 
-        let materialize = try #require(storeSource.range(of: "MLX.eval(copies)"))
+        let materialize = try #require(storeSource.range(of: "MLX.eval(materialized)"))
         let lruLock = try #require(storeSource.range(of: "lock.lock()"))
         let diskWrite = try #require(storeSource.range(of: "try? disk.store("))
 

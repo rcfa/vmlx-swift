@@ -147,18 +147,13 @@ public final class SSMStateCache: @unchecked Sendable {
         // process-wide MLX disk/cache I/O lock as DiskCache and
         // SSMCompanionDiskStore, and keep the in-memory LRU lock out of the
         // MLX.eval section so cache readers are not blocked by GPU work.
-        MLXDiskCacheIOLock.shared.lock()
-        let copies: [MLXArray]
-        do {
-            defer {
-                Stream.gpu.synchronize()
-                MLXDiskCacheIOLock.shared.unlock()
-            }
-            copies = ssmStates.map { $0 * 1 }
-            if !copies.isEmpty {
-                MLX.eval(copies)
+        let copies: [MLXArray] = MLXCacheIOLock.withSerializedMLXCacheIO {
+            let materialized = ssmStates.map { $0 * 1 }
+            if !materialized.isEmpty {
+                MLX.eval(materialized)
             }
             Stream.gpu.synchronize()
+            return materialized
         }
 
         let disk: SSMCompanionDiskStore?
