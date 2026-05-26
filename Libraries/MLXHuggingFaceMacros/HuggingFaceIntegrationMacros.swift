@@ -237,9 +237,6 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                         if !(tools?.isEmpty ?? true),
                            upstream.bosToken == "<s>",
                            upstream.convertTokenToId("<|im_end|>") != nil,
-                           upstream.convertTokenToId("[AVAILABLE_TOOLS]") != nil,
-                           upstream.convertTokenToId("<tool_call>") != nil,
-                           upstream.convertTokenToId("<tool_response>") != nil,
                            (env["VMLX_CHAT_TEMPLATE_FALLBACK_DISABLE"] ?? "0") != "1" {
                             if (env["VMLX_CHAT_TEMPLATE_FALLBACK_LOG"] ?? "0") == "1" {
                                 FileHandle.standardError.write(
@@ -502,9 +499,6 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                         if !(tools?.isEmpty ?? true),
                            upstream.bosToken == "<s>",
                            upstream.convertTokenToId("<|im_end|>") != nil,
-                           upstream.convertTokenToId("[AVAILABLE_TOOLS]") != nil,
-                           upstream.convertTokenToId("<tool_call>") != nil,
-                           upstream.convertTokenToId("<tool_response>") != nil,
                            (env["VMLX_CHAT_TEMPLATE_FALLBACK_DISABLE"] ?? "0") != "1" {
                             return try upstream.applyChatTemplate(
                                 messages: messages,
