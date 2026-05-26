@@ -880,6 +880,12 @@ The current assistant response MUST be a tool call. Reply only with a `<tool_cal
                     {%- set selected_tool = tool['function'] if tool['function'] is defined else tool -%}
                     {%- if selected_tool['name'] == required_tool_name and selected_tool['parameters'] is defined and selected_tool['parameters']['required'] is defined -%}
                         {{- '\nRequired parameters for `' ~ required_tool_name ~ '`: ' ~ (selected_tool['parameters']['required'] | join(', ')) ~ '.' -}}
+                        {{- '\nRequired call skeleton:\n<zyphra_tool_call>\n<function=' ~ required_tool_name ~ '>' -}}
+                        {%- for param_name in selected_tool['parameters']['required'] -%}
+                            {{- '\n<parameter=' ~ param_name ~ '>\nVALUE_FOR_' ~ param_name ~ '\n</parameter>' -}}
+                        {%- endfor -%}
+                        {{- '\n</function>\n</zyphra_tool_call>' -}}
+                        {{- '\nReplace every VALUE_FOR_* placeholder with the actual argument value requested by the user.' -}}
                     {%- endif -%}
                 {%- endfor -%}
             {%- endif -%}
