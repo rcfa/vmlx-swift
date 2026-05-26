@@ -54,6 +54,9 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
         // Live DSV4 JANGTQ2 app decode has also emitted an extra "c"
         // after the underscore while preserving a valid invoke body.
         "<\u{FF5C}DSML\u{FF5C}tool_ccalls>",
+        // Live DSV4 can also drift the suffix to "crs" while preserving
+        // the DSML invoke/parameter body.
+        "<\u{FF5C}DSML\u{FF5C}tool_crs>",
     ]
     public let endTagAliases: [String] = [
         "</\u{FF5C}DSML\u{FF5C}tool_calls>",
@@ -61,6 +64,7 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
         // Same live alias family as `tool_ccalls`, abbreviated at the
         // suffix rather than the middle of the token.
         "</\u{FF5C}DSML\u{FF5C}tool_cs>",
+        "</\u{FF5C}DSML\u{FF5C}tool_crs>",
     ]
     public let startTagPrefixes: [String] = [Self.dsmlToolStartPrefix]
     public let endTagPrefixes: [String] = [Self.dsmlToolEndPrefix]

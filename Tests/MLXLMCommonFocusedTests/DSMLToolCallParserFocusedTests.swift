@@ -114,6 +114,39 @@ struct DSMLToolCallParserFocusedTests {
         #expect(!visible.contains("invoke name"))
     }
 
+    @Test("DSML processor accepts live tool_crs alias after bare tool-name marker")
+    func processorAcceptsLiveToolCRSAliasAfterBareToolNameMarker() {
+        let dsml = DeepseekV4Tokens.dsml
+        let output = """
+            -line_count
+            <\(dsml)tool_crs>
+            <\(dsml)invoke name="line_count">
+            <\(dsml)parameter name="text" string="true">alpha
+            beta
+            gamma</\(dsml)parameter>
+            </\(dsml)inv>
+            </\(dsml)tool_crs>
+            """
+        let processor = ToolCallProcessor(format: .dsml, tools: lineCountToolSchema())
+        var visible = ""
+        for ch in output {
+            visible += processor.processChunk(String(ch)) ?? ""
+        }
+        visible += processor.processEOS() ?? ""
+
+        #expect(processor.toolCalls.count == 1)
+        #expect(processor.toolCalls.first?.function.name == "line_count")
+        #expect(
+            processor.toolCalls.first?.function.arguments["text"]
+                == .string("alpha\nbeta\ngamma")
+        )
+        #expect(visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(!visible.contains("DSML"))
+        #expect(!visible.contains("tool_crs"))
+        #expect(!visible.contains("invoke name"))
+        #expect(!visible.contains("line_count"))
+    }
+
     @Test("DSML processor routes Osaurus folder and git tools through live aliases")
     func processorRoutesOsaurusFolderAndGitToolsThroughLiveAliases() {
         let fixtures: [DSMLToolFixture] = [
@@ -425,6 +458,24 @@ struct DSMLToolCallParserFocusedTests {
                             "end_line": ["type": "integer"] as [String: any Sendable],
                         ] as [String: any Sendable],
                         "required": ["path"],
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable],
+            ] as [String: any Sendable],
+        ]
+    }
+
+    private func lineCountToolSchema() -> [[String: any Sendable]] {
+        [
+            [
+                "type": "function",
+                "function": [
+                    "name": "line_count",
+                    "parameters": [
+                        "type": "object",
+                        "properties": [
+                            "text": ["type": "string"] as [String: any Sendable],
+                        ] as [String: any Sendable],
+                        "required": ["text"],
                     ] as [String: any Sendable],
                 ] as [String: any Sendable],
             ] as [String: any Sendable],

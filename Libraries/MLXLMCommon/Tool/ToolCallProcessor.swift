@@ -745,12 +745,36 @@ public class ToolCallProcessor {
 
     /// Process chunk for tagged formats.
     private func processTaggedChunk(_ chunk: String) -> String? {
+        let startTags = parser.startTagAliases
+        let startTagPrefixes = parser.startTagPrefixes
+        guard (!startTags.isEmpty || !startTagPrefixes.isEmpty),
+            let startChar = startTagFirstChar
+        else {
+            return chunk
+        }
+
         if parser.supportsInlineJSONToolFallback {
             switch state {
             case .collectingInlineToolCall:
                 return processInlineChunk(chunk)
             case .normal:
-                if !leadingTextBeforeToolCall.isEmpty
+                if !chunk.contains(startChar) {
+                    let candidate = leadingTextBeforeToolCall + chunk
+                    if shouldBufferPotentialBareToolMarker(candidate) {
+                        leadingTextBeforeToolCall = candidate
+                        return nil
+                    }
+                    if !leadingTextBeforeToolCall.isEmpty {
+                        let visible = leadingTextBeforeToolCall + chunk
+                        leadingTextBeforeToolCall = ""
+                        return visible
+                    }
+                }
+
+                let bufferedBareToolMarker =
+                    !leadingTextBeforeToolCall.isEmpty
+                    && bareToolMarkerFragment(in: leadingTextBeforeToolCall) != nil
+                if (!leadingTextBeforeToolCall.isEmpty && !bufferedBareToolMarker)
                     || firstInlineFunctionToolCallStart(in: chunk) != nil
                     || partialInlineFunctionToolCallStart(in: chunk) != nil
                     || firstInlineBareNameJSONToolCallStart(in: chunk) != nil
@@ -769,14 +793,6 @@ public class ToolCallProcessor {
             case .potentialToolCall, .collectingToolCall:
                 break
             }
-        }
-
-        let startTags = parser.startTagAliases
-        let startTagPrefixes = parser.startTagPrefixes
-        guard (!startTags.isEmpty || !startTagPrefixes.isEmpty),
-            let startChar = startTagFirstChar
-        else {
-            return chunk
         }
 
         guard (state == .normal && chunk.contains(startChar)) || state != .normal else {
@@ -842,13 +858,14 @@ public class ToolCallProcessor {
 
                 // Parse the completed wrapper. Some formats, including Hy3 /
                 // Hunyuan, can carry multiple calls inside one outer block.
-                toolCalls.append(contentsOf: parser.parseEOS(toolCallBuffer, tools: tools))
+                let parsed = parser.parseEOS(toolCallBuffer, tools: tools)
+                toolCalls.append(contentsOf: parsed)
 
                 state = .normal
                 toolCallBuffer = ""
 
                 // If the token contains the start character, there may be more tool calls to come
-                let leading = leadingTextBeforeToolCall
+                let leading = visibleLeadingTextBeforeToolCall(parsedToolCalls: parsed)
                 leadingTextBeforeToolCall = ""
                 if let trailingToken, let startChar = startTagFirstChar,
                     trailingToken.contains(startChar)
@@ -867,6 +884,43 @@ public class ToolCallProcessor {
         case .collectingInlineToolCall:
             return processInlineChunk(chunk)
         }
+    }
+
+    private func shouldBufferPotentialBareToolMarker(_ text: String) -> Bool {
+        guard let fragment = bareToolMarkerFragment(in: text) else { return false }
+        return inlineFunctionToolNames().contains { name in
+            name.hasPrefix(fragment) || fragment == name
+        }
+    }
+
+    private func visibleLeadingTextBeforeToolCall(parsedToolCalls: [ToolCall]) -> String {
+        guard parser.supportsInlineJSONToolFallback,
+            let fragment = bareToolMarkerFragment(in: leadingTextBeforeToolCall),
+            parsedToolCalls.contains(where: { $0.function.name == fragment })
+        else {
+            return leadingTextBeforeToolCall
+        }
+        return ""
+    }
+
+    private func bareToolMarkerFragment(in text: String) -> String? {
+        var marker = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !marker.isEmpty else { return nil }
+
+        var removedMarkerPrefix = false
+        while let first = marker.first,
+            first == "-" || first == "*" || first == "`" || first == ":"
+        {
+            removedMarkerPrefix = true
+            marker.removeFirst()
+            marker = marker.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        guard !marker.isEmpty || removedMarkerPrefix else { return nil }
+        guard marker.allSatisfy({ $0 == "_" || $0.isLetter || $0.isNumber }) else {
+            return nil
+        }
+        return marker
     }
 
     /// Separates a token from a string buffer based on a separator
