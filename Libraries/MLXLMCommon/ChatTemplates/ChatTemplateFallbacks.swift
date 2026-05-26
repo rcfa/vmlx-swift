@@ -201,6 +201,10 @@ public enum ChatTemplateFallbacks {
   </tool>
 {%- endfor %}
 [/AVAILABLE_TOOLS]
+{%- if additionalContext is defined and additionalContext['tool_choice'] == 'required' %}
+
+The current assistant response MUST be a tool call. Reply only with a `<tool_call>` block for one available tool and no prose before the tool result.
+{%- endif %}
 {%- endif %}
 <|im_end|>
 {% for message in loop_messages -%}
