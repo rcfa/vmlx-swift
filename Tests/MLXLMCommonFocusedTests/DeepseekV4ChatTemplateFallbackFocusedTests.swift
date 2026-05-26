@@ -161,6 +161,42 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         #expect(rendered.hasSuffix(tail))
     }
 
+    @Test("Swift DSV4 required tool choice preserves assistant tail after plain no-tool history")
+    func swiftDSV4RequiredToolChoicePreservesAssistantTailAfterPlainNoToolHistory() {
+        let rendered = DeepseekV4ChatEncoder().encode(
+            messages: [
+                .init(role: .system, content: "", tools: [lineCountToolSpec()]),
+                .init(role: .user, content: "Use line_count on red\ngreen\nblue."),
+                .init(
+                    role: .assistant,
+                    toolCalls: [
+                        .init(
+                            id: "call_lines",
+                            name: "line_count",
+                            arguments: #"{"text":"red\ngreen\nblue"}"#)
+                    ]),
+                .init(role: .tool, content: #"{"lines":3}"#, toolCallId: "call_lines"),
+                .init(role: .user, content: "How many lines? Do not call another tool."),
+                .init(role: .assistant, content: "Three lines were counted."),
+                .init(role: .user, content: "Now use line_count on one\ntwo."),
+            ],
+            thinkingMode: .chat,
+            toolChoiceRequired: true
+        )
+
+        let finalUser = "Now use line_count on one\ntwo."
+        let reminder = "<\u{FF5C}latest_reminder\u{FF5C}>"
+        let tail = "<\u{FF5C}Assistant\u{FF5C}></think>"
+        let finalUserRange = rendered.range(of: finalUser)
+        let reminderRange = rendered.range(of: reminder)
+        #expect(finalUserRange != nil)
+        #expect(reminderRange != nil)
+        #expect(reminderRange!.lowerBound < finalUserRange!.lowerBound)
+        #expect(rendered.contains("The active API tool_choice is required"))
+        #expect(rendered.contains("<\u{FF5C}DSML\u{FF5C}tool_calls> block"))
+        #expect(rendered.hasSuffix(tail))
+    }
+
     @Test("Nemotron required tool choice keeps native XML tool contract")
     func nemotronRequiredToolChoiceKeepsNativeXMLToolContract() throws {
         let template = try Template(ChatTemplateFallbacks.nemotronMinimal)
