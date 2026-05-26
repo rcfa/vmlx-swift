@@ -1424,9 +1424,9 @@ struct Gemma4VLMFocusedSourceContractsTests {
         #expect(overload.contains("!(tools?.isEmpty ?? true)"))
         #expect(overload.contains("upstream.bosToken == \"<s>\""))
         #expect(overload.contains("upstream.convertTokenToId(\"<|im_end|>\") != nil"))
-        #expect(overload.contains("upstream.convertTokenToId(\"[AVAILABLE_TOOLS]\") != nil"))
-        #expect(overload.contains("upstream.convertTokenToId(\"<tool_call>\") != nil"))
-        #expect(overload.contains("upstream.convertTokenToId(\"<tool_response>\") != nil"))
+        #expect(!overload.contains("upstream.convertTokenToId(\"[AVAILABLE_TOOLS]\") != nil"))
+        #expect(!overload.contains("upstream.convertTokenToId(\"<tool_call>\") != nil"))
+        #expect(!overload.contains("upstream.convertTokenToId(\"<tool_response>\") != nil"))
         #expect(overload.contains("addGenerationPrompt: addGenerationPrompt"))
     }
 

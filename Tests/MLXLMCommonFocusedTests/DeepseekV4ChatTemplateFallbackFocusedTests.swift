@@ -125,6 +125,49 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         assertRequiredToolChoiceDirective(swiftRendered)
     }
 
+    @Test("Nemotron required tool choice keeps native XML tool contract")
+    func nemotronRequiredToolChoiceKeepsNativeXMLToolContract() throws {
+        let template = try Template(ChatTemplateFallbacks.nemotronMinimal)
+        let rendered = try template.renderDSV4([
+            "messages": [
+                ["role": "user", "content": "Use line_count on alpha\nbeta."],
+            ],
+            "tools": [
+                [
+                    "type": "function",
+                    "function": [
+                        "name": "line_count",
+                        "description": "Count newline-separated lines in text.",
+                        "parameters": [
+                            "type": "object",
+                            "properties": [
+                                "text": [
+                                    "type": "string",
+                                    "description": "Text to count.",
+                                ] as [String: any Sendable],
+                            ] as [String: any Sendable],
+                            "required": ["text"],
+                        ] as [String: any Sendable],
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable],
+            ],
+            "tool_choice": "required",
+            "add_generation_prompt": true,
+            "enable_thinking": false,
+        ])
+
+        #expect(rendered.contains("# Tools"))
+        #expect(rendered.contains("<tools>"))
+        #expect(rendered.contains("<function>"))
+        #expect(rendered.contains("<name>line_count</name>"))
+        #expect(rendered.contains("<tool_call>"))
+        #expect(rendered.contains("<function=example_function_name>"))
+        #expect(rendered.contains("MUST be a tool call"))
+        #expect(!rendered.contains("[AVAILABLE_TOOLS]"))
+        #expect(!rendered.contains("<｜DSML｜"))
+        #expect(rendered.hasSuffix("<|im_start|>assistant\n<think></think>"))
+    }
+
     @Test("compiled DSV4 fallback renders assistant DSML tool history and tool results")
     func compiledDSV4FallbackRendersAssistantToolHistory() throws {
         let template = try Template(ChatTemplateFallbacks.dsv4Minimal)

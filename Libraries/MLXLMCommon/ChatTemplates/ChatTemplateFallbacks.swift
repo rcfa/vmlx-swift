@@ -158,31 +158,39 @@ public enum ChatTemplateFallbacks {
 {%- endif -%}
 """#
 
-    /// Nemotron-Cascade-2 minimal. Avoids the `for k in dict if k not
-    /// in handled_keys` construct that trips swift-jinja's runtime.
-    /// Uses the ChatML-style `<|im_start|>role` / `<|im_end|>` turn
-    /// markers Nemotron was actually trained on (the first attempt
-    /// incorrectly used `<extra_id_*>`; see tokenizer special-token
-    /// inspection — `<|im_start|>` + `[AVAILABLE_TOOLS]` are the real
-    /// markers). Tool declarations use the `[AVAILABLE_TOOLS]` /
-    /// `[/AVAILABLE_TOOLS]` block and assistant tool calls use the
-    /// `<tool_call><function=name></function></tool_call>` XML form.
+    /// Nemotron-Cascade-2 minimal. Avoids the native template's
+    /// `for k in dict if k not in handled_keys` construct that trips
+    /// swift-jinja's runtime, but preserves the trained prompt contract:
+    /// ChatML turns, `# Tools`, `<tools>/<function>` declarations,
+    /// `<tool_call>` XML assistant calls, `<tool_response>` tool replies,
+    /// and the `<think></think>` generation prefix when thinking is off.
     public static let nemotronMinimal: String = #"""
 {%- set loop_messages = messages -%}
+{%- set enable_thinking = enable_thinking if enable_thinking is defined else false -%}
+{%- set required_tool_choice = false -%}
+{%- if tool_choice is defined and tool_choice == 'required' -%}
+    {%- set required_tool_choice = true -%}
+{%- elif additionalContext is defined and additionalContext['tool_choice'] == 'required' -%}
+    {%- set required_tool_choice = true -%}
+{%- endif -%}
 {%- if messages[0]['role'] == 'system' -%}
     {%- set system_message = messages[0]['content'] -%}
     {%- set loop_messages = messages[1:] -%}
 {%- else -%}
-    {%- set system_message = 'You are a helpful and harmless assistant.' -%}
+    {%- set system_message = '' -%}
 {%- endif -%}
 <|im_start|>system
 {{ system_message }}
 {%- if tools %}
 
-[AVAILABLE_TOOLS]
+# Tools
+
+You have access to the following functions:
+
+<tools>
 {%- for tool in tools %}
   {%- set fn = tool['function'] if tool['function'] is defined else tool -%}
-  <tool>
+  <function>
     <name>{{ fn['name'] }}</name>
     {%- if fn['description'] is defined %}
     <description>{{ fn['description'] | trim }}</description>
@@ -196,14 +204,29 @@ public enum ChatTemplateFallbacks {
         {%- if param['description'] is defined %}<description>{{ param['description'] | trim }}</description>{%- endif %}
       </parameter>
       {%- endfor %}
+      {%- if fn['parameters']['required'] is defined %}
+      <required>{{ fn['parameters']['required'] }}</required>
+      {%- endif %}
     </parameters>
     {%- endif %}
-  </tool>
+  </function>
 {%- endfor %}
-[/AVAILABLE_TOOLS]
-{%- if additionalContext is defined and additionalContext['tool_choice'] == 'required' %}
+</tools>
 
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+</function>
+</tool_call>
+{%- if required_tool_choice %}
+
+<IMPORTANT>
 The current assistant response MUST be a tool call. Reply only with a `<tool_call>` block for one available tool and no prose before the tool result.
+</IMPORTANT>
 {%- endif %}
 {%- endif %}
 <|im_end|>
@@ -236,14 +259,21 @@ The current assistant response MUST be a tool call. Reply only with a `<tool_cal
 {%- endif %}
 <|im_end|>
 {%- elif message['role'] == 'tool' -%}
-<|im_start|>tool
+<|im_start|>user
+<tool_response>
 {{ message['content'] }}
+</tool_response>
 <|im_end|>
 {%- endif -%}
 
 {% endfor -%}
 {%- if add_generation_prompt %}
 <|im_start|>assistant
+{%- if enable_thinking %}
+<think>
+{%- else %}
+<think></think>
+{%- endif %}
 {%- endif %}
 """#
 
