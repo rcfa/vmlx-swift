@@ -1086,6 +1086,37 @@ struct DirectCapabilityParserAliasFocusedTests {
         }
     }
 
+    @Test("Ling legacy deepseek stamp follows JSON tool_call chat template")
+    func lingLegacyDeepseekStampFollowsJSONToolCallTemplate() {
+        let capabilities = JangCapabilities(
+            reasoningParser: "deepseek_r1",
+            toolParser: "deepseek",
+            supportsTools: true,
+            supportsThinking: true,
+            family: "bailing_hybrid",
+            cacheType: "hybrid")
+        let template = #"""
+        {%- if tools %}
+        <tool_call>
+        {"name": <function-name>, "arguments": <args-json-object>}
+        </tool_call>
+        {%- endif %}
+        """#
+
+        let (format, source) = ParserResolution.toolCall(
+            capabilities: capabilities,
+            modelType: "bailing_hybrid",
+            chatTemplate: template)
+
+        #expect(format == .json)
+        #expect(source == .chatTemplate)
+
+        let processor = ToolCallProcessor(format: format ?? .glm4)
+        #expect(processor.processChunk(#"<tool_call>{"name":"line_count","arguments":{"path":"/tmp/a"}}</tool_call>"#) == nil)
+        #expect(processor.toolCalls.first?.function.name == "line_count")
+        #expect(processor.toolCalls.first?.function.arguments["path"] == .string("/tmp/a"))
+    }
+
     @Test("Qwen3.6 and Qwen3-VL model-type fallbacks route to XML tools")
     func qwen36AndQwen3VLModelTypeFallbacksRouteToolsToXML() {
         for modelType in ["qwen3_6", "qwen3_6_moe", "qwen3_vl", "qwen3_5_vl"] {

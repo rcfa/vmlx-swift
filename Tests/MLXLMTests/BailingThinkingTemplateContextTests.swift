@@ -86,4 +86,49 @@ final class BailingThinkingTemplateContextTests: XCTestCase {
         XCTAssertEqual(out.count, messages.count)
         XCTAssertEqual(out[0]["role"] as? String, "user")
     }
+
+    func testRequiredToolChoiceInsertsBailingSystemDirective() {
+        let messages: [Message] = [
+            ["role": "user", "content": "count lines"]
+        ]
+
+        let out = BailingThinkingTemplateContext.apply(
+            to: messages,
+            modelType: "bailing_hybrid",
+            additionalContext: ["tool_choice": "required"]
+        )
+
+        XCTAssertEqual(out[0]["role"] as? String, "system")
+        XCTAssertEqual(
+            out[0]["content"] as? String,
+            "For this assistant turn, return exactly one <tool_call> JSON object for one available function and no prose before the tool result."
+        )
+        XCTAssertEqual(out[1]["role"] as? String, "user")
+    }
+
+    func testThinkingAndRequiredToolChoiceShareOneSystemMessage() {
+        let messages: [Message] = [
+            ["role": "system", "content": "detailed thinking on\n\nYou are concise."],
+            ["role": "user", "content": "count lines"],
+        ]
+
+        let out = BailingThinkingTemplateContext.apply(
+            to: messages,
+            modelType: "bailing_moe_v2_5",
+            additionalContext: [
+                "enable_thinking": false,
+                "tool_choice": "required",
+            ]
+        )
+
+        XCTAssertEqual(
+            out[0]["content"] as? String,
+            """
+            detailed thinking off
+            For this assistant turn, return exactly one <tool_call> JSON object for one available function and no prose before the tool result.
+
+            You are concise.
+            """
+        )
+    }
 }

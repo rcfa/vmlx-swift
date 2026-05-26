@@ -10,9 +10,15 @@ import MLXLMCommon
 /// enables `<think>...</think>` output, while "detailed thinking off"
 /// disables it. Keep the translation in the model package so hosts can keep
 /// passing the standard `additionalContext["enable_thinking"]` knob.
+///
+/// The same native template also ignores generic `tool_choice`. When callers
+/// explicitly request OpenAI-style `required`, surface that contract through
+/// the same system-message lane instead of adding sampler or decode coercion.
 enum BailingThinkingTemplateContext {
     private static let thinkingOnDirective = "detailed thinking on"
     private static let thinkingOffDirective = "detailed thinking off"
+    private static let requiredToolDirective =
+        "For this assistant turn, return exactly one <tool_call> JSON object for one available function and no prose before the tool result."
 
     static func applies(to modelType: String?) -> Bool {
         modelType?.lowercased().hasPrefix("bailing") == true
@@ -23,13 +29,22 @@ enum BailingThinkingTemplateContext {
         modelType: String?,
         additionalContext: [String: any Sendable]?
     ) -> [Message] {
-        guard applies(to: modelType),
-              let enableThinking = additionalContext?["enable_thinking"] as? Bool
-        else {
+        guard applies(to: modelType) else {
             return messages
         }
 
-        let directive = enableThinking ? thinkingOnDirective : thinkingOffDirective
+        var directives: [String] = []
+        if let enableThinking = additionalContext?["enable_thinking"] as? Bool {
+            directives.append(enableThinking ? thinkingOnDirective : thinkingOffDirective)
+        }
+        if additionalContext?["tool_choice"] as? String == "required" {
+            directives.append(requiredToolDirective)
+        }
+        guard !directives.isEmpty else {
+            return messages
+        }
+
+        let directive = directives.joined(separator: "\n")
         var out = messages
         if let index = out.firstIndex(where: { ($0["role"] as? String) == "system" }),
            let content = out[index]["content"] as? String
@@ -53,6 +68,7 @@ enum BailingThinkingTemplateContext {
                     .lowercased()
                 return normalized != thinkingOnDirective
                     && normalized != thinkingOffDirective
+                    && normalized != requiredToolDirective.lowercased()
             }
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)

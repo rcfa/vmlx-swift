@@ -1219,6 +1219,22 @@ public final class LLMModelFactory: ModelFactory {
         return (try? JSONSerialization.data(withJSONObject: configDict)) ?? configData
     }
 
+    private static func chatTemplateText(modelDirectory: URL) -> String? {
+        let templateURL = modelDirectory.appending(component: "chat_template.jinja")
+        if let template = try? String(contentsOf: templateURL, encoding: .utf8) {
+            return template
+        }
+        let tokenizerConfigURL = modelDirectory.appending(component: "tokenizer_config.json")
+        guard
+            let data = try? Data(contentsOf: tokenizerConfigURL),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let template = object["chat_template"] as? String
+        else {
+            return nil
+        }
+        return template
+    }
+
     public func _load(
         configuration: ResolvedModelConfiguration,
         tokenizerLoader: any TokenizerLoader
@@ -1546,11 +1562,15 @@ public final class LLMModelFactory: ModelFactory {
             // as a fallback. Finally `model_type` infer.
             let chatStamped = ToolCallFormat.fromCapabilityName(
                 jangConfig?.chat?.toolCalling?.parser)
-            let jangStamped = ToolCallFormat.fromCapabilityName(
-                jangConfig?.capabilities?.toolParser)
+            let templateAwareJang =
+                ParserResolution.toolCall(
+                    capabilities: jangConfig?.capabilities,
+                    modelType: baseConfig.modelType,
+                    chatTemplate: Self.chatTemplateText(modelDirectory: modelDirectory)
+                ).format
             mutableConfiguration.toolCallFormat =
                 chatStamped
-                ?? jangStamped
+                ?? templateAwareJang
                 ?? ToolCallFormat.infer(from: baseConfig.modelType)
         }
 
