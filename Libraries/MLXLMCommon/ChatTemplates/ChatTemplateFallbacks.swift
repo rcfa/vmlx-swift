@@ -268,6 +268,11 @@ The current assistant response MUST be a tool call. Reply only with a `<tool_cal
 
 {% endfor -%}
 {%- if add_generation_prompt %}
+{%- if required_tool_choice %}
+<|im_start|>user
+The next assistant message must be a function call. Reply only with a `<tool_call>` XML block for one available tool and no prose.
+<|im_end|>
+{%- endif %}
 <|im_start|>assistant
 {%- if enable_thinking %}
 <think>
