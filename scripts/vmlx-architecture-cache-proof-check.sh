@@ -152,7 +152,7 @@ require_text "$GEMMA_PARSER" 'empty thought channel without newline does not sur
   "Gemma4 no-newline thought regression covered"
 require_text "$GEMMA_PARSER" 'pre<\|channel>thought<channel\|>answer' \
   "Gemma4 no-newline thought fixture covered"
-require_text "$PARSER" 'stripIdentifierOnlyAtEnd: true\)' \
+require_text "$PARSER" 'stripIdentifierOnlyAtEnd: Bool = true' \
   "Gemma4 parser source fix guarded"
 
 require_text "$MEDIA" 'mediaSalt is not folded into the paged block hash chain' \

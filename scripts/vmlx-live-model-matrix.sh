@@ -405,6 +405,18 @@ raw_prefix_cache_probe_applicable() {
   return 0
 }
 
+qwen_tool_probe_applicable() {
+  local dir="$1" model_type arch lowered
+  model_type="$(json_value "$dir/config.json" '.model_type // .text_config.model_type' unknown)"
+  arch="$(json_value "$dir/config.json" '.architectures?[0]' unknown)"
+  lowered="$(printf "%s %s" "$model_type" "$arch" | tr '[:upper:]' '[:lower:]')"
+
+  case "$lowered" in
+    *qwen*) return 0 ;;
+  esac
+  return 1
+}
+
 turboquant_kv_probe_applicable() {
   local dir="$1" model_type arch lowered
   model_type="$(json_value "$dir/config.json" '.model_type // .text_config.model_type' unknown)"
@@ -490,6 +502,12 @@ run_plain_infer_matrix() {
 
 run_batch_stack() {
   local name="$1" dir="$2" max_tokens="$3"
+  # Full-attention models need KV/prefix/L2 proof.
+  # hybrid SSM models need attention KV plus SSM companion proof.
+  # CCA/HY3 style models need companion cache/pooling proof.
+  # cache rows must match architecture: KV/TurboQuant KV, hybrid SSM companion, CCA/HY3 companion, DSV4 CSA/HSA/SWA, VL/video media salt.
+  # DeepSeek-V4 needs CSA/HSA/SWA pool restore proof, not generic KV proof.
+  # VL/video models need media payload cache proof.
   run_runbench "${name}.batch_single" \
     BENCH_MODEL="$dir" BENCH_BATCH=1 \
     BENCH_MAX_TOKENS="$max_tokens" || true
@@ -508,6 +526,11 @@ run_batch_stack() {
     BENCH_MODEL="$dir" BENCH_GROWING_CHAT_CACHE=1 BENCH_GROWING_BUNDLE_DEFAULTS=1 \
     BENCH_GROWING_SEED="$(matrix_prod_seed)" \
     BENCH_MAX_TOKENS="$max_tokens" || true
+  if qwen_tool_probe_applicable "$dir"; then
+    run_runbench "${name}.qwen_multiturn_tool" \
+      BENCH_MODEL="$dir" BENCH_QWEN_MULTITURN_TOOL=1 \
+      BENCH_MAX_TOKENS="$max_tokens" || true
+  fi
   run_runbench "${name}.batch_disk_restore" \
     BENCH_MODEL="$dir" BENCH_BATCH_DISK_RESTORE=1 \
     BENCH_MAX_TOKENS="$max_tokens" || true
