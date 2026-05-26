@@ -136,10 +136,18 @@ public struct DeepseekV4ChatEncoder: Sendable {
             contextLen = processedContext.count
         }
 
-        for i in 0..<(rendered.count - contextLen) {
+        var finalRendered = rendered
+        if toolChoiceRequired,
+            finalRendered.contains(where: { !($0.tools?.isEmpty ?? true) }),
+            finalRendered.last?.role != .latestReminder
+        {
+            finalRendered.append(Self.requiredToolChoiceReminder())
+        }
+
+        for i in 0..<(finalRendered.count - contextLen) {
             prompt += renderMessage(
                 at: i + contextLen,
-                in: rendered,
+                in: finalRendered,
                 thinkingMode: thinkingMode,
                 dropThinking: effectiveDrop,
                 reasoningEffort: reasoningEffort,
@@ -350,6 +358,16 @@ public struct DeepseekV4ChatEncoder: Sendable {
                 + "and do not answer in prose before the tool result."
         }
         return rendered
+    }
+
+    static func requiredToolChoiceReminder() -> Message {
+        Message(
+            role: .latestReminder,
+            content:
+                "The active API tool_choice is required for this assistant turn. "
+                + "Call exactly one available tool now using a <\(DeepseekV4Tokens.dsml)tool_calls> block. "
+                + "Do not answer in prose before the tool result."
+        )
     }
 
     static func renderResponseFormat(_ rf: [String: any Sendable]) -> String {

@@ -125,6 +125,41 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         assertRequiredToolChoiceDirective(swiftRendered)
     }
 
+    @Test("Swift DSV4 required tool choice appends latest reminder after conflicting no-tool history")
+    func swiftDSV4RequiredToolChoiceAppendsLatestReminderAfterNoToolHistory() {
+        let rendered = DeepseekV4ChatEncoder().encode(
+            messages: [
+                .init(role: .system, content: "", tools: [lineCountToolSpec()]),
+                .init(role: .user, content: "Use line_count on red\ngreen\nblue."),
+                .init(
+                    role: .assistant,
+                    toolCalls: [
+                        .init(
+                            id: "call_lines",
+                            name: "line_count",
+                            arguments: #"{"text":"red\ngreen\nblue"}"#)
+                    ]),
+                .init(role: .tool, content: #"{"lines":3}"#, toolCallId: "call_lines"),
+                .init(role: .user, content: "How many lines? Do not call another tool."),
+                .init(role: .assistant, content: "Three lines were counted."),
+                .init(role: .user, content: "Now use line_count on one\ntwo.", task: "action"),
+            ],
+            thinkingMode: .chat,
+            toolChoiceRequired: true
+        )
+
+        let action = "<\u{FF5C}action\u{FF5C}>"
+        let reminder = "<\u{FF5C}latest_reminder\u{FF5C}>"
+        let actionRange = rendered.range(of: action)
+        let reminderRange = rendered.range(of: reminder)
+        #expect(actionRange != nil)
+        #expect(reminderRange != nil)
+        #expect(actionRange!.lowerBound < reminderRange!.lowerBound)
+        #expect(rendered.contains("The active API tool_choice is required"))
+        #expect(rendered.contains("<\u{FF5C}DSML\u{FF5C}tool_calls> block"))
+        #expect(rendered.hasSuffix("Do not answer in prose before the tool result."))
+    }
+
     @Test("Nemotron required tool choice keeps native XML tool contract")
     func nemotronRequiredToolChoiceKeepsNativeXMLToolContract() throws {
         let template = try Template(ChatTemplateFallbacks.nemotronMinimal)
@@ -356,6 +391,23 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
                         "path": ["type": "string"] as [String: any Sendable],
                     ] as [String: any Sendable],
                     "required": ["path"] as [String],
+                ] as [String: any Sendable],
+            ] as [String: any Sendable],
+        ] as [String: any Sendable]
+    }
+
+    private func lineCountToolSpec() -> [String: any Sendable] {
+        [
+            "type": "function",
+            "function": [
+                "name": "line_count",
+                "description": "Count newline-separated text lines.",
+                "parameters": [
+                    "type": "object",
+                    "properties": [
+                        "text": ["type": "string"] as [String: any Sendable],
+                    ] as [String: any Sendable],
+                    "required": ["text"] as [String],
                 ] as [String: any Sendable],
             ] as [String: any Sendable],
         ] as [String: any Sendable]
