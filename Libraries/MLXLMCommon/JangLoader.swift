@@ -896,10 +896,11 @@ public struct JangLoader: Sendable {
 
         let family = config.capabilities?.family?.lowercased() ?? ""
         let parser = config.capabilities?.toolParser?.lowercased() ?? ""
+        let supportsTools = config.capabilities?.supportsTools
         return family.contains("zaya1_vl")
             && ["zaya", "zaya_xml", "zyphra", "zyphra_xml"].contains(parser)
             && config.capabilities?.thinkInTemplate == false
-            && config.capabilities?.supportsTools == true
+            && supportsTools != false
     }
 
     /// Check whether a directory already has the files that the HuggingFace
