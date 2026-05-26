@@ -372,7 +372,7 @@ struct ToolTests {
     @Test("XML Function Parser marks missing required arguments invalid")
     func testXMLFunctionParserMissingRequiredArgument() throws {
         let parser = XMLFunctionParser(startTag: "<tool_call>", endTag: "</tool_call>")
-        let tools: [[String: any Sendable]] = [
+        let swiftTools: [[String: any Sendable]] = [
             [
                 "function": [
                     "name": "line_count",
@@ -387,12 +387,21 @@ struct ToolTests {
         ]
         let content = "<tool_call>\n<function=line_count>\n</function>\n</tool_call>"
 
-        let toolCall = try #require(parser.parse(content: content, tools: tools))
+        let toolCall = try #require(parser.parse(content: content, tools: swiftTools))
 
         #expect(toolCall.function.name == "line_count")
         #expect(toolCall.function.arguments["text"] == nil)
         #expect(toolCall.function.arguments["_error"] == .string("invalid_tool_arguments"))
         #expect(toolCall.function.arguments["_field"] == .string("text"))
+
+        let bridgedTools = try #require(
+            JSONSerialization.jsonObject(
+                with: JSONSerialization.data(withJSONObject: swiftTools),
+                options: []) as? [[String: any Sendable]]
+        )
+        let bridgedToolCall = try #require(parser.parse(content: content, tools: bridgedTools))
+        #expect(bridgedToolCall.function.arguments["_error"] == .string("invalid_tool_arguments"))
+        #expect(bridgedToolCall.function.arguments["_field"] == .string("text"))
     }
 
     // MARK: - GLM4 Format Tests

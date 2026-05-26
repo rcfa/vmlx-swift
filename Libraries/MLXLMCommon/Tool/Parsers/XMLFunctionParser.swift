@@ -106,7 +106,7 @@ public struct XMLFunctionParser: ToolCallParser, Sendable {
         in tools: [[String: any Sendable]]
     ) -> [String: any Sendable]? {
         for tool in tools {
-            let function = (tool["function"] as? [String: any Sendable]) ?? tool
+            let function = sendableObject(tool["function"]) ?? tool
             if function["name"] as? String == name {
                 return function
             }
@@ -133,10 +133,43 @@ public struct XMLFunctionParser: ToolCallParser, Sendable {
         if let object = value as? [String: any Sendable] {
             return object
         }
+        if let object = value as? NSDictionary {
+            return sendableNSDictionary(object)
+        }
         if case .object(let object)? = value as? JSONValue {
             return object.mapValues { $0.sendableValue }
         }
         return nil
+    }
+
+    private func sendableFoundationJSONValue(_ value: Any) -> (any Sendable)? {
+        if let string = value as? String {
+            return string
+        }
+        if let number = value as? NSNumber {
+            return number
+        }
+        if let object = value as? NSDictionary {
+            return sendableNSDictionary(object)
+        }
+        if let array = value as? NSArray {
+            return array.compactMap { sendableFoundationJSONValue($0) } as [any Sendable]
+        }
+        if value is NSNull {
+            return nil
+        }
+        return nil
+    }
+
+    private func sendableNSDictionary(_ object: NSDictionary) -> [String: any Sendable] {
+        var out: [String: any Sendable] = [:]
+        for (key, child) in object {
+            guard let key = key as? String else { continue }
+            if let sendable = sendableFoundationJSONValue(child) {
+                out[key] = sendable
+            }
+        }
+        return out
     }
 
     private func sendableStringArray(_ value: (any Sendable)?) -> [String] {
@@ -144,6 +177,9 @@ public struct XMLFunctionParser: ToolCallParser, Sendable {
             return strings
         }
         if let values = value as? [any Sendable] {
+            return values.compactMap { $0 as? String }
+        }
+        if let values = value as? NSArray {
             return values.compactMap { $0 as? String }
         }
         if case .array(let values)? = value as? JSONValue {
