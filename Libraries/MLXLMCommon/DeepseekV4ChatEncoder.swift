@@ -469,6 +469,10 @@ public struct DeepseekV4ChatEncoder: Sendable {
                 {
                     blocks.append(textBlock)
                     last.contentBlocks = blocks
+                    last.task = m.task
+                    last.tools = m.tools ?? last.tools
+                    last.responseFormat = m.responseFormat ?? last.responseFormat
+                    last.woEOS = m.woEOS
                     merged[merged.count - 1] = last
                 } else {
                     m.contentBlocks = [textBlock]

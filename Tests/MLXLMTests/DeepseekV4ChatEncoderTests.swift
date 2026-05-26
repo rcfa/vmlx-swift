@@ -176,6 +176,43 @@ struct DeepseekV4ChatEncoderTests {
             "tool result must merge into next user turn as <tool_result>")
     }
 
+    @Test("required tool choice survives tool-result merge into next user turn")
+    func requiredToolChoiceSurvivesToolResultMerge() {
+        let encoder = DeepseekV4ChatEncoder()
+        let prompt = encoder.encode(
+            messages: [
+                Msg(role: .user, content: "Count lines in alpha beta gamma."),
+                Msg(
+                    role: .assistant,
+                    content: "",
+                    toolCalls: [
+                        TC(
+                            id: "call_line_count",
+                            name: "line_count",
+                            arguments: "{\"text\":\"alpha\\nbeta\\ngamma\"}")
+                    ]),
+                Msg(
+                    role: .tool,
+                    content: "{\"lines\":3}",
+                    toolCallId: "call_line_count"),
+                Msg(
+                    role: .user,
+                    content: "Now read /Users/eric/Desktop/testmandel/mandelbrot.py.",
+                    task: "action"),
+            ],
+            thinkingMode: .chat,
+            toolChoiceRequired: true)
+
+        #expect(prompt.contains("<tool_result>{\"lines\":3}</tool_result>"))
+        #expect(prompt.contains(
+            "<tool_result>{\"lines\":3}</tool_result>\n\nNow read /Users/eric/Desktop/testmandel/mandelbrot.py."))
+        #expect(prompt.hasSuffix(
+            DeepseekV4Tokens.assistant
+                + DeepseekV4Tokens.thinkEnd
+                + DeepseekV4Tokens.taskSPTokens["action"]!),
+            "the latest user action task must survive merging a preceding tool result")
+    }
+
     @Test("tool_call arguments with non-string values render string=\"false\" + JSON")
     func toolCallNumericArgs() {
         let prompt = DeepseekV4ChatEncoder.renderToolCallInvoke(
