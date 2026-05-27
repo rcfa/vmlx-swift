@@ -732,6 +732,8 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         #expect(rendered.contains("<parameter=text>\nACTUAL_ARGUMENT_VALUE\n</parameter>"))
         #expect(rendered.contains("Do not omit required parameters."))
         #expect(rendered.contains("copy that exact text into the string parameter body"))
+        #expect(rendered.contains("Do not stop before emitting the tool call."))
+        #expect(rendered.contains("The next assistant message must begin with `<zyphra_tool_call>`."))
         #expect(!rendered.contains("VALUE_FOR_text"))
         #expect(rendered.contains("For string parameters, write the raw string value only."))
         #expect(rendered.hasSuffix(tail))

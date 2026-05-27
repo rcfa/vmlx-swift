@@ -838,7 +838,7 @@ The current assistant response MUST be a tool call. Reply only with a `<tool_cal
 {%- endmacro -%}
 
 {%- macro render_required_tool_choice_instruction() -%}
-    {{- '<IMPORTANT>\nThe current assistant response MUST be a tool call. Reply only with a `<zyphra_tool_call>` block for one available function and no prose before the tool result. Include every required `<parameter=...>` value exactly as requested.' -}}
+    {{- '<IMPORTANT>\nThe current assistant response MUST be a tool call. Do not stop before emitting the tool call. Reply only with a `<zyphra_tool_call>` block for one available function and no prose before the tool result. The next assistant message must begin with `<zyphra_tool_call>`. Include every required `<parameter=...>` value exactly as requested.' -}}
     {%- if required_tool_name -%}
         {{- '\nUse the `' ~ required_tool_name ~ '` function.' -}}
         {%- for tool in tools -%}
