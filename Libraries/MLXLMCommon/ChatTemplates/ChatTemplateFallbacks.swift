@@ -910,14 +910,18 @@ The current assistant response MUST be a tool call. Reply only with a `<tool_cal
         {%- endif -%}
         {{- '<|im_end|>\n' -}}
     {%- elif message['role'] == 'assistant' -%}
+        {%- set has_tool_calls = message['tool_calls'] is defined and message['tool_calls'] is iterable and message['tool_calls'] | length > 0 -%}
+        {%- set assistant_content = render_content(message['content']) -%}
+        {%- if not (required_tool_choice and has_tool_calls and not assistant_content) -%}
         {{- '<|im_start|>assistant\n' -}}
-        {{- render_content(message['content']) -}}
-        {%- if message['tool_calls'] is defined and message['tool_calls'] is iterable and message['tool_calls'] | length > 0 -%}
+        {{- assistant_content -}}
+        {%- if has_tool_calls and not required_tool_choice -%}
             {%- for tool_call in message['tool_calls'] -%}
                 {{- render_tool_call(tool_call) -}}
             {%- endfor -%}
         {%- endif -%}
         {{- '<|im_end|>\n' -}}
+        {%- endif -%}
     {%- elif message['role'] == 'tool' -%}
         {%- if not required_tool_choice -%}
             {{- '<|im_start|>user\n<zyphra_tool_response>\n' -}}

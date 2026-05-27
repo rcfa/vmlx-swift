@@ -717,10 +717,10 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
             .compactMap { segment in
                 segment.split(separator: "\n", maxSplits: 1).first.map(String.init)
             }
-        #expect(turnRoles == ["system", "user", "assistant", "user", "assistant", "user", "assistant"])
+        #expect(turnRoles == ["system", "user", "user", "assistant", "user", "assistant"])
         #expect(!rendered.contains("Previous tool result available."))
         #expect(!rendered.contains("<zyphra_tool_response>\n{\"lines\":3}"))
-        #expect(rendered.contains("<function=line_count>\n<parameter=text>\nred\ngreen\nblue\n</parameter>\n</function>"))
+        #expect(!rendered.contains("<function=line_count>\n<parameter=text>\nred\ngreen\nblue\n</parameter>\n</function>"))
         #expect(rendered.contains("Required call skeleton:\n<zyphra_tool_call>\n<function=line_count>"))
         #expect(rendered.contains("<parameter=text>\nVALUE_FOR_text\n</parameter>"))
         #expect(rendered.hasSuffix(tail))
