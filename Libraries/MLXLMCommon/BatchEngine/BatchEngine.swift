@@ -2160,7 +2160,10 @@ public actor BatchEngine {
         // ring buffer + 5-tuple metaState via `.rotating` LayerKind. The
         // `mediaSalt` is passed through so the stored key matches the key
         // the next fetch will look for (VL multi-turn cache hits).
-        if reason != .cancelled, let coordinator = cacheCoordinator {
+        if reason != .cancelled,
+           slot.originalInput.toolSchemas?.isEmpty != false,
+           let coordinator = cacheCoordinator
+        {
             let promptTokens = slot.cachePromptTokenIds
             let hasHybridPool = slot.cache.contains { $0 is HybridPoolCache }
             guard let promptCacheSnapshot = slot.promptCacheSnapshot

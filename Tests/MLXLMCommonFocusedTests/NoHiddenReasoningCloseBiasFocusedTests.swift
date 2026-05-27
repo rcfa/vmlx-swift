@@ -916,6 +916,9 @@ struct NemotronToolChoiceTemplateFocusedTests {
         #expect(system?.contains("for one available function") == true)
         #expect(system?.contains("for the line_count function") == false)
         #expect(system?.contains("Include every required <parameter=...>") == true)
+        #expect(system?.contains("Use exactly one of these function names: line_count.") == true)
+        #expect(system?.contains("- line_count(text)") == true)
+        #expect(system?.contains("Do not use placeholder or example function names.") == true)
         #expect(system?.contains("\"name\":\"line_count\"") == true)
         #expect(system?.hasSuffix("\n\nYou are concise.") == true)
         #expect(user?.contains("for one available function") == true)
@@ -945,6 +948,7 @@ struct NemotronToolChoiceTemplateFocusedTests {
         let system = out[0]["content"] as? String
         #expect(system?.contains("for one available function") == true)
         #expect(system?.contains("for the file_read function") == false)
+        #expect(system?.contains("Use exactly one of these function names: line_count.") == true)
         #expect(system?.contains("You are concise.") == true)
     }
 

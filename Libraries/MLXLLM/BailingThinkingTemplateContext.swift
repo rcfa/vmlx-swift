@@ -125,8 +125,11 @@ enum NemotronToolChoiceTemplateContext {
         guard let schema = toolSchemaJSON(tools), !schema.isEmpty else {
             return requiredToolDirective
         }
+        let contract = toolContractText(tools: tools)
         return """
             \(requiredToolDirective)
+
+            \(contract)
 
             Available tools:
             \(schema)
@@ -142,6 +145,41 @@ enum NemotronToolChoiceTemplateContext {
             return nil
         }
         return json
+    }
+
+    private static func toolContractText(tools: [ToolSpec]?) -> String {
+        let contracts = toolContracts(tools: tools)
+        guard !contracts.isEmpty else {
+            return "Use an exact function name from the available tools. Do not use placeholder or example function names."
+        }
+        let names = contracts.map(\.name).joined(separator: ", ")
+        let signatures = contracts
+            .map { contract in
+                let params = contract.requiredParameters.isEmpty
+                    ? ""
+                    : "(\(contract.requiredParameters.joined(separator: ", ")))"
+                return "- \(contract.name)\(params)"
+            }
+            .joined(separator: "\n")
+        return """
+            Use exactly one of these function names: \(names).
+            Required parameter signatures:
+            \(signatures)
+            Do not use placeholder or example function names.
+            """
+    }
+
+    private static func toolContracts(tools: [ToolSpec]?) -> [(name: String, requiredParameters: [String])] {
+        guard let tools else { return [] }
+        return tools.compactMap { tool in
+            guard let function = tool["function"] as? [String: any Sendable],
+                  let name = function["name"] as? String,
+                  !name.isEmpty
+            else { return nil }
+            let parameters = function["parameters"] as? [String: any Sendable]
+            let required = parameters?["required"] as? [String] ?? []
+            return (name: name, requiredParameters: required)
+        }
     }
 
     private static func addUserVisibleToolInstruction(

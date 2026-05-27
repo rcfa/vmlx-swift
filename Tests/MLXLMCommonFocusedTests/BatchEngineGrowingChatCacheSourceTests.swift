@@ -24,6 +24,7 @@ struct BatchEngineGrowingChatCacheSourceTests {
         #expect(source.contains("promptTokens + slot.generatedTokenIds"))
         #expect(scheduler.contains("let disablesGeneratedCacheBoundary: Bool"))
         #expect(scheduler.contains("request.input.toolSchemas?.isEmpty == false"))
+        #expect(source.contains("slot.originalInput.toolSchemas?.isEmpty != false"))
         #expect(source.contains("!slot.disablesGeneratedCacheBoundary"))
         #expect(source.contains("slot.originalInput.cacheHitSuffixContainsMediaPlaceholder(remaining)"))
         #expect(source.contains("let hasToolSchemas = slot.originalInput.toolSchemas?.isEmpty == false"))
@@ -44,6 +45,7 @@ struct BatchEngineGrowingChatCacheSourceTests {
             encoding: .utf8)
 
         #expect(source.contains("mutating func storeCacheAfterGeneration"))
+        #expect(source.contains("TokenIterator: skipped cache store for tool-schema prompt"))
         #expect(source.contains("generatedTokenIds.append(token)"))
         #expect(source.contains("promptTokenIds = effectivePromptTokens"))
         #expect(source.contains("!input.requiresPostPrepareCacheKey"))

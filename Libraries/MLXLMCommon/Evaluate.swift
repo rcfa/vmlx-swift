@@ -1745,6 +1745,12 @@ public struct TokenIterator: TokenIteratorProtocol {
         guard let coordinator = cacheCoordinator, !promptTokenIds.isEmpty else {
             return
         }
+        guard originalInput.toolSchemas?.isEmpty != false else {
+            Self.logger.debug(
+                "TokenIterator: skipped cache store for tool-schema prompt"
+            )
+            return
+        }
 
         func store(
             tokens: [Int],
