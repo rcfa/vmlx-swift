@@ -533,6 +533,8 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
             )
         )
         #expect(rendered.contains("Do not emit JSON objects for tool calls"))
+        #expect(rendered.contains("real newline characters inside the parameter body"))
+        #expect(rendered.contains("do not write backslash-n escape sequences"))
     }
 
     private func assertRequiredToolChoiceDirective(_ rendered: String) {

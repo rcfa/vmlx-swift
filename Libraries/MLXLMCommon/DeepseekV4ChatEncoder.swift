@@ -351,7 +351,7 @@ public struct DeepseekV4ChatEncoder: Sendable {
 
         Do not emit JSON objects for tool calls; tool calls must use DSML invoke blocks.
 
-        String parameters should be specified as is and set `string="true"`. For all other types (numbers, booleans, arrays, objects), pass the value in JSON format and set `string="false"`.
+        String parameters should be specified as is and set `string="true"`. For multiline strings, put real newline characters inside the parameter body; do not write backslash-n escape sequences. For all other types (numbers, booleans, arrays, objects), pass the value in JSON format and set `string="false"`.
 
         If thinking_mode is enabled (triggered by \(DeepseekV4Tokens.thinkStart)), you MUST output your complete reasoning inside \(DeepseekV4Tokens.thinkStart)...\(DeepseekV4Tokens.thinkEnd) BEFORE any tool calls or final response.
 
