@@ -100,6 +100,9 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
         if let actionJSONCall = parseActionJSONToolFallback(in: text, tools: tools) {
             return actionJSONCall
         }
+        if let apiToolJSONCall = parseEmbeddedAPIToolJSONFallback(in: text, tools: tools) {
+            return apiToolJSONCall
+        }
         return parseInlineJSONToolFallback(in: text, tools: tools)
     }
 
@@ -133,6 +136,9 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
         }
         if let actionJSONCall = parseActionJSONToolFallback(in: buffer, tools: tools) {
             return [actionJSONCall]
+        }
+        if let apiToolJSONCall = parseEmbeddedAPIToolJSONFallback(in: buffer, tools: tools) {
+            return [apiToolJSONCall]
         }
         return parseInlineJSONToolFallback(in: buffer, tools: tools).map { [$0] } ?? []
     }
@@ -404,7 +410,7 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
         } else {
             let reserved = Set([
                 "tool", "tool_name", "name", "function", "arguments", "parameters", "args",
-                "type", "id",
+                "type", "id", "api_type", "api_name",
             ])
             argsObject = object.filter { !reserved.contains($0.key) }
         }
@@ -421,6 +427,26 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
             }
         }
         return ToolCall(function: .init(name: name, arguments: args))
+    }
+
+    /// Live DSV4 JANGTQ2 rows can emit a schema-bound API-tool object inside
+    /// malformed control text, for example:
+    /// `_only_call...{"api_type":"api_tool","api_name":"line_count",...}`.
+    /// Treat only registered `api_tool` objects as protocol so ordinary JSON
+    /// answers stay visible.
+    private func parseEmbeddedAPIToolJSONFallback(
+        in text: String,
+        tools: [[String: any Sendable]]?
+    ) -> ToolCall? {
+        guard let tools, !tools.isEmpty else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.hasPrefix("{"),
+            let jsonObject = firstBalancedJSONObject(in: trimmed[...]),
+            let object = parseJSONObjectAllowingLiteralInvalidEscapes(jsonObject),
+            object["api_type"] as? String == "api_tool",
+            object["api_name"] as? String != nil
+        else { return nil }
+        return parseInlineJSONObject(object, tools: tools, allowBareName: true)
     }
 
     private func actionJSONPayload(in text: String) -> String? {
@@ -1098,6 +1124,11 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
     private func fallbackToolName(in object: [String: Any], allowBareName: Bool) -> String? {
         if let tool = object["tool"] as? String { return tool }
         if let toolName = object["tool_name"] as? String { return toolName }
+        if object["api_type"] as? String == "api_tool",
+            let apiName = object["api_name"] as? String
+        {
+            return apiName
+        }
         if let function = object["function"] as? [String: Any],
             let name = function["name"] as? String
         {

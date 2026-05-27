@@ -385,6 +385,29 @@ struct DSMLInlineJSONToolFallbackFocusedTests {
         #expect(!visible.contains("DSV4_UI_TOUT_OK"))
     }
 
+    @Test("live DSV4 api_tool JSON attempt is captured without visible leakage")
+    func liveDSV4APIToolJSONAttemptIsCapturedWithoutVisibleLeakage() {
+        let output = #"""
+            _only_call_one_tools_without_parameters{"api_type":"api_tool","api_name":"line_count","arguments":{"text":"one\ntwo"}}
+            <｜DSML｜tool_c>
+            """#
+        let processor = ToolCallProcessor(format: .dsml, tools: lineCountToolSchema())
+        var visible = ""
+        for ch in output {
+            visible += processor.processChunk(String(ch)) ?? ""
+        }
+        visible += processor.processEOS() ?? ""
+
+        #expect(processor.toolCalls.count == 1)
+        let call = processor.toolCalls.first
+        #expect(call?.function.name == "line_count")
+        #expect(call?.function.arguments["text"] == .string("one\ntwo"))
+        #expect(visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(!visible.contains("api_tool"))
+        #expect(!visible.contains("line_count"))
+        #expect(!visible.contains("<｜DSML｜tool_c>"))
+    }
+
     @Test("malformed live DSV4 action JSON attempt is quarantined without visible leakage")
     func malformedLiveDSV4ActionJSONAttemptIsQuarantinedWithoutVisibleLeakage() {
         let output = #"""
@@ -522,6 +545,26 @@ struct DSMLInlineJSONToolFallbackFocusedTests {
         ]
         let function: [String: any Sendable] = [
             "name": "file_read",
+            "parameters": parameters,
+        ]
+        return [
+            [
+                "type": "function",
+                "function": function,
+            ] as [String: any Sendable]
+        ]
+    }
+
+    private func lineCountToolSchema() -> [[String: any Sendable]] {
+        let parameters: [String: any Sendable] = [
+            "type": "object",
+            "properties": [
+                "text": ["type": "string"] as [String: any Sendable]
+            ] as [String: any Sendable],
+            "required": ["text"],
+        ]
+        let function: [String: any Sendable] = [
+            "name": "line_count",
             "parameters": parameters,
         ]
         return [
