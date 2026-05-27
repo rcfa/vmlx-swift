@@ -907,15 +907,20 @@ struct NemotronToolChoiceTemplateFocusedTests {
         let out = NemotronToolChoiceTemplateContext.apply(
             to: messages,
             modelType: "nemotron_h",
+            tools: lineCountToolSchema(),
             additionalContext: ["tool_choice": "required", "tool_choice_name": "line_count"])
 
         let system = out[0]["content"] as? String
+        let user = out[1]["content"] as? String
         #expect(out[0]["role"] as? String == "system")
         #expect(system?.contains("for one available function") == true)
         #expect(system?.contains("for the line_count function") == false)
         #expect(system?.contains("Include every required <parameter=...>") == true)
+        #expect(system?.contains("\"name\":\"line_count\"") == true)
         #expect(system?.hasSuffix("\n\nYou are concise.") == true)
-        #expect(out[1]["content"] as? String == "Use line_count on red\ngreen\nblue.")
+        #expect(user?.contains("for one available function") == true)
+        #expect(user?.contains("\"name\":\"line_count\"") == true)
+        #expect(user?.hasSuffix("Use line_count on red\ngreen\nblue.") == true)
     }
 
     @Test("Nemotron named required tool contract keeps proven generic directive")
@@ -934,6 +939,7 @@ struct NemotronToolChoiceTemplateFocusedTests {
         let out = NemotronToolChoiceTemplateContext.apply(
             to: messages,
             modelType: "nemotron_h",
+            tools: lineCountToolSchema(),
             additionalContext: ["tool_choice": "required", "tool_choice_name": "file_read"])
 
         let system = out[0]["content"] as? String
@@ -972,6 +978,8 @@ struct NemotronToolChoiceTemplateFocusedTests {
         #expect(out[0]["role"] as? String == "system")
         #expect((out[0]["content"] as? String)?.contains("<tool_call> XML") == true)
         #expect(out[1]["role"] as? String == "user")
+        #expect((out[1]["content"] as? String)?.contains("<tool_call> XML") == true)
+        #expect((out[1]["content"] as? String)?.hasSuffix("Use line_count on one\ntwo.") == true)
     }
 
     @Test("non-required or non-Nemotron messages are unchanged")

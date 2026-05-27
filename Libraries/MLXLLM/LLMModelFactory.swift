@@ -1055,6 +1055,7 @@ private struct LLMUserInputProcessor: UserInputProcessor {
         let messages = NemotronToolChoiceTemplateContext.apply(
             to: bailingMessages,
             modelType: modelType,
+            tools: input.tools,
             additionalContext: additionalContext
         )
         do {
