@@ -105,7 +105,8 @@ public struct DeepseekV4ChatEncoder: Sendable {
         dropEarlierReasoning: Bool = true,
         context: [Message] = [],
         addBOS: Bool = true,
-        toolChoiceRequired: Bool = false
+        toolChoiceRequired: Bool = false,
+        toolChoiceName: String? = nil
     ) -> String {
         // Preprocess: merge tool messages into user, sort tool_result
         // blocks by the order they were called in the prior assistant.
@@ -141,7 +142,10 @@ public struct DeepseekV4ChatEncoder: Sendable {
             finalRendered.contains(where: { !($0.tools?.isEmpty ?? true) }),
             finalRendered.last?.role != .latestReminder
         {
-            let reminder = Self.requiredToolChoiceReminder()
+            let requiredToolName =
+                Self.normalizedToolChoiceName(toolChoiceName)
+                ?? Self.singleAvailableToolName(in: finalRendered)
+            let reminder = Self.requiredToolChoiceReminder(toolName: requiredToolName)
             if let tailIndex = finalRendered.lastIndex(where: {
                 $0.role == .user || $0.role == .developer
             }), tailIndex >= contextLen {
@@ -161,7 +165,8 @@ public struct DeepseekV4ChatEncoder: Sendable {
                 thinkingMode: thinkingMode,
                 dropThinking: effectiveDrop,
                 reasoningEffort: reasoningEffort,
-                toolChoiceRequired: toolChoiceRequired
+                toolChoiceRequired: toolChoiceRequired,
+                toolChoiceName: toolChoiceName
             )
         }
 
@@ -176,7 +181,8 @@ public struct DeepseekV4ChatEncoder: Sendable {
         thinkingMode: DeepseekV4ThinkingMode,
         dropThinking: Bool,
         reasoningEffort: DeepseekV4ReasoningEffort?,
-        toolChoiceRequired: Bool
+        toolChoiceRequired: Bool,
+        toolChoiceName: String?
     ) -> String {
         let msg = messages[index]
         let lastUserIdx = Self.findLastUserIndex(messages)
@@ -193,7 +199,8 @@ public struct DeepseekV4ChatEncoder: Sendable {
             if let tools = msg.tools, !tools.isEmpty {
                 out += "\n\n" + Self.renderTools(
                     tools,
-                    toolChoiceRequired: toolChoiceRequired
+                    toolChoiceRequired: toolChoiceRequired,
+                    toolChoiceName: toolChoiceName
                 )
             }
             if let rf = msg.responseFormat {
@@ -209,7 +216,8 @@ public struct DeepseekV4ChatEncoder: Sendable {
             if let tools = msg.tools, !tools.isEmpty {
                 s += "\n\n" + Self.renderTools(
                     tools,
-                    toolChoiceRequired: toolChoiceRequired
+                    toolChoiceRequired: toolChoiceRequired,
+                    toolChoiceName: toolChoiceName
                 )
             }
             if let rf = msg.responseFormat {
@@ -355,29 +363,74 @@ public struct DeepseekV4ChatEncoder: Sendable {
 
     static func renderTools(
         _ tools: [[String: any Sendable]],
-        toolChoiceRequired: Bool = false
+        toolChoiceRequired: Bool = false,
+        toolChoiceName: String? = nil
     ) -> String {
         let schemas = tools.map { Self.functionSpec(from: $0) }
         let schemaJson = schemas.map { $0.jsonSerialized() }
         let schemasBlock = schemaJson.joined(separator: "\n")
         var rendered = toolsTemplate.replacingOccurrences(of: "%@", with: schemasBlock)
         if toolChoiceRequired {
+            let requiredToolName =
+                Self.normalizedToolChoiceName(toolChoiceName)
+                ?? Self.singleAvailableToolName(in: tools)
+            let namedInstruction = requiredToolName.map {
+                " Use the `\($0)` function."
+            } ?? ""
             rendered +=
                 "\n\nThe current assistant response MUST be a tool call. "
                 + "Start with a \"<\(DeepseekV4Tokens.dsml)tool_calls>\" block "
                 + "and do not answer in prose before the tool result."
+                + namedInstruction
         }
         return rendered
     }
 
-    static func requiredToolChoiceReminder() -> Message {
-        Message(
+    static func requiredToolChoiceReminder(toolName: String? = nil) -> Message {
+        let namedInstruction = toolName.map {
+            " Use the `\($0)` function."
+        } ?? ""
+        return Message(
             role: .latestReminder,
             content:
                 "The active API tool_choice is required for this assistant turn. "
                 + "Call exactly one available tool now using a <\(DeepseekV4Tokens.dsml)tool_calls> block. "
                 + "Do not answer in prose before the tool result."
+                + namedInstruction
         )
+    }
+
+    static func normalizedToolChoiceName(_ name: String?) -> String? {
+        guard let name else { return nil }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func singleAvailableToolName(in messages: [Message]) -> String? {
+        var names: Set<String> = []
+        for message in messages {
+            guard let tools = message.tools else { continue }
+            for tool in tools {
+                if let name = Self.functionSpec(from: tool)["name"] as? String,
+                    let normalized = Self.normalizedToolChoiceName(name)
+                {
+                    names.insert(normalized)
+                }
+            }
+        }
+        return names.count == 1 ? names.first : nil
+    }
+
+    static func singleAvailableToolName(in tools: [[String: any Sendable]]) -> String? {
+        var names: Set<String> = []
+        for tool in tools {
+            if let name = Self.functionSpec(from: tool)["name"] as? String,
+                let normalized = Self.normalizedToolChoiceName(name)
+            {
+                names.insert(normalized)
+            }
+        }
+        return names.count == 1 ? names.first : nil
     }
 
     static func renderResponseFormat(_ rf: [String: any Sendable]) -> String {

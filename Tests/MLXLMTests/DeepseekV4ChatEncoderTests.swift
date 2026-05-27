@@ -201,7 +201,8 @@ struct DeepseekV4ChatEncoderTests {
                     task: "action"),
             ],
             thinkingMode: .chat,
-            toolChoiceRequired: true)
+            toolChoiceRequired: true,
+            toolChoiceName: "line_count")
 
         #expect(prompt.contains("<tool_result>{\"lines\":3}</tool_result>"))
         #expect(prompt.contains(
@@ -249,6 +250,7 @@ struct DeepseekV4ChatEncoderTests {
         #expect(finalUserRange.upperBound <= reminderRange.lowerBound, "Prompt: \(prompt)")
         #expect(reminderRange.upperBound <= tailRange.lowerBound, "Prompt: \(prompt)")
         #expect(prompt.hasSuffix(assistantTail), "Prompt: \(prompt)")
+        #expect(prompt.contains("Use the `line_count` function."), "Prompt: \(prompt)")
         #expect(!prompt.contains(DeepseekV4Tokens.taskSPTokens["action"]!), "Prompt: \(prompt)")
     }
 
