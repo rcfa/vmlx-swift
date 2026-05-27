@@ -1,0 +1,91 @@
+// Copyright © 2026 Osaurus AI. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+import Testing
+@testable import MLXLMCommon
+
+@Suite("Gemma4 Zyphra tool parser focused contracts")
+struct Gemma4ZyphraToolParserFocusedTests {
+    @Test("Gemma4 parser accepts live Zyphra multiline tool-call envelope")
+    func gemma4ParserAcceptsLiveZyphraMultilineToolCallEnvelope() throws {
+        let output = """
+        <zyphra_tool_call>
+        <function=line_count
+        <parameter=text
+        >red
+        green
+        blue
+        </parameter>
+        </function>
+        </zyphra_tool_call>
+        """
+        let call = try #require(
+            ToolCallFormat.gemma4.createParser().parse(
+                content: output,
+                tools: [lineCountToolSpec()]
+            )
+        )
+
+        #expect(call.function.name == "line_count")
+        #expect(call.function.arguments["text"] == .string("red\ngreen\nblue"))
+    }
+
+    @Test("Gemma4 processor routes live Zyphra envelope to tool call without visible leak")
+    func gemma4ProcessorRoutesLiveZyphraEnvelopeWithoutVisibleLeak() {
+        let output = """
+        <zyphra_tool_call>
+        <function=line_count
+        <parameter=text
+        >red
+        green
+        blue
+        </parameter>
+        </function>
+        </zyphra_tool_call>
+        """
+        let processor = ToolCallProcessor(format: .gemma4, tools: [lineCountToolSpec()])
+        var visible = ""
+        for ch in output {
+            visible += processor.processChunk(String(ch)) ?? ""
+        }
+        visible += processor.processEOS() ?? ""
+
+        #expect(visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(!visible.contains("zyphra_tool_call"))
+        #expect(!visible.contains("<function="))
+        #expect(processor.toolCalls.count == 1)
+        #expect(processor.toolCalls.first?.function.name == "line_count")
+        #expect(processor.toolCalls.first?.function.arguments["text"] == .string("red\ngreen\nblue"))
+    }
+
+    @Test("Gemma4 parser still accepts native Gemma4 tool-call envelope")
+    func gemma4ParserStillAcceptsNativeEnvelope() throws {
+        let output = #"<|tool_call>call:line_count{text:<|"|>one\ntwo<|"|>}<tool_call|>"#
+        let call = try #require(
+            ToolCallFormat.gemma4.createParser().parse(
+                content: output,
+                tools: [lineCountToolSpec()]
+            )
+        )
+
+        #expect(call.function.name == "line_count")
+        #expect(call.function.arguments["text"] == .string("one\\ntwo"))
+    }
+
+    private func lineCountToolSpec() -> [String: any Sendable] {
+        [
+            "type": "function",
+            "function": [
+                "name": "line_count",
+                "parameters": [
+                    "type": "object",
+                    "properties": [
+                        "text": ["type": "string"] as [String: any Sendable],
+                    ] as [String: any Sendable],
+                    "required": ["text"],
+                    "additionalProperties": false,
+                ] as [String: any Sendable],
+            ] as [String: any Sendable],
+        ]
+    }
+}

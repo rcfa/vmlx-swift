@@ -31,14 +31,47 @@ public struct XMLFunctionParser: ToolCallParser, Sendable {
 
         let funcContent = String(content[funcMatch])
 
-        // Extract function name (everything between <function= and first >)
-        guard let nameStart = funcContent.range(of: "<function="),
-            let nameEnd = funcContent.range(
-                of: ">", range: nameStart.upperBound ..< funcContent.endIndex)
-        else { return nil }
+        // Extract function name. Most models emit `<function=name>`, but
+        // live Zyphra/Gemma-family rows can put the nested parameter tag on
+        // the next line before closing the function opener:
+        //
+        //   <function=line_count
+        //   <parameter=text
+        //   >...
+        //
+        // Treat that as the same XML-function transport instead of leaking a
+        // protocol block as visible assistant text.
+        guard let nameStart = funcContent.range(of: "<function=") else {
+            return nil
+        }
 
-        let funcName = String(funcContent[nameStart.upperBound ..< nameEnd.lowerBound])
-        let paramSection = String(funcContent[nameEnd.upperBound...])
+        let firstParameter = funcContent.range(
+            of: "<parameter=", range: nameStart.upperBound ..< funcContent.endIndex)
+        let firstHeaderEnd = funcContent.range(
+            of: ">", range: nameStart.upperBound ..< funcContent.endIndex)
+
+        let nameEnd: String.Index
+        let paramSectionStart: String.Index
+        if let firstParameter,
+            let firstHeaderEnd,
+            firstParameter.lowerBound < firstHeaderEnd.lowerBound
+        {
+            nameEnd = firstParameter.lowerBound
+            paramSectionStart = firstParameter.lowerBound
+        } else if let firstHeaderEnd {
+            nameEnd = firstHeaderEnd.lowerBound
+            paramSectionStart = firstHeaderEnd.upperBound
+        } else if let firstParameter {
+            nameEnd = firstParameter.lowerBound
+            paramSectionStart = firstParameter.lowerBound
+        } else {
+            return nil
+        }
+
+        let funcName = String(funcContent[nameStart.upperBound ..< nameEnd])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !funcName.isEmpty else { return nil }
+        let paramSection = String(funcContent[paramSectionStart...])
 
         var arguments: [String: any Sendable] = [:]
 
@@ -52,6 +85,11 @@ public struct XMLFunctionParser: ToolCallParser, Sendable {
             else { break }
 
             let paramName = String(paramSection[paramStart.upperBound ..< nameEnd.lowerBound])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !paramName.isEmpty else {
+                searchRange = nameEnd.upperBound ..< paramSection.endIndex
+                continue
+            }
 
             // Find the closing </parameter> tag
             guard

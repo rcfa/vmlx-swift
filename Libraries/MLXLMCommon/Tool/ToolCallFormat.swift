@@ -191,8 +191,7 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         case .gemma:
             return GemmaFunctionParser()
         case .gemma4:
-            return GemmaFunctionParser(
-                startTag: "<|tool_call>", endTag: "<tool_call|>", escapeMarker: "<|\"|>")
+            return Gemma4ToolCallParser()
         case .kimiK2:
             return KimiK2ToolCallParser()
         case .minimaxM2:
