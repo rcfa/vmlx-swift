@@ -646,8 +646,10 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         #expect(rendered.contains("Use the `osaurus_probe_tool_0` function."))
         #expect(rendered.contains("Required parameters for `osaurus_probe_tool_0`: query."))
         #expect(rendered.contains("<function=osaurus_probe_tool_0>"))
-        #expect(rendered.contains("<parameter=PARAMETER_NAME>\nACTUAL_ARGUMENT_VALUE\n</parameter>"))
-        #expect(rendered.contains("fill each parameter with the actual argument value"))
+        #expect(rendered.contains("<parameter=query>\n\n</parameter>"))
+        #expect(rendered.contains("Required call shape for the current request"))
+        #expect(!rendered.contains("ACTUAL_ARGUMENT_VALUE"))
+        #expect(!rendered.contains("PARAMETER_NAME"))
         #expect(!rendered.contains("VALUE_FOR_query"))
         #expect(!rendered.contains("VALUE_FOR_*"))
         #expect(rendered.contains("Do not wrap the parameter value in JSON quotes"))
@@ -679,7 +681,7 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
                 ["role": "tool", "tool_call_id": "call_lines", "content": #"{"lines":3}"#],
                 ["role": "user", "content": "How many lines? Do not call another tool."],
                 ["role": "assistant", "content": "Three lines were counted."],
-                ["role": "user", "content": "Now use line_count on one\ntwo."],
+                ["role": "user", "content": "Now use line_count on this exact text: one\ntwo"],
             ],
             "tools": [
                 [
@@ -703,7 +705,7 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
             "tool_choice": "required",
         ])
 
-        let finalUser = "Now use line_count on one\ntwo."
+        let finalUser = "Now use line_count on this exact text: one\ntwo"
         let currentReminder = "The current assistant response MUST be a tool call."
         let tail = "<|im_start|>assistant\n"
         let finalUserRange = rendered.range(of: finalUser)
@@ -726,14 +728,14 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         #expect(!rendered.contains("Previous tool result available."))
         #expect(!rendered.contains("<zyphra_tool_response>\n{\"lines\":3}"))
         #expect(!rendered.contains("<function=line_count>\n<parameter=text>\nred\ngreen\nblue\n</parameter>\n</function>"))
-        #expect(rendered.contains("Return the call in this form:\n<zyphra_tool_call>\n<function=line_count>"))
-        #expect(rendered.contains("<parameter=PARAMETER_NAME>\nACTUAL_ARGUMENT_VALUE\n</parameter>"))
-        #expect(rendered.contains("include these required parameter block(s) exactly once"))
-        #expect(rendered.contains("<parameter=text>\nACTUAL_ARGUMENT_VALUE\n</parameter>"))
+        #expect(rendered.contains("Required call shape for the current request:\n<zyphra_tool_call>\n<function=line_count>"))
+        #expect(rendered.contains("<parameter=text>\none\ntwo\n</parameter>"))
+        #expect(!rendered.contains("ACTUAL_ARGUMENT_VALUE"))
+        #expect(!rendered.contains("PARAMETER_NAME"))
         #expect(rendered.contains("Do not omit required parameters."))
         #expect(rendered.contains("copy that exact text into the string parameter body"))
-        #expect(rendered.contains("Do not stop before emitting the tool call."))
-        #expect(rendered.contains("The next assistant message must begin with `<zyphra_tool_call>`."))
+        #expect(!rendered.contains("Do not stop before emitting the tool call."))
+        #expect(!rendered.contains("The next assistant message must begin with `<zyphra_tool_call>`."))
         #expect(!rendered.contains("VALUE_FOR_text"))
         #expect(rendered.contains("For string parameters, write the raw string value only."))
         #expect(rendered.hasSuffix(tail))
@@ -767,6 +769,24 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         <parameter=text>
         "red\ngreen\nblue"
         </parameter>
+        </function>
+        </zyphra_tool_call>
+        """#
+        let call = try #require(
+            ToolCallFormat.zayaXml.createParser().parse(
+                content: content,
+                tools: [lineCountToolSpec()]))
+
+        #expect(call.function.name == "line_count")
+        #expect(call.function.arguments["text"] == .string("red\ngreen\nblue"))
+    }
+
+    @Test("ZAYA XML parser trims boundary newline after JSON string unwrapping")
+    func zayaXMLParserTrimsBoundaryNewlineAfterJSONStringUnwrapping() throws {
+        let content = #"""
+        <zyphra_tool_call>
+        <function=line_count>
+        <parameter=text>"red\ngreen\nblue\n"</parameter>
         </function>
         </zyphra_tool_call>
         """#

@@ -62,12 +62,7 @@ public struct XMLFunctionParser: ToolCallParser, Sendable {
             var paramValue = String(paramSection[nameEnd.upperBound ..< paramEnd.lowerBound])
 
             // Trim leading/trailing newlines (matching Python behavior)
-            if paramValue.hasPrefix("\n") {
-                paramValue = String(paramValue.dropFirst())
-            }
-            if paramValue.hasSuffix("\n") {
-                paramValue = String(paramValue.dropLast())
-            }
+            paramValue = trimBoundaryNewlines(paramValue)
 
             if decodesHTMLLineBreaks,
                isStringType(funcName: funcName, argName: paramName, tools: tools) {
@@ -76,7 +71,7 @@ public struct XMLFunctionParser: ToolCallParser, Sendable {
             if unwrapJSONQuotedStringParameters,
                isStringType(funcName: funcName, argName: paramName, tools: tools),
                let unwrapped = decodeQuotedStringParameter(paramValue) {
-                paramValue = unwrapped
+                paramValue = trimBoundaryNewlines(unwrapped)
             }
 
             // Convert value based on schema type
@@ -146,6 +141,17 @@ public struct XMLFunctionParser: ToolCallParser, Sendable {
             "_field": field,
             "_expected": expected,
         ]
+    }
+
+    private func trimBoundaryNewlines(_ value: String) -> String {
+        var result = value
+        if result.hasPrefix("\n") {
+            result = String(result.dropFirst())
+        }
+        if result.hasSuffix("\n") {
+            result = String(result.dropLast())
+        }
+        return result
     }
 
     private func sendableObject(_ value: (any Sendable)?) -> [String: any Sendable]? {

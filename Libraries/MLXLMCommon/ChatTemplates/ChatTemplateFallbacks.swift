@@ -837,20 +837,37 @@ The current assistant response MUST be a tool call. Reply only with a `<tool_cal
     {{- '</function>\n</zyphra_tool_call>\n' -}}
 {%- endmacro -%}
 
-{%- macro render_required_tool_choice_instruction() -%}
-    {{- '<IMPORTANT>\nThe current assistant response MUST be a tool call. Do not stop before emitting the tool call. Reply only with a `<zyphra_tool_call>` block for one available function and no prose before the tool result. The next assistant message must begin with `<zyphra_tool_call>`. Include every required `<parameter=...>` value exactly as requested.' -}}
+{%- macro render_required_tool_choice_instruction(latest_user_content='') -%}
+    {{- '<IMPORTANT>\nThe current assistant response MUST be a tool call. Reply only with a `<zyphra_tool_call>` block for one available function and no prose before the tool result. Include every required `<parameter=...>` value exactly as requested.' -}}
     {%- if required_tool_name -%}
         {{- '\nUse the `' ~ required_tool_name ~ '` function.' -}}
         {%- for tool in tools -%}
             {%- set selected_tool = tool['function'] if tool['function'] is defined else tool -%}
             {%- if selected_tool['name'] == required_tool_name and selected_tool['parameters'] is defined and selected_tool['parameters']['required'] is defined -%}
                 {{- '\nRequired parameters for `' ~ required_tool_name ~ '`: ' ~ (selected_tool['parameters']['required'] | join(', ')) ~ '.' -}}
-                {{- '\nReturn the call in this form:\n<zyphra_tool_call>\n<function=' ~ required_tool_name ~ '>\n<parameter=PARAMETER_NAME>\nACTUAL_ARGUMENT_VALUE\n</parameter>\n</function>\n</zyphra_tool_call>' -}}
-                {{- '\nFor this tool, include these required parameter block(s) exactly once:' -}}
-                {%- for required_param_name in selected_tool['parameters']['required'] -%}
-                    {{- '\n<parameter=' ~ required_param_name ~ '>\nACTUAL_ARGUMENT_VALUE\n</parameter>' -}}
+                {{- '\nRequired call shape for the current request:\n<zyphra_tool_call>\n<function=' ~ required_tool_name ~ '>' -}}
+                {%- for param_name in selected_tool['parameters']['required'] -%}
+                    {%- set exact = namespace(value='') -%}
+                    {%- if latest_user_content is string -%}
+                        {%- set exact_markers = [
+                            'exact ' ~ param_name ~ ':',
+                            'this exact ' ~ param_name ~ ':',
+                            'exactly this ' ~ param_name ~ ':',
+                            'exactly ' ~ param_name ~ ':'
+                        ] -%}
+                        {%- for exact_marker in exact_markers -%}
+                            {%- if not exact.value and exact_marker in latest_user_content -%}
+                                {%- set exact.value = latest_user_content.split(exact_marker)[1] | trim -%}
+                            {%- endif -%}
+                        {%- endfor -%}
+                    {%- endif -%}
+                    {{- '\n<parameter=' ~ param_name ~ '>\n' -}}
+                    {%- if exact.value -%}
+                        {{- exact.value -}}
+                    {%- endif -%}
+                    {{- '\n</parameter>' -}}
                 {%- endfor -%}
-                {{- '\nUse the required parameter names exactly as listed above and fill each parameter with the actual argument value requested by the user.' -}}
+                {{- '\n</function>\n</zyphra_tool_call>' -}}
                 {{- '\nDo not omit required parameters. If the latest user message asks to use the tool on exact text, copy that exact text into the string parameter body, preserving newlines.' -}}
                 {{- '\nFor string parameters, write the raw string value only. Do not wrap the parameter value in JSON quotes unless the requested value itself includes quote characters.' -}}
             {%- endif -%}
@@ -924,7 +941,7 @@ The current assistant response MUST be a tool call. Reply only with a `<tool_cal
         {{- render_content(message['content']) -}}
         {%- if required_tool_choice and loop.last -%}
             {{- '\n\n' -}}
-            {{- render_required_tool_choice_instruction() -}}
+            {{- render_required_tool_choice_instruction(message['content']) -}}
         {%- endif -%}
         {{- '<|im_end|>\n' -}}
         {%- endif -%}

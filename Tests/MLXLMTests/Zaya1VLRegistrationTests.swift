@@ -447,10 +447,12 @@ struct Zaya1VLRegistrationTests {
         #expect(decoded.contains("Required parameters for `line_count`: text."),
             "decoded prompt: \(decoded)")
         #expect(decoded.contains("<function=line_count>"), "decoded prompt: \(decoded)")
-        #expect(decoded.contains("<parameter=PARAMETER_NAME>\nACTUAL_ARGUMENT_VALUE\n</parameter>"),
+        #expect(decoded.contains("<parameter=text>\nalpha\nbeta\ngamma\n</parameter>"),
             "decoded prompt: \(decoded)")
-        #expect(decoded.contains("fill each parameter with the actual argument value"),
+        #expect(decoded.contains("Required call shape for the current request"),
             "decoded prompt: \(decoded)")
+        #expect(!decoded.contains("ACTUAL_ARGUMENT_VALUE"), "decoded prompt: \(decoded)")
+        #expect(!decoded.contains("PARAMETER_NAME"), "decoded prompt: \(decoded)")
         #expect(!decoded.contains("VALUE_FOR_text"), "decoded prompt: \(decoded)")
         #expect(!decoded.contains("VALUE_FOR_*"), "decoded prompt: \(decoded)")
     }
