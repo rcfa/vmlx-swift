@@ -145,7 +145,10 @@ public struct DeepseekV4ChatEncoder: Sendable {
             if let tailIndex = finalRendered.lastIndex(where: {
                 $0.role == .user || $0.role == .developer
             }), tailIndex >= contextLen {
-                finalRendered.insert(reminder, at: tailIndex)
+                let insertionIndex = finalRendered[tailIndex].task == nil
+                    ? finalRendered.index(after: tailIndex)
+                    : tailIndex
+                finalRendered.insert(reminder, at: insertionIndex)
             } else {
                 finalRendered.append(reminder)
             }
@@ -278,7 +281,7 @@ public struct DeepseekV4ChatEncoder: Sendable {
         // of a user/developer turn OR there's a following assistant.
         let nextRole: MessageRole? =
             (index + 1 < messages.count) ? messages[index + 1].role : nil
-        if nextRole != nil && nextRole != .assistant && nextRole != .latestReminder {
+        if nextRole != nil && nextRole != .assistant {
             return out
         }
 
@@ -293,7 +296,7 @@ public struct DeepseekV4ChatEncoder: Sendable {
                     : DeepseekV4Tokens.thinkEnd
                 out += taskSP
             }
-        } else if msg.role == .user || msg.role == .developer {
+        } else if msg.role == .user || msg.role == .developer || msg.role == .latestReminder {
             out += DeepseekV4Tokens.assistant
             // Decision tree for the final tail tag:
             //   dropThinking=false + thinking → `<think>` (open)

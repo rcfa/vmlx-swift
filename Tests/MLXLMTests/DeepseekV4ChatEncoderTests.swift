@@ -213,6 +213,45 @@ struct DeepseekV4ChatEncoderTests {
             "the latest user action task must survive merging a preceding tool result")
     }
 
+    @Test("required tool choice reminder stays after latest user turn without action rail")
+    func requiredToolChoiceReminderFollowsLatestUserWithoutActionRail() throws {
+        let encoder = DeepseekV4ChatEncoder()
+        let finalUser = "Now use line_count on this exact text: one\ntwo"
+        let prompt = encoder.encode(
+            messages: [
+                Msg(
+                    role: .system,
+                    content: "Helpful assistant.",
+                    tools: [lineCountToolSchema()]),
+                Msg(role: .user, content: "Use line_count on this exact text: red\ngreen\nblue"),
+                Msg(
+                    role: .assistant,
+                    content: "",
+                    toolCalls: [
+                        TC(
+                            id: "call_lines_1",
+                            name: "line_count",
+                            arguments: "{\"text\":\"red\\ngreen\\nblue\"}")
+                    ]),
+                Msg(role: .tool, content: "{\"lines\":3}", toolCallId: "call_lines_1"),
+                Msg(role: .user, content: "How many lines were counted? Do not call another tool."),
+                Msg(role: .assistant, content: "Three lines were counted."),
+                Msg(role: .user, content: finalUser),
+            ],
+            thinkingMode: .chat,
+            toolChoiceRequired: true)
+
+        let finalUserRange = try #require(prompt.range(of: finalUser))
+        let reminderRange = try #require(prompt.range(of: DeepseekV4Tokens.latestReminder))
+        let assistantTail = DeepseekV4Tokens.assistant + DeepseekV4Tokens.thinkEnd
+        let tailRange = try #require(prompt.range(of: assistantTail, options: .backwards))
+
+        #expect(finalUserRange.upperBound <= reminderRange.lowerBound, "Prompt: \(prompt)")
+        #expect(reminderRange.upperBound <= tailRange.lowerBound, "Prompt: \(prompt)")
+        #expect(prompt.hasSuffix(assistantTail), "Prompt: \(prompt)")
+        #expect(!prompt.contains(DeepseekV4Tokens.taskSPTokens["action"]!), "Prompt: \(prompt)")
+    }
+
     @Test("tool_call arguments with non-string values render string=\"false\" + JSON")
     func toolCallNumericArgs() {
         let prompt = DeepseekV4ChatEncoder.renderToolCallInvoke(
@@ -267,6 +306,22 @@ struct DeepseekV4ChatEncoderTests {
             ],
             thinkingMode: .chat)
         #expect(prompt.contains(DeepseekV4Tokens.latestReminder + "reminder text"))
+    }
+
+    private func lineCountToolSchema() -> [String: any Sendable] {
+        [
+            "function": [
+                "name": "line_count",
+                "description": "Count newline-separated text lines.",
+                "parameters": [
+                    "type": "object",
+                    "properties": [
+                        "text": ["type": "string"] as [String: any Sendable]
+                    ] as [String: any Sendable],
+                    "required": ["text"],
+                ] as [String: any Sendable],
+            ] as [String: any Sendable]
+        ] as [String: any Sendable]
     }
 
     // MARK: - BOS handling
