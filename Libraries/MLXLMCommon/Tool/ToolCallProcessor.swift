@@ -1056,11 +1056,23 @@ public class ToolCallProcessor {
             }
         }
 
-        guard (state == .normal && chunk.contains(startChar)) || state != .normal else {
-            return chunk
+        var effectiveChunk = chunk
+        if state == .normal,
+            let matchedStart = firstTag(in: chunk, tags: startTags, prefixes: startTagPrefixes),
+            let matchedRange = chunk.range(of: matchedStart)
+        {
+            let leading = String(chunk[..<matchedRange.lowerBound])
+            if !leading.isEmpty {
+                leadingTextBeforeToolCall += leading
+            }
+            effectiveChunk = String(chunk[matchedRange.lowerBound...])
         }
 
-        toolCallBuffer += chunk
+        guard (state == .normal && effectiveChunk.contains(startChar)) || state != .normal else {
+            return effectiveChunk
+        }
+
+        toolCallBuffer += effectiveChunk
         var leadingToken: String?
 
         switch state {

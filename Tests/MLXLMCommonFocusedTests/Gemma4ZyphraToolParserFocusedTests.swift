@@ -58,6 +58,44 @@ struct Gemma4ZyphraToolParserFocusedTests {
         #expect(processor.toolCalls.first?.function.arguments["text"] == .string("red\ngreen\nblue"))
     }
 
+    @Test("Gemma4 routes Zyphra tool calls inside reasoning wrapper without reasoning leak")
+    func gemma4RoutesZyphraToolCallsInsideReasoningWrapperWithoutLeak() {
+        let output = """
+        thought<|channel>```
+        <zyphra_tool_call>
+        <function=line_count>
+        <parameter=text>
+        red
+        green
+        blue
+        </parameter>
+        </function>
+        </zyphra_tool_call>
+        ```\u{200B} <|im_end|>
+        ```
+
+        In response to the user's request, I have provided a tool call.
+        """
+        let processor = ToolCallProcessor(format: .gemma4, tools: [lineCountToolSpec()])
+        let events = routeGenerationText(output, channel: .reasoning, through: processor)
+
+        let visible = events.compactMap(\.chunk).joined()
+        let reasoning = events.compactMap { event -> String? in
+            if case .reasoning(let text) = event { return text }
+            return nil
+        }.joined()
+        let calls = events.compactMap { event -> ToolCall? in
+            if case .toolCall(let call) = event { return call }
+            return nil
+        }
+
+        #expect(visible.isEmpty)
+        #expect(reasoning.isEmpty)
+        #expect(calls.count == 1)
+        #expect(calls.first?.function.name == "line_count")
+        #expect(calls.first?.function.arguments["text"] == .string("red\ngreen\nblue"))
+    }
+
     @Test("Gemma4 parser still accepts native Gemma4 tool-call envelope")
     func gemma4ParserStillAcceptsNativeEnvelope() throws {
         let output = #"<|tool_call>call:line_count{text:<|"|>one\ntwo<|"|>}<tool_call|>"#

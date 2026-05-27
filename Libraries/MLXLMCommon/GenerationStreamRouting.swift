@@ -21,12 +21,16 @@ public func routeGenerationText(
     }
 
     var events: [Generation] = []
+    let toolCallCountBeforeChunk = toolCallProcessor.toolCalls.count
     if let visible = toolCallProcessor.processChunk(text) {
+        let parsedToolCallInChunk = toolCallProcessor.toolCalls.count > toolCallCountBeforeChunk
         switch channel {
         case .content:
             events.append(.chunk(visible))
         case .reasoning:
-            events.append(.reasoning(visible))
+            if !parsedToolCallInChunk {
+                events.append(.reasoning(visible))
+            }
         }
     }
     events.append(contentsOf: drainToolCallEvents(from: toolCallProcessor))
