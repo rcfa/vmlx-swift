@@ -1364,6 +1364,7 @@ public actor BatchEngine {
                     //    prefill over [N...M] is the intended Markov resume
                     //    path for MambaCache, ArraysCache, and ZayaCCACache.
                     let hasPathDependentLayer = cacheContainsPathDependentState(slot.cache)
+                    let hasToolSchemas = slot.originalInput.toolSchemas?.isEmpty == false
                     // Full disk hit on hybrid-SSM is ALSO unsafe: the
                     // restored SSM state already includes the last
                     // token's recurrence contribution, so the
@@ -1376,10 +1377,12 @@ public actor BatchEngine {
                     // remaining.nonEmpty case below.
                     let unsafePartial =
                         slot.originalInput.cacheHitSuffixContainsMediaPlaceholder(remaining)
-                    let unsafeFullHit = remaining.isEmpty && hasPathDependentLayer
+                    let unsafeFullHit =
+                        remaining.isEmpty && (hasPathDependentLayer || hasToolSchemas)
                     if unsafePartial || unsafeFullHit {
                         let why: String
                         if unsafePartial { why = "media placeholder tokens remain in cache-hit suffix" }
+                        else if hasToolSchemas { why = "tool-schema full disk hit: re-prefill required tool prompt instead of seeding from terminal boundary" }
                         else if unsafeFullHit { why = "path-dependent full disk hit: re-feeding last token would double-count recurrent state" }
                         else                { why = "path-dependent cache hit can't be extended safely" }
                         let slotIDStr = slot.id.description

@@ -1315,13 +1315,17 @@ public struct TokenIterator: TokenIteratorProtocol {
                         self.promptTokenIds = cacheLookupTokenIds
                     }
                     let hasPathDependentLayer = cacheContainsPathDependentState(self.cache)
+                    let hasToolSchemas = input.toolSchemas?.isEmpty == false
                     let unsafePartial =
                         input.cacheHitSuffixContainsMediaPlaceholder(remainingTokens)
-                    let unsafeFullHit = remainingTokens.isEmpty && hasPathDependentLayer
+                    let unsafeFullHit =
+                        remainingTokens.isEmpty && (hasPathDependentLayer || hasToolSchemas)
                     if unsafePartial || unsafeFullHit {
                         let why: String
                         if unsafePartial {
                             why = "media placeholder tokens remain in cache-hit suffix"
+                        } else if hasToolSchemas {
+                            why = "tool-schema full cache hit: re-prefill required tool prompt instead of seeding from terminal boundary"
                         } else if unsafeFullHit {
                             why = "path-dependent full cache hit: re-feeding last token would double-count recurrent state"
                         } else {
