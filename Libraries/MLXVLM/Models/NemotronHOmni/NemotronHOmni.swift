@@ -928,10 +928,18 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
         "For this assistant turn, return exactly one <tool_call> XML function call for one available function and no prose before the tool result. Include every required <parameter=...> value exactly as requested."
 
     private static func requiredToolChoiceInstruction(
-        tools _: [ToolSpec]?,
+        tools: [ToolSpec]?,
         additionalContext _: [String: any Sendable]?
     ) -> String {
-        return requiredToolChoiceInstruction
+        guard let schema = toolSchemaJSON(tools), !schema.isEmpty else {
+            return requiredToolChoiceInstruction
+        }
+        return """
+            \(requiredToolChoiceInstruction)
+
+            Available tools:
+            \(schema)
+            """
     }
 
     static func addRequiredToolChoiceInstruction(
@@ -947,6 +955,20 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
         addSystemInstruction(
             requiredToolChoiceInstruction(tools: tools, additionalContext: additionalContext),
             to: &messages)
+        addUserVisibleToolInstruction(
+            requiredToolChoiceInstruction(tools: tools, additionalContext: additionalContext),
+            to: &messages)
+    }
+
+    private static func toolSchemaJSON(_ tools: [ToolSpec]?) -> String? {
+        guard let tools, !tools.isEmpty,
+              JSONSerialization.isValidJSONObject(tools),
+              let data = try? JSONSerialization.data(withJSONObject: tools, options: [.sortedKeys]),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+        return json
     }
 
     private static func addSystemInstruction(
@@ -977,6 +999,27 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
             return
         }
         messages.insert(["role": "system", "content": instruction], at: 0)
+    }
+
+    private static func addUserVisibleToolInstruction(
+        _ instruction: String,
+        to messages: inout [Message]
+    ) {
+        guard let userIndex = messages.lastIndex(where: {
+            ($0["role"] as? String) == "user"
+        }) else {
+            return
+        }
+        let existing = contentText(from: messages[userIndex]["content"])
+        if existing.contains(requiredToolChoiceInstruction) {
+            return
+        }
+        messages[userIndex]["content"] = """
+            \(instruction)
+
+            User request:
+            \(existing)
+            """
     }
 
     private static func prependMedia(_ media: String, toLastUserIn messages: inout [Message]) {

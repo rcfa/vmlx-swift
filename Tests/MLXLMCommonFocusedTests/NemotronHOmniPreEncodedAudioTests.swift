@@ -292,7 +292,11 @@ struct NemotronHOmniPreEncodedAudioTests {
         let system = messages[0]["content"] as? String
         #expect(system?.contains("exactly one <tool_call> XML function call") == true)
         #expect(system?.contains("Include every required <parameter=...>") == true)
-        #expect(messages[1]["content"] as? String == "Use line_count on red\ngreen\nblue.")
+        #expect(system?.contains("\"name\":\"line_count\"") == true)
+        let user = messages[1]["content"] as? String
+        #expect(user?.contains("exactly one <tool_call> XML function call") == true)
+        #expect(user?.contains("\"name\":\"line_count\"") == true)
+        #expect(user?.hasSuffix("Use line_count on red\ngreen\nblue.") == true)
     }
 
     @Test("non-required tool choice leaves Nemotron Omni VLM messages unchanged")
