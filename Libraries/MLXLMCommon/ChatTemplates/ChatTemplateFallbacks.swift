@@ -881,7 +881,13 @@ The current assistant response MUST be a tool call. Reply only with a `<tool_cal
                             'exact ' ~ param_name ~ ':',
                             'this exact ' ~ param_name ~ ':',
                             'exactly this ' ~ param_name ~ ':',
-                            'exactly ' ~ param_name ~ ':'
+                            'exactly ' ~ param_name ~ ':',
+                            'exactly this new ' ~ param_name ~ ', preserving newlines:',
+                            'exactly this ' ~ param_name ~ ', preserving newlines:',
+                            'this new ' ~ param_name ~ ', preserving newlines:',
+                            'new ' ~ param_name ~ ', preserving newlines:',
+                            param_name ~ ', preserving newlines:',
+                            'preserving newlines:'
                         ] -%}
                         {%- for exact_marker in exact_markers -%}
                             {%- if not exact.value and exact_marker in latest_user_content -%}
