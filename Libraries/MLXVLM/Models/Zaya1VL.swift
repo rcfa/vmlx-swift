@@ -1722,7 +1722,21 @@ public struct Zaya1VLProcessor: UserInputProcessor {
                 cacheScopeSalt: cacheScopeSalt(from: input.additionalContext))
         }
 
-        let imagePixelsAndFrames = try input.images.map {
+        let imagePlaceholderCount = QwenVL.placeholderRangeCount(
+            in: promptTokens, paddingToken: "<image>", tokenizer: tokenizer)
+        guard imagePlaceholderCount > 0 else {
+            return LMInput(
+                tokens: MLXArray(promptTokens),
+                tokenIds: promptTokens,
+                cacheScopeSalt: cacheScopeSalt(from: input.additionalContext))
+        }
+        guard imagePlaceholderCount <= input.images.count else {
+            throw VLMError.processing(
+                "ZAYA1-VL prompt references \(imagePlaceholderCount) image placeholders but only \(input.images.count) image inputs are available")
+        }
+
+        let promptImages = Array(input.images.prefix(imagePlaceholderCount))
+        let imagePixelsAndFrames = try promptImages.map {
             try preprocess(images: [$0.asCIImage()], processing: input.processing)
         }
         let imagePixelsConcatenated = concatenated(imagePixelsAndFrames.map { $0.0 })

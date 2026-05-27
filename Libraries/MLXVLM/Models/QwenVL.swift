@@ -228,6 +228,15 @@ public struct QwenVL {
         return result
     }
 
+    static func placeholderRangeCount(
+        in promptTokens: [Int], paddingToken: String, tokenizer: any Tokenizer
+    ) -> Int {
+        let placeholderTokens = tokenizer.encode(
+            text: "<|vision_start|>\(paddingToken)<|vision_end|>",
+            addSpecialTokens: false)
+        return promptTokens.ranges(of: placeholderTokens).count
+    }
+
     static func patchify(images: [MLXArray], mergeSize: Int, patchSize: Int, temporalPatchSize: Int)
         throws -> (
             MLXArray, THW

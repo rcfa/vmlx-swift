@@ -199,4 +199,51 @@ struct ChatMessageToolCallTests {
         #expect(tool["tool_call_id"] as? String == "call_abc")
         #expect(tool["content"] as? [[String: String]] == [["type": "text", "text": "2"]])
     }
+
+    @Test("Qwen VL placeholder count detects stale historical media not rendered by template")
+    func qwenVLPlaceholderCountDetectsUnrenderedHistoricalMedia() {
+        let tokenizer = ScalarTokenizer()
+        let placeholder = tokenizer.encode(
+            text: "<|vision_start|><image><|vision_end|>",
+            addSpecialTokens: false)
+        let promptWithoutImage = tokenizer.encode(
+            text: "user text only after tool history",
+            addSpecialTokens: false)
+        let promptWithImage = promptWithoutImage + placeholder + promptWithoutImage
+
+        #expect(QwenVL.placeholderRangeCount(
+            in: promptWithoutImage, paddingToken: "<image>", tokenizer: tokenizer) == 0)
+        #expect(QwenVL.placeholderRangeCount(
+            in: promptWithImage, paddingToken: "<image>", tokenizer: tokenizer) == 1)
+    }
+}
+
+private struct ScalarTokenizer: Tokenizer {
+    let bosToken: String? = nil
+    let eosToken: String? = nil
+    let unknownToken: String? = nil
+
+    func encode(text: String, addSpecialTokens: Bool) -> [Int] {
+        text.unicodeScalars.map { Int($0.value) }
+    }
+
+    func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String {
+        String(String.UnicodeScalarView(tokenIds.compactMap(UnicodeScalar.init)))
+    }
+
+    func convertTokenToId(_ token: String) -> Int? {
+        token.unicodeScalars.first.map { Int($0.value) }
+    }
+
+    func convertIdToToken(_ id: Int) -> String? {
+        UnicodeScalar(id).map(String.init)
+    }
+
+    func applyChatTemplate(
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?
+    ) throws -> [Int] {
+        []
+    }
 }
