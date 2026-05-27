@@ -98,4 +98,87 @@ struct MiMoV2FlashRuntimeTests {
         #expect(config.qkvProjectionRows(layerIndex: 1).k == 8)
         #expect(config.qkvProjectionRows(layerIndex: 1).v == 4)
     }
+
+    @Test("cache topology exposes full KV plus rotating SWA layers")
+    func cacheTopologyExposesFullKVPlusRotatingSWA() throws {
+        let config = try JSONDecoder.json5().decode(
+            MiMoV2FlashConfiguration.self,
+            from: Self.configJSON())
+        #expect(config.hybridLayerPattern == [0, 1, 1, 0])
+
+        let source = try String(contentsOfFile: #filePath)
+        let modelSourcePath = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Libraries/MLXLLM/Models/MiMoV2Flash.swift")
+        let modelSource = try String(contentsOf: modelSourcePath, encoding: .utf8)
+        #expect(source.contains("ModelCacheTopologySnapshot(cache: cache)"))
+        #expect(modelSource.contains("public func newCache(parameters: GenerateParameters?)"))
+        #expect(modelSource.contains("if configuration.isSlidingLayer(layerIndex)"))
+        #expect(modelSource.contains("RotatingKVCache(maxSize: configuration.slidingWindowSize)"))
+        #expect(modelSource.contains("KVCacheSimple()"))
+
+        let cache: [KVCache] = [
+            KVCacheSimple(),
+            RotatingKVCache(maxSize: config.slidingWindowSize),
+            RotatingKVCache(maxSize: config.slidingWindowSize),
+            KVCacheSimple(),
+        ]
+        let topology = ModelCacheTopologySnapshot(cache: cache)
+        #expect(topology.layerCount == 4)
+        #expect(topology.kvLayerCount == 2)
+        #expect(topology.rotatingKVLayerCount == 2)
+        #expect(!topology.requiresSSMCompanionState)
+        #expect(topology.requiresDiskBackedCoordinatorRestore)
+        #expect(topology.topologyTags.contains("restore=disk-backed"))
+    }
+
+    @Test("TurboQuant source contract compresses only full-attention KV layers")
+    func turboQuantSourceContractOnlyWrapsFullAttentionKVLayers() throws {
+        let kvCacheSourcePath = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Libraries/MLXLMCommon/KVCache.swift")
+        let source = try String(contentsOf: kvCacheSourcePath, encoding: .utf8)
+        #expect(source.contains("let firstSimple = cache.first { $0 is KVCacheSimple }"))
+        #expect(source.contains("if let simpleCache = cache[i] as? KVCacheSimple"))
+        #expect(source.contains("TurboQuantKVCache.fromSimpleCache"))
+        #expect(source.contains("RotatingKVCache, DeepseekV4Cache, MambaCache, CacheList: skip"))
+
+        let topology = ModelCacheTopologySnapshot(cache: [
+            TurboQuantKVCache(),
+            RotatingKVCache(maxSize: 128),
+            RotatingKVCache(maxSize: 128),
+            TurboQuantKVCache(),
+        ])
+        #expect(topology.turboQuantKVLayerCount == 2)
+        #expect(topology.rotatingKVLayerCount == 2)
+        #expect(topology.requiresDiskBackedCoordinatorRestore)
+    }
+
+    @Test("L2 disk serializer source supports TurboQuant full KV and rotating SWA")
+    func diskSerializerSourceSupportsTurboQuantAndRotatingSWA() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let serializer = try String(
+            contentsOf: root.appendingPathComponent("Libraries/MLXLMCommon/Cache/TQDiskSerializer.swift"),
+            encoding: .utf8)
+        let helpers = try String(
+            contentsOf: root.appendingPathComponent("Libraries/MLXLMCommon/Cache/CacheHelpers.swift"),
+            encoding: .utf8)
+
+        #expect(serializer.contains("case tq = 1"))
+        #expect(serializer.contains("case rotating = 6"))
+        #expect(serializer.contains("serializeTQLayer"))
+        #expect(serializer.contains("serializeRotatingLayer"))
+        #expect(serializer.contains("layer is KVCacheSimple || layer is TurboQuantKVCache"))
+        #expect(helpers.contains("case .tq(let comp):"))
+        #expect(helpers.contains("restoreTQLayer(comp, into: &cache[i])"))
+        #expect(helpers.contains("case .rotating(let comp):"))
+        #expect(helpers.contains("restoreRotatingLayer(comp, into: cache[i])"))
+    }
 }
