@@ -286,6 +286,16 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
             return .minimaxM2
         }
 
+        // MiMo V2.5 uses the Qwen/Nemotron-style XML function tool
+        // envelope in its chat template:
+        // <tool_call><function=name><parameter=key>...</parameter></function></tool_call>.
+        if normalized == "mimo_v2"
+            || normalized.hasPrefix("mimo_v2_")
+            || compact.hasPrefix("mimov2")
+        {
+            return .xmlFunction
+        }
+
         // Nemotron family (nemotron_h, etc.)
         if compact.hasPrefix("nemotron") {
             return .nemotron
@@ -456,6 +466,13 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
             return .glm4
         }
 
+        if normalized == "mimo_v2"
+            || normalized.hasPrefix("mimo_v2_")
+            || compact.hasPrefix("mimov2")
+        {
+            return .xmlFunction
+        }
+
         // Tencent Hunyuan / Hy3 parser aliases. Product capability stamps
         // may carry a suffix (`hy3-preview`, `hy_v3_preview`) rather than
         // the exact parser family name.
@@ -471,7 +488,7 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         // Qwen 3.5 / 3.6 family — XML-style <tool_call>…</tool_call>
         // (vLLM ecosystem name `qwen3_coder` aliased here).
         case "qwen", "qwen3", "qwen3_5", "qwen35", "qwen3_6", "qwen36",
-            "qwen3_coder":
+            "qwen3_coder", "mimo", "mimo_v2", "mimo_v2_flash":
             return .xmlFunction
         // MiniMax — JANG converter stamps `minimax`; older artifacts use
         // the canonical `minimax_m2`. Future M2.5 variants use

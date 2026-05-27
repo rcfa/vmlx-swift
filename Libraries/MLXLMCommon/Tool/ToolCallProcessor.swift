@@ -988,7 +988,16 @@ public class ToolCallProcessor {
             return chunk
         }
 
-        if parser.supportsInlineJSONToolFallback {
+        let hasTaggedStartCandidate: Bool = {
+            guard state == .normal,
+                let taggedStart = chunk.firstIndex(of: startChar)
+            else { return false }
+            let suffix = String(chunk[taggedStart...])
+            guard suffix.count > 1 else { return false }
+            return partialMatch(buffer: suffix, tags: startTags, prefixes: startTagPrefixes)
+        }()
+
+        if parser.supportsInlineJSONToolFallback && !hasTaggedStartCandidate {
             switch state {
             case .collectingInlineToolCall:
                 return processInlineChunk(chunk)
