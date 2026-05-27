@@ -41,11 +41,46 @@
     {%- endif -%}
     {%- if tools -%}
         {%- for tool in tools -%}
-            {{- '<|tool>declaration:' + tool['function']['name'] -}}
-            {%- if tool['function']['description'] -%}
-                {{- '{description:<|"|>' + tool['function']['description'] + '<|"|>}' -}}
+            {%- set fn = tool['function'] if tool['function'] is defined else tool -%}
+            {{- '<|tool>declaration:' + fn['name'] + '{' -}}
+            {%- if fn['description'] is defined and fn['description'] -%}
+                {{- 'description:<|"|>' + (fn['description'] | trim) + '<|"|>' -}}
             {%- endif -%}
-            {{- '<tool|>' -}}
+            {%- if fn['parameters'] is defined and fn['parameters']['properties'] is defined -%}
+                {%- if fn['description'] is defined and fn['description'] -%}
+                    {{- ',' -}}
+                {%- endif -%}
+                {{- 'parameters:{' -}}
+                {%- set first_param = true -%}
+                {%- for param_name, param in fn['parameters']['properties'] | dictsort -%}
+                    {%- if not first_param -%}
+                        {{- ',' -}}
+                    {%- endif -%}
+                    {%- set first_param = false -%}
+                    {{- param_name + ':{' -}}
+                    {%- if param['type'] is defined -%}
+                        {{- 'type:<|"|>' -}}
+                        {%- if param['type'] is string -%}
+                            {{- param['type'] -}}
+                        {%- else -%}
+                            {{- param['type'] | tojson -}}
+                        {%- endif -%}
+                        {{- '<|"|>' -}}
+                    {%- endif -%}
+                    {%- if param['description'] is defined -%}
+                        {%- if param['type'] is defined -%}
+                            {{- ',' -}}
+                        {%- endif -%}
+                        {{- 'description:<|"|>' + (param['description'] | trim) + '<|"|>' -}}
+                    {%- endif -%}
+                    {{- '}' -}}
+                {%- endfor -%}
+                {{- '}' -}}
+                {%- if fn['parameters']['required'] is defined -%}
+                    {{- ',required:' + (fn['parameters']['required'] | tojson) -}}
+                {%- endif -%}
+            {%- endif -%}
+            {{- '}<tool|>' -}}
         {%- endfor -%}
     {%- endif -%}
     {{- '<turn|>\n' -}}
