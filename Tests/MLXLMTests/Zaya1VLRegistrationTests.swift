@@ -375,6 +375,25 @@ struct Zaya1VLRegistrationTests {
         }
     }
 
+    @Test("ZAYA1-VL processor drops stale history images when template emits no image placeholder")
+    func processorDropsStaleHistoryImagesWhenTemplateHasNoImagePlaceholder() async throws {
+        try await MLXMetalTestLock.withLock {
+            let config = try JSONDecoder.json5().decode(
+                Qwen25VLProcessorConfiguration.self,
+                from: Self.processorConfigurationData())
+            let processor = Zaya1VLProcessor(
+                config, tokenizer: VisionPadTokenizer(forcedImageCount: 0))
+
+            let input = try await processor.prepare(input: UserInput(
+                prompt: "The rendered follow-up template has no image placeholder.",
+                images: [.ciImage(Self.solidImage(width: 56, height: 56, color: .red))],
+                additionalContext: ["enable_thinking": false]))
+
+            #expect(input.image == nil)
+            #expect(input.cacheScopeSalt == "reasoning=off")
+        }
+    }
+
     @Test("Real ZAYA1-VL tokenizer renders image placeholders from sidecar template",
           .enabled(if: hasJANGTQ2TokenizerBundle))
     func realTokenizerRendersImagePlaceholderFromSidecarTemplate() async throws {

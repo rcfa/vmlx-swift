@@ -195,13 +195,13 @@ public struct QwenVL {
         tokenizer: any Tokenizer
     ) throws -> [Int] {
         // Replace single padding token with correct number for each image or video frame
-        let placeholderTokens = tokenizer.encode(
-            text: "<|vision_start|>\(paddingToken)<|vision_end|>",
-            addSpecialTokens: false)
-        let placeholderRanges = promptTokens.ranges(of: placeholderTokens)
+        let placeholderRanges = paddingPlaceholderRanges(
+            in: promptTokens,
+            paddingToken: paddingToken,
+            tokenizer: tokenizer)
         guard placeholderRanges.count == frames.count else {
             throw VLMError.processing(
-                "Number of placeholder tokens does not match number of frames")
+                "Number of placeholder tokens (\(placeholderRanges.count)) does not match number of frames (\(frames.count))")
         }
         let mergeLength = mergeSize * mergeSize
         let replacementSequences = frames.map { frame in
@@ -226,6 +226,17 @@ public struct QwenVL {
             result.append(contentsOf: promptTokens[currentIndex...])
         }
         return result
+    }
+
+    static func paddingPlaceholderRanges(
+        in promptTokens: [Int],
+        paddingToken: String,
+        tokenizer: any Tokenizer
+    ) -> [Range<Int>] {
+        let placeholderTokens = tokenizer.encode(
+            text: "<|vision_start|>\(paddingToken)<|vision_end|>",
+            addSpecialTokens: false)
+        return promptTokens.ranges(of: placeholderTokens)
     }
 
     static func patchify(images: [MLXArray], mergeSize: Int, patchSize: Int, temporalPatchSize: Int)
