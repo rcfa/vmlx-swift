@@ -152,6 +152,9 @@ public struct DeepseekV4ChatEncoder: Sendable {
             if let tailIndex = finalRendered.lastIndex(where: {
                 $0.role == .user || $0.role == .developer
             }), tailIndex >= contextLen {
+                if finalRendered[tailIndex].task == nil {
+                    finalRendered[tailIndex].task = "action"
+                }
                 let insertionIndex = finalRendered[tailIndex].task == nil
                     ? finalRendered.index(after: tailIndex)
                     : tailIndex
@@ -618,9 +621,10 @@ public struct DeepseekV4ChatEncoder: Sendable {
     /// required tool turn: live rows showed it can terminate with a blank
     /// assistant response instead of entering DSML. For required tool-choice
     /// turns, collapse that completed prose exchange so the prior tool result
-    /// merges directly with the latest user request. This preserves the
-    /// actual tool result and latest user instruction; it does not synthesize
-    /// a tool call or alter sampler behavior.
+    /// merges directly with the latest user request. The final required turn
+    /// is then rendered on DSV4's native `action` rail above. This preserves
+    /// the actual tool result and latest user instruction; it does not
+    /// synthesize a tool call or alter sampler behavior.
     static func compactRequiredToolChoiceHistory(_ messages: [Message]) -> [Message] {
         guard
             let finalUserIndex = messages.indices.last(where: {

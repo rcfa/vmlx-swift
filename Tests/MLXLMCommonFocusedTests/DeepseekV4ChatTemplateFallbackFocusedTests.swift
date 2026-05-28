@@ -186,7 +186,7 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
 
         let finalUser = "Now use line_count on one\ntwo."
         let reminder = "<\u{FF5C}latest_reminder\u{FF5C}>"
-        let tail = "<\u{FF5C}Assistant\u{FF5C}></think>"
+        let tail = "<\u{FF5C}Assistant\u{FF5C}></think><\u{FF5C}action\u{FF5C}>"
         let finalUserRange = rendered.range(of: finalUser)
         let reminderRange = rendered.range(of: reminder)
         #expect(finalUserRange != nil)
@@ -195,6 +195,32 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         #expect(rendered.contains("The active API tool_choice is required"))
         #expect(rendered.contains("<\u{FF5C}DSML\u{FF5C}tool_calls> block"))
         #expect(rendered.hasSuffix(tail))
+    }
+
+    @Test("Swift DSV4 required tool choice uses action rail after tool-result history")
+    func swiftDSV4RequiredToolChoiceUsesActionRailAfterToolResultHistory() {
+        let rendered = DeepseekV4ChatEncoder().encode(
+            messages: [
+                .init(role: .system, content: "", tools: [lineCountToolSpec()]),
+                .init(role: .user, content: "Use line_count on red\ngreen\nblue."),
+                .init(
+                    role: .assistant,
+                    toolCalls: [
+                        .init(
+                            id: "call_lines",
+                            name: "line_count",
+                            arguments: #"{"text":"red\ngreen\nblue"}"#)
+                    ]),
+                .init(role: .tool, content: #"{"lines":3}"#, toolCallId: "call_lines"),
+                .init(role: .user, content: "Now use line_count on one\ntwo."),
+            ],
+            thinkingMode: .chat,
+            toolChoiceRequired: true
+        )
+
+        #expect(rendered.contains("<tool_result>{\"lines\":3}</tool_result>"))
+        #expect(rendered.contains("The active API tool_choice is required"))
+        #expect(rendered.hasSuffix("<\u{FF5C}Assistant\u{FF5C}></think><\u{FF5C}action\u{FF5C}>"))
     }
 
     @Test("Nemotron required tool choice keeps native XML tool contract")
@@ -294,7 +320,7 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         let finalUserRange = try #require(rendered.range(of: finalUser))
         let tailDirectiveRange = try #require(
             rendered.range(of: tailDirective, options: .backwards))
-        #expect(tailDirectiveRange.lowerBound > finalUserRange.upperBound)
+        #expect(tailDirectiveRange.lowerBound < finalUserRange.lowerBound)
         #expect(rendered.contains("<parameter=text>\nred\ngreen\nblue\n</parameter>"))
         #expect(rendered.contains("<tool_response>\n{\"lines\":3}\n</tool_response>"))
         #expect(rendered.hasSuffix("<|im_start|>assistant\n<think></think>"))
