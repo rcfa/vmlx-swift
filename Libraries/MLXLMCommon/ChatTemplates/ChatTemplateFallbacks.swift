@@ -330,6 +330,12 @@ The current assistant response MUST be a tool call. Reply only with a `<tool_cal
 {%- if message['role'] == 'user' -%}
 <|im_start|>user
 {{ message['content'] }}
+{%- if required_tool_choice and loop.last %}
+
+<IMPORTANT>
+The current assistant response MUST be a tool call. This applies to the latest user request. Reply only with a `<tool_call>` block for one available tool and no prose before the tool result.
+</IMPORTANT>
+{%- endif %}
 <|im_end|>
 {%- elif message['role'] == 'assistant' -%}
 <|im_start|>assistant

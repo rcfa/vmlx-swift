@@ -322,7 +322,10 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         let finalUserRange = try #require(rendered.range(of: finalUser))
         let tailDirectiveRange = try #require(
             rendered.range(of: tailDirective, options: .backwards))
-        #expect(tailDirectiveRange.lowerBound < finalUserRange.lowerBound)
+        #expect(finalUserRange.lowerBound < tailDirectiveRange.lowerBound)
+        let afterFinalUser = rendered[finalUserRange.upperBound...]
+        #expect(afterFinalUser.contains(tailDirective))
+        #expect(!afterFinalUser.contains("<|im_start|>system\n" + tailDirective))
         #expect(rendered.contains("<parameter=text>\nred\ngreen\nblue\n</parameter>"))
         #expect(rendered.contains("<tool_response>\n{\"lines\":3}\n</tool_response>"))
         #expect(rendered.hasSuffix("<|im_start|>assistant\n<think></think>"))
