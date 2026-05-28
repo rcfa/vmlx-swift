@@ -323,8 +323,8 @@ struct CacheCoordinatorTopologyFocusedTests {
         }
     }
 
-    @Test("ZAYA CCA format-v2 disk payload is enough for hybrid cache hit")
-    func zayaCCADiskHitDoesNotRequireSeparateSSMCompanion() {
+    @Test("ZAYA CCA format-v2 disk payload is not reused without proven companion boundary")
+    func zayaCCADiskHitRequiresProvenCompanionBoundary() {
         FocusedMLXTestSupport.withLock {
         let tmp = makeTempDir("zaya-cca-disk")
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -352,17 +352,41 @@ struct CacheCoordinatorTopologyFocusedTests {
             cache: [cache])
 
         switch coordinator.fetch(tokens: tokens + [55]) {
-        case .hit(let matchedTokens, let remainingTokens, let detail, let blocks, _, let diskArrays):
-            #expect(matchedTokens == tokens.count)
-            #expect(remainingTokens == [55])
-            #expect(detail == .disk)
-            #expect(blocks.isEmpty)
-            #expect(diskArrays?["zaya_0_conv_state"] != nil)
-            #expect(diskArrays?["zaya_0_prev_hs"] != nil)
+        case .hit:
+            Issue.record("ZAYA CCA disk payload must not be promoted to a reusable prefix hit without a proven companion boundary")
         case .miss:
-            Issue.record("ZAYA CCA v2 disk payload already carries path-dependent state")
+            break
         }
         }
+    }
+
+    @Test("ZAYA CCA state is not duplicated into SSM companion cache")
+    func zayaCCADoesNotUseSSMCompanionExtraction() throws {
+        let source = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/Cache/CacheHelpers.swift",
+            encoding: .utf8)
+
+        #expect(source.contains("} else if layer is ZayaCCACache {"))
+        #expect(source.contains("LayerKind.zayaCCA stores keys, values,"))
+        #expect(source.contains("ZAYA CCA restore is owned by the LayerKind.zayaCCA disk payload"))
+        #expect(!source.contains("let (conv, prev) = zaya.readCCA()"))
+        #expect(!source.contains("zaya.writeCCA(conv: conv, prev: prev)"))
+    }
+
+    @Test("ZAYA CCA topology advertises CCA companion, not recurrent SSM")
+    func zayaCCATopologyUsesCCACompanionTag() {
+        let topology = ModelCacheTopologySnapshot(
+            layerCount: 2,
+            kvLayerCount: 1,
+            zayaCCALayerCount: 1
+        )
+
+        #expect(topology.requiresSSMCompanionState)
+        #expect(topology.requiresZayaCCACompanionState)
+        #expect(!topology.requiresRecurrentSSMCompanionState)
+        #expect(topology.topologyTags.contains("zayaCCALayers=1"))
+        #expect(topology.topologyTags.contains("companion=zaya-cca"))
+        #expect(!topology.topologyTags.contains("companion=ssm"))
     }
 
     @Test("hybrid disk media-salt prompt boundary returns exact hit")
@@ -455,8 +479,8 @@ struct CacheCoordinatorTopologyFocusedTests {
                 modelKey: reasoningOn))
     }
 
-    @Test("cache scope salt includes only semantic reasoning keys")
-    func cacheScopeSaltIncludesOnlySemanticReasoningKeys() {
+    @Test("cache scope salt includes semantic reasoning and tool-choice keys")
+    func cacheScopeSaltIncludesSemanticReasoningAndToolChoiceKeys() {
         #expect(cacheScopeSalt(from: ["reasoning_effort": "high"]) == "effort=high")
         #expect(cacheScopeSalt(from: ["reasoning_effort": " No_Think "]) == "effort=no_think")
         #expect(cacheScopeSalt(from: [
@@ -468,6 +492,16 @@ struct CacheCoordinatorTopologyFocusedTests {
             "reasoning_effort": "max",
         ]) == "reasoning=off|effort=max")
         #expect(cacheScopeSalt(from: [
+            "tool_choice": "required",
+            "tool_choice_name": "Line_Count",
+        ]) == "tool=required|tool_name=line_count")
+        #expect(cacheScopeSalt(from: [
+            "enable_thinking": false,
+            "tool_choice": "required",
+            "tool_choice_name": "file_read",
+        ]) == "reasoning=off|tool=required|tool_name=file_read")
+        #expect(cacheScopeSalt(from: [
+            "tool_choice": "auto",
             "ui_panel": "visible",
             "temperature_source": "default",
         ]) == nil)

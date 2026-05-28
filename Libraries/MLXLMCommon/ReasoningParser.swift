@@ -940,6 +940,7 @@ public func reasoningStampFromModelType(_ modelType: String?) -> String {
         "hy3",          // Tencent Hunyuan v3 aliases. Real JANG bundles stamp
         "hyv3",         // `capabilities.reasoning_parser = "qwen3"`, but
                         // non-JANG/fallback paths should still pick think_xml.
+        "mimo",         // MiMo-V2 templates use the same `<think>` envelope.
     ]
     if thinkXmlPrefixes.contains(where: compact.hasPrefix) {
         return "think_xml"

@@ -405,9 +405,10 @@ public struct ArgMaxSampler: LogitSampler {
 /// Sampler that uses probability filters (`topP`, `topK`, `minP`) and `temperature`
 /// to sample the logits.
 ///
-/// Filters are applied in the same order as Python mlx-lm: top_p → min_p → top_k.
-/// Each filter operates on the full vocabulary in original token order, masking
-/// rejected tokens with `-inf`. This matches the composable filter chain in
+/// Temperature is applied before probability filters, then filters are applied
+/// in the same order as Python mlx-lm: top_p → min_p → top_k. Each filter
+/// operates on the full vocabulary in original token order, masking rejected
+/// tokens with `-inf`. This matches the composable filter chain in
 /// `mlx_lm.sample_utils.make_sampler`.
 public struct TopPSampler: LogitSampler {
     let temp: MLXArray
@@ -441,9 +442,9 @@ public struct TopPSampler: LogitSampler {
         }
 
         return withRandomState(randomState) {
-            var logprobs = logSoftmax(logits)
+            var logprobs = logSoftmax(logits * (1 / temp))
 
-            // Apply filters in Python mlx-lm order: top_p → min_p → top_k.
+            // Apply filters in Python mlx-lm order after temperature scaling.
             if let topP {
                 logprobs = applyTopP(logprobs, topP: topP)
             }
@@ -454,7 +455,7 @@ public struct TopPSampler: LogitSampler {
                 logprobs = applyTopK(logprobs, topK: topK)
             }
 
-            return categorical(logprobs * (1 / temp))
+            return categorical(logprobs)
         }
     }
 
@@ -566,7 +567,7 @@ public struct SpeculativeSamplingController {
             logits = logits.asType(.float32)
         }
 
-        var logprobs = logSoftmax(logits)
+        var logprobs = logSoftmax(logits * (1 / MLXArray(temperature)))
         if topP > 0 && topP < 1 {
             logprobs = applyTopP(logprobs, topP: MLXArray(topP))
         }
@@ -577,7 +578,7 @@ public struct SpeculativeSamplingController {
             logprobs = applyTopK(logprobs, topK: topK)
         }
 
-        return softmax(logprobs * (1 / MLXArray(temperature)), axis: -1, precise: true)
+        return softmax(logprobs, axis: -1, precise: true)
     }
 
     public func sample(logits: MLXArray) -> Sample {
@@ -1270,6 +1271,13 @@ public struct TokenIterator: TokenIteratorProtocol {
                     )
                 }
             }
+            if input.toolSchemas?.isEmpty == false,
+               cacheHasStandaloneRotatingWindowState(self.cache)
+            {
+                Self.logger.info(
+                    "TokenIterator: skipped disk-backed rotating cache fetch for active tool schema"
+                )
+            } else {
             let result = coordinator.fetch(
                 tokens: cacheLookupTokenIds, mediaSalt: mediaSalt)
             switch result {
@@ -1314,18 +1322,17 @@ public struct TokenIterator: TokenIteratorProtocol {
                     if cacheLookupUsesPostPrepareAlias {
                         self.promptTokenIds = cacheLookupTokenIds
                     }
-                    let hasPathDependentLayer = self.cache.contains { layer in
-                        layer is MambaCache || layer is ArraysCache || layer is ZayaCCACache
-                    }
+                    let requiresDiskBackedRestore =
+                        cacheRequiresDiskBackedCoordinatorRestore(self.cache)
                     let unsafePartial =
                         input.cacheHitSuffixContainsMediaPlaceholder(remainingTokens)
-                    let unsafeFullHit = remainingTokens.isEmpty && hasPathDependentLayer
+                    let unsafeFullHit = remainingTokens.isEmpty && requiresDiskBackedRestore
                     if unsafePartial || unsafeFullHit {
                         let why: String
                         if unsafePartial {
                             why = "media placeholder tokens remain in cache-hit suffix"
                         } else if unsafeFullHit {
-                            why = "path-dependent full cache hit: re-feeding last token would double-count recurrent state"
+                            why = "disk-backed full cache hit: re-feeding last token can corrupt path-dependent or rotating state"
                         } else {
                             why = "cache hit can't be extended safely"
                         }
@@ -1442,6 +1449,7 @@ public struct TokenIterator: TokenIteratorProtocol {
                         )
                     }
                 }
+            }
             }
         } else if cacheCoordinator != nil,
                   !promptTokenIds.isEmpty,
@@ -1752,9 +1760,11 @@ public struct TokenIterator: TokenIteratorProtocol {
         ) {
             guard !tokens.isEmpty else { return }
             let snapshot = cacheToStore.map { $0.copy() }
-            MLX.eval(snapshot)
             let requiresDiskBackedRestore =
                 cacheRequiresDiskBackedCoordinatorRestore(snapshot)
+            if !requiresDiskBackedRestore {
+                MLX.eval(snapshot)
+            }
             let perLayerData = requiresDiskBackedRestore
                 ? []
                 : extractLayerData(from: snapshot)
@@ -1835,6 +1845,13 @@ public struct TokenIterator: TokenIteratorProtocol {
         {
             MLX.eval(trimmed)
             return trimmed
+        }
+
+        if shouldSkipHistoryBoundaryRederiveAfterTrimMiss(promptSnapshot) {
+            Self.logger.debug(
+                "TokenIterator: skipped history-boundary cache rederive after trim miss for disk-backed cache topology"
+            )
+            return nil
         }
 
         if String(describing: Swift.type(of: model)).contains("Gemma3n") {
@@ -3058,7 +3075,9 @@ private func generateLoopTask<Handler: TokenLoopHandler>(
             Stream().synchronize()
             iterator.storeCacheAfterGeneration(
                 generatedTokenIds: generatedTokenIds,
-                includeGeneratedBoundary: stopReason == .stop && !handler.stopSequenceHit)
+                includeGeneratedBoundary: stopReason == .stop
+                    && !handler.stopSequenceHit
+                    && !handler.emittedToolCall)
 
             Stream().synchronize()
 
@@ -3342,18 +3361,26 @@ private protocol TokenLoopHandler: Sendable {
     /// terminal flush. Must be snapshotted before `onGenerationEnd`, because
     /// flushing drains and closes parser state.
     var unclosedReasoning: Bool { get }
+
+    /// True when this generation emitted a structured tool-call event.
+    /// Tool-call generations must not publish a generated/post-answer cache
+    /// boundary: the next turn's prompt includes tool history, and restoring
+    /// after the assistant's tool envelope can skip the required tool-call
+    /// decode on warm cache hits.
+    var emittedToolCall: Bool { get }
 }
 
 extension TokenLoopHandler {
     var stopSequenceHit: Bool { false }
     var unclosedReasoning: Bool { false }
+    var emittedToolCall: Bool { false }
 }
 
 private struct TextToolTokenLoopHandler: TokenLoopHandler, @unchecked Sendable {
     typealias Output = Generation
 
     var detokenizer: NaiveStreamingDetokenizer
-    let toolCallProcessor: ToolCallProcessor
+    let toolCallProcessor: ToolCallProcessor?
     /// Optional `<think>...</think>` stripper pipelined BEFORE the tool-call
     /// processor. When `nil` every decoded chunk goes straight to the
     /// tool-call processor (matches upstream ml-explore/mlx-swift-lm
@@ -3368,6 +3395,7 @@ private struct TextToolTokenLoopHandler: TokenLoopHandler, @unchecked Sendable {
     /// Flipped by `dispatch` when the stop matcher fires, so the loop
     /// task can signal `.stop` in its terminal `.info` event.
     private(set) var stopSequenceHit: Bool = false
+    private(set) var emittedToolCall: Bool = false
 
     init(
         tokenizer: Tokenizer,
@@ -3377,7 +3405,10 @@ private struct TextToolTokenLoopHandler: TokenLoopHandler, @unchecked Sendable {
         stopStringMatcher: StopStringMatcher = StopStringMatcher(stopStrings: [])
     ) {
         detokenizer = NaiveStreamingDetokenizer(tokenizer: tokenizer)
-        toolCallProcessor = ToolCallProcessor(format: format, tools: tools)
+        let activeTools = tools?.isEmpty == false ? tools : nil
+        toolCallProcessor = activeTools.map {
+            ToolCallProcessor(format: format, tools: $0)
+        }
         self.reasoningParser = reasoningParser
         self.stopStringMatcher = stopStringMatcher
     }
@@ -3532,6 +3563,9 @@ private struct TextToolTokenLoopHandler: TokenLoopHandler, @unchecked Sendable {
             }
             return !stopSequenceHit
         case .reasoning, .toolCall, .info:
+            if case .toolCall = event {
+                emittedToolCall = true
+            }
             if case .terminated = emit(event) {
                 return false
             }
@@ -3617,22 +3651,8 @@ internal func _decodePromptTail(
     tokenizer: any Tokenizer,
     tokens: Int
 ) -> String? {
-    let promptTokens = input.text.tokens
-    guard promptTokens.ndim >= 1 else { return nil }
-    let total = promptTokens.ndim == 1
-        ? promptTokens.dim(0)
-        : promptTokens.dim(promptTokens.ndim - 1)
-    guard total > 0 else { return nil }
-    let tailLen = min(tokens, total)
-    let startIdx = total - tailLen
-    let tailArray: MLXArray
-    if promptTokens.ndim == 1 {
-        tailArray = promptTokens[startIdx ..< total]
-    } else {
-        tailArray = promptTokens[.ellipsis, startIdx ..< total]
-    }
-    let tailInts = tailArray.asArray(Int32.self).map { Int($0) }
-    return tokenizer.decode(tokenIds: tailInts, skipSpecialTokens: false)
+    guard let tokenIds = input.text.tokenIds else { return nil }
+    return _decodePromptTail(tokenIds: tokenIds, tokenizer: tokenizer, tokens: tokens)
 }
 
 internal func _decodePromptTail(

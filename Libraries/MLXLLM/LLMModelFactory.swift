@@ -96,6 +96,7 @@ public enum LLMTypeRegistry {
             "granitemoehybrid": create(
                 GraniteMoeHybridConfiguration.self, GraniteMoeHybridModel.init),
             "mimo": create(MiMoConfiguration.self, MiMoModel.init),
+            "mimo_v2": create(MiMoV2FlashConfiguration.self, MiMoV2FlashModel.init),
             "mimo_v2_flash": create(MiMoV2FlashConfiguration.self, MiMoV2FlashModel.init),
             "minimax": create(MiniMaxConfiguration.self, MiniMaxModel.init),
             "minimax_m2": { data in
@@ -1047,8 +1048,13 @@ private struct LLMUserInputProcessor: UserInputProcessor {
 
     func prepare(input: UserInput) throws -> LMInput {
         let additionalContext = mergedAdditionalContext(input.additionalContext)
-        let messages = BailingThinkingTemplateContext.apply(
+        let bailingMessages = BailingThinkingTemplateContext.apply(
             to: messageGenerator.generate(from: input),
+            modelType: modelType,
+            additionalContext: additionalContext
+        )
+        let messages = NemotronToolChoiceTemplateContext.apply(
+            to: bailingMessages,
             modelType: modelType,
             additionalContext: additionalContext
         )
@@ -1063,6 +1069,7 @@ private struct LLMUserInputProcessor: UserInputProcessor {
 
             return LMInput(
                 tokens: MLXArray(promptTokens),
+                tokenIds: promptTokens,
                 cacheScopeSalt: cacheScopeSalt(from: additionalContext),
                 cachePrefixTokenCounts: cachePrefixTokenCounts)
         } catch TokenizerError.missingChatTemplate {
@@ -1076,6 +1083,7 @@ private struct LLMUserInputProcessor: UserInputProcessor {
             let promptTokens = tokenizer.encode(text: prompt)
             return LMInput(
                 tokens: MLXArray(promptTokens),
+                tokenIds: promptTokens,
                 cacheScopeSalt: cacheScopeSalt(from: additionalContext))
         }
     }
@@ -1217,6 +1225,22 @@ public final class LLMModelFactory: ModelFactory {
             configDict["text_config"] = textConfig
         }
         return (try? JSONSerialization.data(withJSONObject: configDict)) ?? configData
+    }
+
+    private static func chatTemplateText(modelDirectory: URL) -> String? {
+        let templateURL = modelDirectory.appending(component: "chat_template.jinja")
+        if let template = try? String(contentsOf: templateURL, encoding: .utf8) {
+            return template
+        }
+        let tokenizerConfigURL = modelDirectory.appending(component: "tokenizer_config.json")
+        guard
+            let data = try? Data(contentsOf: tokenizerConfigURL),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let template = object["chat_template"] as? String
+        else {
+            return nil
+        }
+        return template
     }
 
     public func _load(
@@ -1546,11 +1570,15 @@ public final class LLMModelFactory: ModelFactory {
             // as a fallback. Finally `model_type` infer.
             let chatStamped = ToolCallFormat.fromCapabilityName(
                 jangConfig?.chat?.toolCalling?.parser)
-            let jangStamped = ToolCallFormat.fromCapabilityName(
-                jangConfig?.capabilities?.toolParser)
+            let templateAwareJang =
+                ParserResolution.toolCall(
+                    capabilities: jangConfig?.capabilities,
+                    modelType: baseConfig.modelType,
+                    chatTemplate: Self.chatTemplateText(modelDirectory: modelDirectory)
+                ).format
             mutableConfiguration.toolCallFormat =
                 chatStamped
-                ?? jangStamped
+                ?? templateAwareJang
                 ?? ToolCallFormat.infer(from: baseConfig.modelType)
         }
 

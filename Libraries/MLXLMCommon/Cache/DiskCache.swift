@@ -29,6 +29,27 @@ enum MLXDiskCacheIOLock {
     static let shared = OSAllocatedUnfairLock()
 }
 
+/// Public bridge for callers that need to serialize MLX materialization with
+/// vMLX disk/cache tensor I/O.
+///
+/// This is intentionally narrower than a general inference lock. It protects
+/// operations such as `MLXArray.asArray(...)` that submit/evaluate Metal work
+/// while cache stores or safetensors I/O may also be draining command buffers.
+/// Live Ling/Nemotron-family rows reproduced Metal command-buffer assertions
+/// when a post-tool request tokenized while the previous turn's SSM companion
+/// cache write-through was still saving.
+public enum MLXCacheIOLock {
+    public static func withSerializedMLXCacheIO<T>(_ body: () throws -> T) rethrows -> T {
+        MLXDiskCacheIOLock.shared.lock()
+        defer {
+            Stream.gpu.synchronize()
+            MLXDiskCacheIOLock.shared.unlock()
+        }
+        Stream.gpu.synchronize()
+        return try body()
+    }
+}
+
 /// L2 SSD cache with SQLite index and safetensors file storage.
 ///
 /// `DiskCache` provides persistent KV cache storage on disk using safetensors

@@ -97,6 +97,53 @@ public func cacheRequiresDiskBackedCoordinatorRestore(_ cache: [any KVCache]) ->
     }
 }
 
+/// True for Gemma/Mistral-style standalone sliding-window attention caches.
+///
+/// These caches are disk-backed because paged KV blocks cannot represent the
+/// rotating ring metadata. For active tool-call prompts, a stale or partial
+/// rotating restore can corrupt the model's next structured-argument emission.
+/// DSV4 hybrid-pool and recurrent SSM/CCA models are intentionally excluded:
+/// they have separate architecture-specific restore/companion-state contracts.
+public func cacheHasStandaloneRotatingWindowState(_ cache: [any KVCache]) -> Bool {
+    var hasRotating = false
+    var hasHybridPool = false
+
+    func visit(_ layer: any KVCache) {
+        if layer is HybridPoolCache {
+            hasHybridPool = true
+        }
+        if layer is RotatingKVCache || layer is RotatingKVCacheWrapper {
+            hasRotating = true
+        }
+        if let cacheList = layer as? CacheList {
+            for i in 0..<cacheList.count {
+                visit(cacheList[i])
+            }
+        }
+    }
+
+    for layer in cache {
+        visit(layer)
+    }
+
+    return hasRotating && !hasHybridPool && !cacheContainsPathDependentState(cache)
+}
+
+/// True when a failed trim should not fall back to a model re-derive while
+/// writing optional history-boundary cache entries.
+///
+/// Disk-backed topologies carry state that is more than ordinary append-only
+/// KV: rotating ring metadata, DSV4 hybrid-pool compressor/indexer state, or
+/// lossy/compressed cache payloads. If a prompt-boundary snapshot cannot be
+/// trimmed to the requested history boundary, re-entering model prepare/eval
+/// from the generation-completion path can race the just-finished decode and
+/// abort the host process. The history-boundary entry is only an optimization;
+/// the prompt-boundary and post-answer stores remain the authoritative cache
+/// entries for these families.
+func shouldSkipHistoryBoundaryRederiveAfterTrimMiss(_ cache: [any KVCache]) -> Bool {
+    cacheRequiresDiskBackedCoordinatorRestore(cache)
+}
+
 /// Extract per-layer KV tensors from a model's cache array.
 ///
 /// Returns per-layer `(keys, values)` tuples. SSM/MambaCache layers return `nil`.
@@ -292,14 +339,14 @@ public func extractSSMStates(from cache: [any KVCache]) -> [MLXArray] {
             states.append(contentsOf: mamba.state)
         } else if let arrays = layer as? ArraysCache {
             states.append(contentsOf: arrays.state)
-        } else if let zaya = layer as? ZayaCCACache {
-            // ZAYA CCA-attention: conv_state + prev_hs are path-dependent
-            // and must round-trip alongside KV (per Zyphra runtime contract).
-            // Tagged here so the existing SSM rederive plumbing in
-            // BatchEngine.finishSlot picks them up automatically.
-            let (conv, prev) = zaya.readCCA()
-            states.append(conv)
-            states.append(prev)
+        } else if layer is ZayaCCACache {
+            // ZAYA CCA state is path-dependent, but it is not SSM state.
+            // TQDiskSerializer's LayerKind.zayaCCA stores keys, values,
+            // conv_state, and prev_hs together as one disk-backed layer.
+            // Sending those arrays through SSMStateCache as a second
+            // companion path duplicates ownership and can start another
+            // Metal eval while the ZAYA disk payload is still draining.
+            continue
         } else if let cacheList = layer as? CacheList {
             // Extract SSM sub-cache from composite layers
             for i in 0..<cacheList.count {
@@ -350,14 +397,10 @@ public func restoreSSMStates(_ states: [MLXArray], into cache: [any KVCache]) {
                     .map { $0[.ellipsis] }
                 stateIdx += existingCount
             }
-        } else if let zaya = layer as? ZayaCCACache {
-            // ZAYA CCA-attention: extracted as (conv_state, prev_hs) pair.
-            if stateIdx + 2 <= states.count {
-                let conv = states[stateIdx][.ellipsis]
-                let prev = states[stateIdx + 1][.ellipsis]
-                zaya.writeCCA(conv: conv, prev: prev)
-                stateIdx += 2
-            }
+        } else if layer is ZayaCCACache {
+            // ZAYA CCA restore is owned by the LayerKind.zayaCCA disk payload,
+            // not by the generic SSM companion list.
+            continue
         } else if let cacheList = layer as? CacheList {
             for i in 0..<cacheList.count {
                 if let mamba = cacheList[i] as? MambaCache {

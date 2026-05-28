@@ -22,8 +22,34 @@ struct DSMLInlineJSONToolFallbackFocusedTests {
         #expect(lmInput.contains("public let toolSchemas: [ToolSpec]?"))
         #expect(lmInput.contains("public func withToolSchemas"))
         #expect(batchEngine.contains("let toolSchemas = input.toolSchemas"))
-        #expect(batchEngine.contains("ToolCallProcessor(format: toolCallFormat, tools: toolSchemas)"))
-        #expect(evaluate.contains("toolCallProcessor = ToolCallProcessor(format: format, tools: tools)"))
+        #expect(batchEngine.contains("let activeToolSchemas = toolSchemas?.isEmpty == false ? toolSchemas : nil"))
+        #expect(batchEngine.contains("ToolCallProcessor(format: toolCallFormat, tools: $0)"))
+        #expect(evaluate.contains("let activeTools = tools?.isEmpty == false ? tools : nil"))
+        #expect(evaluate.contains("ToolCallProcessor(format: format, tools: $0)"))
+    }
+
+    @Test("decode loop disables tool parser without active schemas")
+    func decodeLoopDisablesToolParserWithoutActiveSchemas() throws {
+        let routing = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/GenerationStreamRouting.swift",
+            encoding: .utf8)
+        let batchEngine = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/BatchEngine/BatchEngine.swift",
+            encoding: .utf8)
+        let evaluate = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/Evaluate.swift",
+            encoding: .utf8)
+        let specDec = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/SpecDec/SpecDecStream.swift",
+            encoding: .utf8)
+
+        #expect(routing.contains("through toolCallProcessor: ToolCallProcessor?"))
+        #expect(routing.contains("guard let toolCallProcessor else"))
+        #expect(batchEngine.contains("let activeToolSchemas = toolSchemas?.isEmpty == false ? toolSchemas : nil"))
+        #expect(evaluate.contains("let activeTools = tools?.isEmpty == false ? tools : nil"))
+        #expect(specDec.contains("let activeToolSchemas = toolSchemas?.isEmpty == false ? toolSchemas : nil"))
+        #expect(!batchEngine.contains("ToolCallProcessor(format: toolCallFormat, tools: toolSchemas)"))
+        #expect(!evaluate.contains("toolCallProcessor = ToolCallProcessor(format: format, tools: tools)"))
     }
 
     @Test("registered top-level JSON tool fallback is parsed without visible leakage")
@@ -160,6 +186,151 @@ struct DSMLInlineJSONToolFallbackFocusedTests {
         #expect(!visible.contains("DSV4_UI_TOUT_OK"))
     }
 
+    @Test("live DSV4 bare-name json label file_read attempt is captured")
+    func liveDSV4BareNameJSONLabelFileReadAttemptIsCaptured() {
+        let output = #"""
+            file_read:json{"path":"/Users/eric/Desktop/testmandel/mandelbrot.py","start_line":33,"end_line":39}
+            DSV4_UI_TOUT_OK: post-tool prose should not leak before tool execution.
+            """#
+        let processor = ToolCallProcessor(format: .dsml, tools: fileReadToolSchema())
+        var visible = ""
+        for ch in output {
+            visible += processor.processChunk(String(ch)) ?? ""
+        }
+        visible += processor.processEOS() ?? ""
+
+        #expect(processor.toolCalls.count == 1)
+        let call = processor.toolCalls.first
+        #expect(call?.function.name == "file_read")
+        #expect(
+            call?.function.arguments["path"]
+                == .string("/Users/eric/Desktop/testmandel/mandelbrot.py")
+        )
+        #expect(call?.function.arguments["start_line"] == .int(33))
+        #expect(call?.function.arguments["end_line"] == .int(39))
+        #expect(visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(!visible.contains("file_read"))
+        #expect(!visible.contains(":json"))
+        #expect(!visible.contains("DSV4_UI_TOUT_OK"))
+    }
+
+    @Test("malformed DSV4 bare-name json label attempt is quarantined as tool call")
+    func malformedDSV4BareNameJSONLabelAttemptIsQuarantinedAsToolCall() {
+        let output =
+            #"file_read:json{"{"error":"Invalid JSON structure: missing closing braces","type":"error":"Invalid JSON structure: missing closing braces","description":"Invalid JSON structure: missing closing braces","invalid":true}}false"#
+        let processor = ToolCallProcessor(format: .dsml, tools: fileReadToolSchema())
+        var visible = ""
+        for ch in output {
+            visible += processor.processChunk(String(ch)) ?? ""
+        }
+        visible += processor.processEOS() ?? ""
+
+        #expect(processor.toolCalls.count == 1)
+        let call = processor.toolCalls.first
+        #expect(call?.function.name == "file_read")
+        #expect(call?.function.arguments["path"] == nil)
+        #expect(call?.function.arguments["_error"] == .string("invalid_tool_arguments"))
+        #expect(call?.function.arguments["_field"] == .string("arguments"))
+        #expect(visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(!visible.contains("file_read"))
+        #expect(!visible.contains(":json"))
+        #expect(!visible.contains("Invalid JSON structure"))
+    }
+
+    @Test("live DSV4 bare-name key-value file_read attempt is captured without visible leakage")
+    func liveDSV4BareNameKeyValueFileReadAttemptIsCapturedWithoutVisibleLeakage() {
+        let output = #"""
+            file_read
+            path=/Users/eric/Desktop/testmandel/mdsnbrt.py
+
+            DSV4_UI_TOOL_OK
+            The file basename is mandsndbrt.py and the red-channel expression is something like (mandsndbrt.py).
+            """#
+        let processor = ToolCallProcessor(format: .dsml, tools: fileReadToolSchema())
+        var visible = ""
+        for ch in output {
+            visible += processor.processChunk(String(ch)) ?? ""
+        }
+        visible += processor.processEOS() ?? ""
+
+        #expect(processor.toolCalls.count == 1)
+        let call = processor.toolCalls.first
+        #expect(call?.function.name == "file_read")
+        #expect(
+            call?.function.arguments["path"]
+                == .string("/Users/eric/Desktop/testmandel/mdsnbrt.py")
+        )
+        #expect(visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(!visible.contains("file_read"))
+        #expect(!visible.contains("path="))
+        #expect(!visible.contains("DSV4_UI_TOOL_OK"))
+        #expect(!visible.contains("red-channel expression"))
+    }
+
+    @Test("DSV4 parser accepts terminated bare-name key-value file_read")
+    func dsv4ParserAcceptsTerminatedBareNameKeyValueFileRead() {
+        let output = #"""
+            file_read
+            path=/Users/eric/Desktop/testmandel/mdsnbrt.py
+
+            """#
+        let parser = DSMLToolCallParser()
+        let call = parser.parse(content: output, tools: fileReadToolSchema())
+
+        #expect(call?.function.name == "file_read")
+        #expect(
+            call?.function.arguments["path"]
+                == .string("/Users/eric/Desktop/testmandel/mdsnbrt.py")
+        )
+    }
+
+    @Test("live DSV4 bare-name colon key-value file_read attempt is captured")
+    func liveDSV4BareNameColonKeyValueFileReadAttemptIsCaptured() {
+        let output = #"""
+            file_read
+            path: /Users/eric/Desktop/testmandel/mandelbrot.py
+            start_line: 33
+            end_line: 39
+            """#
+        let processor = ToolCallProcessor(format: .dsml, tools: fileReadToolSchema())
+        var visible = ""
+        for ch in output {
+            visible += processor.processChunk(String(ch)) ?? ""
+        }
+        visible += processor.processEOS() ?? ""
+
+        #expect(processor.toolCalls.count == 1)
+        let call = processor.toolCalls.first
+        #expect(call?.function.name == "file_read")
+        #expect(
+            call?.function.arguments["path"]
+                == .string("/Users/eric/Desktop/testmandel/mandelbrot.py")
+        )
+        #expect(call?.function.arguments["start_line"] == .int(33))
+        #expect(call?.function.arguments["end_line"] == .int(39))
+        #expect(visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    @Test("DSV4 parser accepts colon key-value file_read")
+    func dsv4ParserAcceptsColonKeyValueFileRead() {
+        let output = #"""
+            file_read
+            path: /Users/eric/Desktop/testmandel/mandelbrot.py
+            start_line: 33
+            end_line: 39
+            """#
+        let parser = DSMLToolCallParser()
+        let call = parser.parseEOS(output, tools: fileReadToolSchema()).first
+
+        #expect(call?.function.name == "file_read")
+        #expect(
+            call?.function.arguments["path"]
+                == .string("/Users/eric/Desktop/testmandel/mandelbrot.py")
+        )
+        #expect(call?.function.arguments["start_line"] == .int(33))
+        #expect(call?.function.arguments["end_line"] == .int(39))
+    }
+
     @Test("live DSV4 bare-name fenced JSON file_read attempt is captured without visible leakage")
     func liveDSV4BareNameFencedJSONFileReadAttemptIsCapturedWithoutVisibleLeakage() {
         let output = #"""
@@ -186,6 +357,81 @@ struct DSMLInlineJSONToolFallbackFocusedTests {
         #expect(!visible.contains("file_read"))
         #expect(!visible.contains("```json"))
         #expect(!visible.contains("DSV4_UI_TOUT_OK"))
+    }
+
+    @Test("live DSV4 action JSON file_read attempt is captured without visible leakage")
+    func liveDSV4ActionJSONFileReadAttemptIsCapturedWithoutVisibleLeakage() {
+        let output = #"""
+            action:{"id":0,"name":"file_read","args":{"path":"/Users/eric/Desktop/testmandel/mandelbrot.py"}}
+            DSV4_UI_TOUT_OK: post-tool prose should not leak before tool execution.
+            """#
+        let processor = ToolCallProcessor(format: .dsml, tools: fileReadToolSchema())
+        var visible = ""
+        for ch in output {
+            visible += processor.processChunk(String(ch)) ?? ""
+        }
+        visible += processor.processEOS() ?? ""
+
+        #expect(processor.toolCalls.count == 1)
+        let call = processor.toolCalls.first
+        #expect(call?.function.name == "file_read")
+        #expect(
+            call?.function.arguments["path"]
+                == .string("/Users/eric/Desktop/testmandel/mandelbrot.py")
+        )
+        #expect(visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(!visible.contains("action:"))
+        #expect(!visible.contains(#""name":"file_read""#))
+        #expect(!visible.contains("DSV4_UI_TOUT_OK"))
+    }
+
+    @Test("live DSV4 api_tool JSON attempt is captured without visible leakage")
+    func liveDSV4APIToolJSONAttemptIsCapturedWithoutVisibleLeakage() {
+        let output = #"""
+            _only_call_one_tools_without_parameters{"api_type":"api_tool","api_name":"line_count","arguments":{"text":"one\ntwo"}}
+            <｜DSML｜tool_c>
+            """#
+        let processor = ToolCallProcessor(format: .dsml, tools: lineCountToolSchema())
+        var visible = ""
+        for ch in output {
+            visible += processor.processChunk(String(ch)) ?? ""
+        }
+        visible += processor.processEOS() ?? ""
+
+        #expect(processor.toolCalls.count == 1)
+        let call = processor.toolCalls.first
+        #expect(call?.function.name == "line_count")
+        #expect(call?.function.arguments["text"] == .string("one\ntwo"))
+        #expect(visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(!visible.contains("api_tool"))
+        #expect(!visible.contains("line_count"))
+        #expect(!visible.contains("<｜DSML｜tool_c>"))
+    }
+
+    @Test("malformed live DSV4 action JSON attempt is quarantined without visible leakage")
+    func malformedLiveDSV4ActionJSONAttemptIsQuarantinedWithoutVisibleLeakage() {
+        let output = #"""
+            action:{"id":0,"name":"file_read","args":{"path":""/Users/eric/Desktop/testmandel/mandelb.py"}}}
+            The file was not found. Let me try again.
+            action:{"id":1,"name":"file_read","args":{"path":"/Users/eric/Desktop/testmandel/mandelbrot.py"}}
+            """#
+        let processor = ToolCallProcessor(format: .dsml, tools: fileReadToolSchema())
+        var visible = ""
+        for ch in output {
+            visible += processor.processChunk(String(ch)) ?? ""
+        }
+        visible += processor.processEOS() ?? ""
+
+        #expect(processor.toolCalls.count == 1)
+        let call = processor.toolCalls.first
+        #expect(call?.function.name == "file_read")
+        #expect(call?.function.arguments["path"] == nil)
+        #expect(call?.function.arguments["_error"] == .string("invalid_tool_arguments"))
+        #expect(call?.function.arguments["_field"] == .string("arguments"))
+        #expect(visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(!visible.contains("action:"))
+        #expect(!visible.contains(#""name":"file_read""#))
+        #expect(!visible.contains("The file was not found"))
     }
 
     @Test("split DSV4 bare-name fenced JSON file_read attempt stays buffered")
@@ -299,6 +545,26 @@ struct DSMLInlineJSONToolFallbackFocusedTests {
         ]
         let function: [String: any Sendable] = [
             "name": "file_read",
+            "parameters": parameters,
+        ]
+        return [
+            [
+                "type": "function",
+                "function": function,
+            ] as [String: any Sendable]
+        ]
+    }
+
+    private func lineCountToolSchema() -> [[String: any Sendable]] {
+        let parameters: [String: any Sendable] = [
+            "type": "object",
+            "properties": [
+                "text": ["type": "string"] as [String: any Sendable]
+            ] as [String: any Sendable],
+            "required": ["text"],
+        ]
+        let function: [String: any Sendable] = [
+            "name": "line_count",
             "parameters": parameters,
         ]
         return [

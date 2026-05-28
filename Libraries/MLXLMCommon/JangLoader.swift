@@ -166,7 +166,7 @@ public struct JangCapabilities: Sendable {
     /// Tool-call format. Known values: `qwen`, `qwen3_coder` → `xml_function`;
     /// `minimax` → `minimax_m2`; `glm47`, `deepseek` → `glm4`; `deepseek_v4`
     /// → `dsml`; `gemma4` → `gemma4`; `hy3*` / `hunyuan*` → `hunyuan`;
-    /// `nemotron` → `xml_function`; plus any canonical `ToolCallFormat`
+    /// `nemotron` → `nemotron`; plus any canonical `ToolCallFormat`
     /// rawValue. `nil` means unknown.
     public let toolParser: String?
 
@@ -278,6 +278,9 @@ public struct JangCapabilities: Sendable {
         /// Resolved from `config.json["model_type"]` heuristic (no stamp,
         /// or stamp value was unrecognised).
         case modelTypeHeuristic = "model_type_heuristic"
+        /// Resolved from the actual chat template when a legacy stamp is
+        /// ambiguous or contradicted by the template protocol.
+        case chatTemplate = "chat_template"
         /// Neither stamp nor heuristic resolved a parser.
         case none = "none"
     }
@@ -344,17 +347,57 @@ public enum ParserResolution {
     ///   - modelType: `model_type` from `config.json` for heuristic fallback.
     public static func toolCall(
         capabilities: JangCapabilities?,
-        modelType: String?
+        modelType: String?,
+        chatTemplate: String? = nil
     ) -> (format: ToolCallFormat?, source: JangCapabilities.ResolutionSource) {
         if let cap = capabilities,
             let stamped = ToolCallFormat.fromCapabilityName(cap.toolParser)
         {
+            if let templateFormat = templateDeclaredToolCallFormat(chatTemplate),
+                shouldPreferTemplateToolCallFormat(
+                    templateFormat,
+                    stamped: stamped,
+                    capabilities: cap,
+                    modelType: modelType)
+            {
+                return (templateFormat, .chatTemplate)
+            }
             return (stamped, .jangStamped)
         }
         if let modelType, let inferred = ToolCallFormat.infer(from: modelType) {
             return (inferred, .modelTypeHeuristic)
         }
         return (nil, .none)
+    }
+
+    private static func templateDeclaredToolCallFormat(_ chatTemplate: String?) -> ToolCallFormat? {
+        guard let chatTemplate else { return nil }
+        let lower = chatTemplate.lowercased()
+        if lower.contains("<tool_call>")
+            && lower.contains("\"name\"")
+            && lower.contains("\"arguments\"")
+            && !lower.contains("<arg_key>")
+        {
+            return .json
+        }
+        return nil
+    }
+
+    private static func shouldPreferTemplateToolCallFormat(
+        _ templateFormat: ToolCallFormat,
+        stamped: ToolCallFormat,
+        capabilities: JangCapabilities,
+        modelType: String?
+    ) -> Bool {
+        guard templateFormat != stamped else { return false }
+        let family = capabilities.family?.lowercased() ?? ""
+        let type = modelType?.lowercased() ?? ""
+        let stamp = capabilities.toolParser?.lowercased() ?? ""
+        return stamped == .glm4
+            && templateFormat == .json
+            && stamp == "deepseek"
+            && (family.contains("bailing") || family.contains("ling")
+                || type.contains("bailing") || type.contains("ling"))
     }
 
     /// Resolve a ``DraftStrategy`` from JANG capability stamp.
@@ -853,10 +896,11 @@ public struct JangLoader: Sendable {
 
         let family = config.capabilities?.family?.lowercased() ?? ""
         let parser = config.capabilities?.toolParser?.lowercased() ?? ""
+        let supportsTools = config.capabilities?.supportsTools
         return family.contains("zaya1_vl")
             && ["zaya", "zaya_xml", "zyphra", "zyphra_xml"].contains(parser)
             && config.capabilities?.thinkInTemplate == false
-            && config.capabilities?.supportsTools == true
+            && supportsTools != false
     }
 
     /// Check whether a directory already has the files that the HuggingFace

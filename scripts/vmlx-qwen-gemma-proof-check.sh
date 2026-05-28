@@ -217,7 +217,7 @@ check_osaurus_vmlx_pin_reproducible() {
   fi
 
   if git -C "$REPO_ROOT" show "HEAD:Libraries/MLXLMCommon/ReasoningParser.swift" \
-      | rg -q 'stripIdentifierOnlyAtEnd: true\)'; then
+      | rg -q 'channelName == "thought" \|\| channelName == "thinking"'; then
     pass "pinned vMLX HEAD contains Gemma empty thought-channel parser fix"
   else
     fail_msg "pinned vMLX HEAD lacks Gemma empty thought-channel parser fix"
@@ -261,7 +261,8 @@ check_vmlx_gemma_parser_source() {
   require_file "$tool_parser" "vMLX GemmaFunctionParser.swift"
   require_file "$tests" "vMLX Gemma parser focused tests"
   require_file "$tool_tests" "vMLX Gemma tool parser edge-case tests"
-  require_text "$parser" 'stripIdentifierOnlyAtEnd: true\)' "vMLX Gemma empty thought-channel source fix"
+  require_text "$parser" 'channelName == "thought" \|\| channelName == "thinking"' "vMLX Gemma thought/thinking channel recognition"
+  require_text "$parser" 'harmonyChannelShouldStripName = false' "vMLX Gemma empty thought-channel strip reset"
   require_text "$tests" 'empty thought channel without newline does not surface thought' "vMLX Gemma no-newline thought regression"
   require_text "$tests" 'pre<\|channel>thought<channel\|>answer' "vMLX Gemma no-newline thought fixture"
   require_text "$REPO_ROOT/Package.swift" 'Gemma4ThoughtChannelParserFocusedTests\.swift' "vMLX Gemma parser regression target wiring"

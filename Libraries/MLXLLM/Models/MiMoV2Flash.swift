@@ -167,7 +167,10 @@ class MiMoV2FlashAttention: Module {
 
         var q = queries.reshaped(B, L, numAttentionHeads, -1).transposed(0, 2, 1, 3)
         var k = keys.reshaped(B, L, numKeyValueHeads, -1).transposed(0, 2, 1, 3)
-        let v = values.reshaped(B, L, numKeyValueHeads, -1).transposed(0, 2, 1, 3)
+        var v = values.reshaped(B, L, numKeyValueHeads, -1).transposed(0, 2, 1, 3)
+        if args.attentionValueScale != 1 {
+            v = v * args.attentionValueScale
+        }
 
         q = applyRotaryPosition(rope, to: q, cache: cache)
         k = applyRotaryPosition(rope, to: k, cache: cache)
@@ -398,7 +401,7 @@ public class MiMoV2FlashModel: Module, LLMModel, KVCacheDimensionProvider {
         self.configuration = config
         self.modelType = config.modelType
         self.vocabularySize = config.vocabularySize
-        self.kvHeads = Array(repeating: config.kvHeads, count: config.hiddenLayers)
+        self.kvHeads = (0 ..< config.hiddenLayers).map { config.kvHeadsForLayer($0) }
         self.model = MiMoV2FlashModelInner(config)
         _lmHead.wrappedValue = Linear(config.hiddenSize, config.vocabularySize, bias: false)
     }
@@ -440,6 +443,29 @@ public class MiMoV2FlashModel: Module, LLMModel, KVCacheDimensionProvider {
         var sanitizedWeights = newWeights.isEmpty ? weights : newWeights
 
         for layerIndex in 0 ..< configuration.hiddenLayers {
+            let prefix = "model.layers.\(layerIndex).self_attn"
+            let fusedKey = "\(prefix).qkv_proj"
+            guard let fusedWeight = sanitizedWeights.removeValue(forKey: "\(fusedKey).weight")
+            else { continue }
+
+            let (qRows, kRows, _) = configuration.qkvProjectionRows(layerIndex: layerIndex)
+
+            let parts = split(fusedWeight, indices: [qRows, qRows + kRows], axis: 0)
+            sanitizedWeights["\(prefix).q_proj.weight"] = parts[0]
+            sanitizedWeights["\(prefix).k_proj.weight"] = parts[1]
+            sanitizedWeights["\(prefix).v_proj.weight"] = parts[2]
+
+            for suffix in ["scales", "biases", "bias"] {
+                guard let fused = sanitizedWeights.removeValue(forKey: "\(fusedKey).\(suffix)")
+                else { continue }
+                let parts = split(fused, indices: [qRows, qRows + kRows], axis: 0)
+                sanitizedWeights["\(prefix).q_proj.\(suffix)"] = parts[0]
+                sanitizedWeights["\(prefix).k_proj.\(suffix)"] = parts[1]
+                sanitizedWeights["\(prefix).v_proj.\(suffix)"] = parts[2]
+            }
+        }
+
+        for layerIndex in 0 ..< configuration.hiddenLayers {
             let prefix = "model.layers.\(layerIndex)"
             for (_, projName) in [("w1", "gate_proj"), ("w2", "down_proj"), ("w3", "up_proj")] {
                 for key in ["weight", "scales", "biases"] {
@@ -462,8 +488,8 @@ public class MiMoV2FlashModel: Module, LLMModel, KVCacheDimensionProvider {
     }
 
     public func newCache(parameters: GenerateParameters?) -> [KVCache] {
-        return model.layers.map { layer in
-            if layer.isSlidingWindow {
+        return configuration.hybridLayerPattern.indices.map { layerIndex in
+            if configuration.isSlidingLayer(layerIndex) {
                 return RotatingKVCache(maxSize: configuration.slidingWindowSize)
             } else {
                 return KVCacheSimple()
@@ -508,6 +534,7 @@ public struct MiMoV2FlashConfiguration: Codable, Sendable {
     var swaHeadDim: Int
     var swaVHeadDim: Int
     var partialRotaryFactor: Float
+    var attentionValueScale: Float
 
     enum CodingKeys: String, CodingKey {
         case modelType = "model_type"
@@ -534,6 +561,7 @@ public struct MiMoV2FlashConfiguration: Codable, Sendable {
         case topkGroup = "topk_group"
         case maxPositionEmbeddings = "max_position_embeddings"
         case layernormEpsilon = "layernorm_epsilon"
+        case rmsNormEps = "rms_norm_eps"
         case ropeTheta = "rope_theta"
         case swaRopeTheta = "swa_rope_theta"
         case swaAttentionHeads = "swa_num_attention_heads"
@@ -543,6 +571,119 @@ public struct MiMoV2FlashConfiguration: Codable, Sendable {
         case swaHeadDim = "swa_head_dim"
         case swaVHeadDim = "swa_v_head_dim"
         case partialRotaryFactor = "partial_rotary_factor"
+        case slidingWindow = "sliding_window"
+        case attentionValueScale = "attention_value_scale"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        modelType = try c.decodeIfPresent(String.self, forKey: .modelType) ?? "mimo_v2_flash"
+        numExpertsPerTok = try c.decode(Int.self, forKey: .numExpertsPerTok)
+        hybridLayerPattern = try c.decode([Int].self, forKey: .hybridLayerPattern)
+        moeLayerFreq = try c.decode([Int].self, forKey: .moeLayerFreq)
+        addSwaAttentionSinkBias =
+            try c.decodeIfPresent(Bool.self, forKey: .addSwaAttentionSinkBias) ?? true
+        addFullAttentionSinkBias =
+            try c.decodeIfPresent(Bool.self, forKey: .addFullAttentionSinkBias) ?? false
+        slidingWindowSize =
+            try c.decodeIfPresent(Int.self, forKey: .slidingWindowSize)
+            ?? c.decodeIfPresent(Int.self, forKey: .slidingWindow)
+            ?? 128
+        vocabularySize = try c.decode(Int.self, forKey: .vocabularySize)
+        hiddenSize = try c.decode(Int.self, forKey: .hiddenSize)
+        intermediateSize = try c.decode(Int.self, forKey: .intermediateSize)
+        moeIntermediateSize = try c.decode(Int.self, forKey: .moeIntermediateSize)
+        hiddenLayers = try c.decode(Int.self, forKey: .hiddenLayers)
+        attentionHeads = try c.decode(Int.self, forKey: .attentionHeads)
+        kvHeads = try c.decode(Int.self, forKey: .kvHeads)
+        nSharedExperts = try c.decodeIfPresent(Int.self, forKey: .nSharedExperts)
+        nRoutedExperts = try c.decodeIfPresent(Int.self, forKey: .nRoutedExperts)
+        routedScalingFactor = try c.decodeIfPresent(Float.self, forKey: .routedScalingFactor)
+        topkMethod = try c.decodeIfPresent(String.self, forKey: .topkMethod) ?? "noaux_tc"
+        scoringFunc = try c.decodeIfPresent(String.self, forKey: .scoringFunc) ?? "sigmoid"
+        normTopkProb = try c.decodeIfPresent(Bool.self, forKey: .normTopkProb) ?? true
+        nGroup = try c.decodeIfPresent(Int.self, forKey: .nGroup) ?? 1
+        topkGroup = try c.decodeIfPresent(Int.self, forKey: .topkGroup) ?? 1
+        maxPositionEmbeddings =
+            try c.decodeIfPresent(Int.self, forKey: .maxPositionEmbeddings) ?? 1_048_576
+        layernormEpsilon =
+            try c.decodeIfPresent(Float.self, forKey: .layernormEpsilon)
+            ?? c.decodeIfPresent(Float.self, forKey: .rmsNormEps)
+            ?? 1e-5
+        ropeTheta = try c.decodeIfPresent(Float.self, forKey: .ropeTheta) ?? 10_000_000
+        swaRopeTheta = try c.decodeIfPresent(Float.self, forKey: .swaRopeTheta) ?? 10_000
+        swaAttentionHeads = try c.decode(Int.self, forKey: .swaAttentionHeads)
+        swaKvHeads = try c.decode(Int.self, forKey: .swaKvHeads)
+        headDim = try c.decodeIfPresent(Int.self, forKey: .headDim) ?? hiddenSize / attentionHeads
+        vHeadDim = try c.decodeIfPresent(Int.self, forKey: .vHeadDim) ?? headDim
+        swaHeadDim =
+            try c.decodeIfPresent(Int.self, forKey: .swaHeadDim) ?? hiddenSize / swaAttentionHeads
+        swaVHeadDim = try c.decodeIfPresent(Int.self, forKey: .swaVHeadDim) ?? swaHeadDim
+        partialRotaryFactor =
+            try c.decodeIfPresent(Float.self, forKey: .partialRotaryFactor) ?? 1.0
+        attentionValueScale =
+            try c.decodeIfPresent(Float.self, forKey: .attentionValueScale) ?? 1.0
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(modelType, forKey: .modelType)
+        try c.encode(numExpertsPerTok, forKey: .numExpertsPerTok)
+        try c.encode(hybridLayerPattern, forKey: .hybridLayerPattern)
+        try c.encode(moeLayerFreq, forKey: .moeLayerFreq)
+        try c.encode(addSwaAttentionSinkBias, forKey: .addSwaAttentionSinkBias)
+        try c.encode(addFullAttentionSinkBias, forKey: .addFullAttentionSinkBias)
+        try c.encode(slidingWindowSize, forKey: .slidingWindowSize)
+        try c.encode(vocabularySize, forKey: .vocabularySize)
+        try c.encode(hiddenSize, forKey: .hiddenSize)
+        try c.encode(intermediateSize, forKey: .intermediateSize)
+        try c.encode(moeIntermediateSize, forKey: .moeIntermediateSize)
+        try c.encode(hiddenLayers, forKey: .hiddenLayers)
+        try c.encode(attentionHeads, forKey: .attentionHeads)
+        try c.encode(kvHeads, forKey: .kvHeads)
+        try c.encodeIfPresent(nSharedExperts, forKey: .nSharedExperts)
+        try c.encodeIfPresent(nRoutedExperts, forKey: .nRoutedExperts)
+        try c.encodeIfPresent(routedScalingFactor, forKey: .routedScalingFactor)
+        try c.encode(topkMethod, forKey: .topkMethod)
+        try c.encode(scoringFunc, forKey: .scoringFunc)
+        try c.encode(normTopkProb, forKey: .normTopkProb)
+        try c.encode(nGroup, forKey: .nGroup)
+        try c.encode(topkGroup, forKey: .topkGroup)
+        try c.encode(maxPositionEmbeddings, forKey: .maxPositionEmbeddings)
+        try c.encode(layernormEpsilon, forKey: .layernormEpsilon)
+        try c.encode(ropeTheta, forKey: .ropeTheta)
+        try c.encode(swaRopeTheta, forKey: .swaRopeTheta)
+        try c.encode(swaAttentionHeads, forKey: .swaAttentionHeads)
+        try c.encode(swaKvHeads, forKey: .swaKvHeads)
+        try c.encode(headDim, forKey: .headDim)
+        try c.encode(vHeadDim, forKey: .vHeadDim)
+        try c.encode(swaHeadDim, forKey: .swaHeadDim)
+        try c.encode(swaVHeadDim, forKey: .swaVHeadDim)
+        try c.encode(partialRotaryFactor, forKey: .partialRotaryFactor)
+        try c.encode(attentionValueScale, forKey: .attentionValueScale)
+    }
+
+    public func isSlidingLayer(_ layerIndex: Int) -> Bool {
+        hybridLayerPattern[layerIndex] == 1
+    }
+
+    public func kvHeadsForLayer(_ layerIndex: Int) -> Int {
+        isSlidingLayer(layerIndex) ? swaKvHeads : kvHeads
+    }
+
+    public func qkvProjectionRows(layerIndex: Int) -> (q: Int, k: Int, v: Int) {
+        if isSlidingLayer(layerIndex) {
+            return (
+                q: swaAttentionHeads * swaHeadDim,
+                k: swaKvHeads * swaHeadDim,
+                v: swaKvHeads * swaVHeadDim
+            )
+        }
+        return (
+            q: attentionHeads * headDim,
+            k: kvHeads * headDim,
+            v: kvHeads * vHeadDim
+        )
     }
 }
 

@@ -54,6 +54,9 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
         // Live DSV4 JANGTQ2 app decode has also emitted an extra "c"
         // after the underscore while preserving a valid invoke body.
         "<\u{FF5C}DSML\u{FF5C}tool_ccalls>",
+        // Live DSV4 can also drift the suffix to "crs" while preserving
+        // the DSML invoke/parameter body.
+        "<\u{FF5C}DSML\u{FF5C}tool_crs>",
     ]
     public let endTagAliases: [String] = [
         "</\u{FF5C}DSML\u{FF5C}tool_calls>",
@@ -61,6 +64,7 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
         // Same live alias family as `tool_ccalls`, abbreviated at the
         // suffix rather than the middle of the token.
         "</\u{FF5C}DSML\u{FF5C}tool_cs>",
+        "</\u{FF5C}DSML\u{FF5C}tool_crs>",
     ]
     public let startTagPrefixes: [String] = [Self.dsmlToolStartPrefix]
     public let endTagPrefixes: [String] = [Self.dsmlToolEndPrefix]
@@ -76,11 +80,31 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
         if let firstCall = parseFirstInvoke(in: text, tools: tools) {
             return firstCall
         }
+        if let requestToolXMLCall = parseRequestToolXMLFallback(in: text, tools: tools) {
+            return requestToolXMLCall
+        }
         if let pythonCall = parsePythonStyleToolFallback(in: text, tools: tools) {
             return pythonCall
         }
-        if let bareNameJSONCall = parseBareNameJSONToolFallback(in: text, tools: tools) {
+        if let bareNameJSONCall = parseBareNameJSONToolFallback(
+            in: text,
+            tools: tools,
+            allowMalformedEOF: false)
+        {
             return bareNameJSONCall
+        }
+        if let bareNameKeyValueCall = parseBareNameKeyValueToolFallback(
+            in: text,
+            tools: tools,
+            allowEOF: true)
+        {
+            return bareNameKeyValueCall
+        }
+        if let actionJSONCall = parseActionJSONToolFallback(in: text, tools: tools) {
+            return actionJSONCall
+        }
+        if let apiToolJSONCall = parseEmbeddedAPIToolJSONFallback(in: text, tools: tools) {
+            return apiToolJSONCall
         }
         return parseInlineJSONToolFallback(in: text, tools: tools)
     }
@@ -94,13 +118,33 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
         // internally by `<｜DSML｜invoke ...>` per call. Parse all
         // invokes in order.
         let buffer = strippedOuterToolTags(from: toolCallBuffer)
-        let calls = parseAllInvokes(in: buffer, tools: tools)
+        let calls = parseAllInvokes(in: buffer, tools: tools, allowPartialEOF: true)
         if !calls.isEmpty { return calls }
+        if let requestToolXMLCall = parseRequestToolXMLFallback(in: buffer, tools: tools) {
+            return [requestToolXMLCall]
+        }
         if let pythonCall = parsePythonStyleToolFallback(in: buffer, tools: tools) {
             return [pythonCall]
         }
-        if let bareNameJSONCall = parseBareNameJSONToolFallback(in: buffer, tools: tools) {
+        if let bareNameJSONCall = parseBareNameJSONToolFallback(
+            in: buffer,
+            tools: tools,
+            allowMalformedEOF: true)
+        {
             return [bareNameJSONCall]
+        }
+        if let bareNameKeyValueCall = parseBareNameKeyValueToolFallback(
+            in: buffer,
+            tools: tools,
+            allowEOF: true)
+        {
+            return [bareNameKeyValueCall]
+        }
+        if let actionJSONCall = parseActionJSONToolFallback(in: buffer, tools: tools) {
+            return [actionJSONCall]
+        }
+        if let apiToolJSONCall = parseEmbeddedAPIToolJSONFallback(in: buffer, tools: tools) {
+            return [apiToolJSONCall]
         }
         return parseInlineJSONToolFallback(in: buffer, tools: tools).map { [$0] } ?? []
     }
@@ -123,7 +167,9 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
     /// converted through `JSONValue` so the emitted arguments match
     /// the tool schema's type contract.
     private func parseAllInvokes(
-        in text: String, tools: [[String: any Sendable]]?
+        in text: String,
+        tools: [[String: any Sendable]]?,
+        allowPartialEOF: Bool = false
     ) -> [ToolCall] {
         let invokeOpen = "\(Self.dsmlPrefix)invoke name="
         let invokeCloseTags = [
@@ -151,17 +197,24 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
                 continue
             }
 
-            // Find </｜DSML｜invoke>
-            guard let close = firstRange(
+            let body: String
+            let nextCursor: String.Index
+            if let close = firstRange(
                 of: invokeCloseTags, in: text, range: closeAngle.upperBound ..< text.endIndex)
-            else { break }
-
-            let body = String(text[closeAngle.upperBound ..< close.lowerBound])
+            {
+                body = String(text[closeAngle.upperBound ..< close.lowerBound])
+                nextCursor = close.upperBound
+            } else if allowPartialEOF {
+                body = String(text[closeAngle.upperBound ..< text.endIndex])
+                nextCursor = text.endIndex
+            } else {
+                break
+            }
             let paramConfig = parameterSchema(for: funcName, tools: tools)
-            let args = parseParameters(in: body, schema: paramConfig)
+            let args = parseParameters(in: body, schema: paramConfig, allowPartialEOF: allowPartialEOF)
             results.append(
                 ToolCall(function: .init(name: funcName, arguments: args)))
-            cursor = close.upperBound
+            cursor = nextCursor
         }
         return results
     }
@@ -208,7 +261,9 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
     ///                    JSON parse fails, so a malformed model
     ///                    output doesn't drop the whole tool call).
     private func parseParameters(
-        in body: String, schema: [String: any Sendable]?
+        in body: String,
+        schema: [String: any Sendable]?,
+        allowPartialEOF: Bool = false
     ) -> [String: any Sendable] {
         let paramOpen = "\(Self.dsmlPrefix)parameter name="
         let paramClose = "\(Self.dsmlPrefixClose)parameter>"
@@ -232,18 +287,31 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
                 continue
             }
 
-            // Body up to </｜DSML｜parameter>
-            guard
-                let paramEnd = body.range(
-                    of: paramClose, range: closeAngle.upperBound ..< body.endIndex)
-            else { break }
+            // Body up to </｜DSML｜parameter>. At EOS, live Omni/DSV4
+            // generations can length-stop after a clearly named parameter
+            // value but before a valid closing tag; keep the protocol hidden
+            // and recover the value up to the next DSML-like close marker.
+            let valueEnd: String.Index
+            let nextCursor: String.Index
+            if let paramEnd = body.range(
+                of: paramClose, range: closeAngle.upperBound ..< body.endIndex)
+            {
+                valueEnd = paramEnd.lowerBound
+                nextCursor = paramEnd.upperBound
+            } else if allowPartialEOF {
+                valueEnd = partialParameterValueEnd(
+                    in: body,
+                    range: closeAngle.upperBound ..< body.endIndex)
+                nextCursor = body.endIndex
+            } else {
+                break
+            }
 
-            var value = String(body[closeAngle.upperBound ..< paramEnd.lowerBound])
-            // Strip single leading / trailing newline (matches the
-            // Python reference in `encoding_dsv4.py` which injects
-            // newlines around multi-line values for readability).
-            if value.hasPrefix("\n") { value = String(value.dropFirst()) }
-            if value.hasSuffix("\n") { value = String(value.dropLast()) }
+            var value = String(body[closeAngle.upperBound ..< valueEnd])
+            // Strip protocol-edge newlines (matches the Python reference in
+            // `encoding_dsv4.py`, which injects newlines around multi-line
+            // values for readability).
+            value = trimBoundaryNewlines(value)
 
             if stringFlag == "true" {
                 args[name] = value
@@ -252,9 +320,30 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
                 args[name] = decodeJSONValue(value, fallbackString: value)
             }
             _ = schema  // schema currently unused — DSML carries explicit `string=` flag so type hints aren't needed
-            cursor = paramEnd.upperBound
+            cursor = nextCursor
         }
         return args
+    }
+
+    private func trimBoundaryNewlines(_ value: String) -> String {
+        var result = value
+        while result.hasPrefix("\n") || result.hasPrefix("\r") {
+            result = String(result.dropFirst())
+        }
+        while result.hasSuffix("\n") || result.hasSuffix("\r") {
+            result = String(result.dropLast())
+        }
+        return result
+    }
+
+    private func partialParameterValueEnd(
+        in body: String,
+        range: Range<String.Index>
+    ) -> String.Index {
+        let markers = ["</", Self.dsmlPrefix, Self.dsmlPrefixClose]
+        return markers
+            .compactMap { body.range(of: $0, range: range)?.lowerBound }
+            .min() ?? range.upperBound
     }
 
     /// DSV4 live rows have occasionally fallen back from DSML to a top-level
@@ -273,10 +362,51 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
 
         // Tool result envelopes can also carry a `"tool"` field. Those
         // are not new invocations, so leave them to the visible/text path.
-        guard object["ok"] == nil, object["result"] == nil else { return nil }
-
         let hasSchemaList = tools?.isEmpty == false
-        guard let name = fallbackToolName(in: object, allowBareName: hasSchemaList)
+        return parseInlineJSONObject(object, tools: tools, allowBareName: hasSchemaList)
+    }
+
+    /// Live DSV4 JANGTQ2 app rows can emit an agent-style action envelope,
+    /// for example `action:{"id":0,"name":"file_read","args":{...}}`.
+    /// Treat that as protocol, not assistant prose. If the action JSON is
+    /// malformed but still names a registered tool, quarantine it as an
+    /// invalid tool attempt so the visible stream stays clean.
+    private func parseActionJSONToolFallback(
+        in text: String,
+        tools: [[String: any Sendable]]?
+    ) -> ToolCall? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let payload = actionJSONPayload(in: trimmed) else { return nil }
+        let hasSchemaList = tools?.isEmpty == false
+        if let object = parseJSONObjectAllowingLiteralInvalidEscapes(payload) {
+            return parseInlineJSONObject(object, tools: tools, allowBareName: hasSchemaList)
+        }
+        guard let name = actionJSONToolName(in: payload, allowBareName: hasSchemaList)
+        else { return nil }
+        if let tools, !tools.isEmpty {
+            guard functionSpec(named: name, in: tools) != nil else { return nil }
+        } else if !Self.schemaLessFallbackToolNames.contains(name) {
+            return nil
+        }
+        return ToolCall(
+            function: .init(
+                name: name,
+                arguments: invalidInlineToolArguments(
+                    toolName: name,
+                    message: "malformed JSON action object",
+                    field: "arguments",
+                    expected: "valid JSON object")))
+    }
+
+    private func parseInlineJSONObject(
+        _ object: [String: Any],
+        tools: [[String: any Sendable]]?,
+        allowBareName: Bool
+    ) -> ToolCall? {
+        // Tool result envelopes can also carry a `"tool"` field. Those
+        // are not new invocations, so leave them to the visible/text path.
+        guard object["ok"] == nil, object["result"] == nil else { return nil }
+        guard let name = fallbackToolName(in: object, allowBareName: allowBareName)
         else { return nil }
         let argsObject: Any
         if let function = object["function"] as? [String: Any] {
@@ -291,8 +421,13 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
             argsObject = arguments
         } else if let parameters = object["parameters"] {
             argsObject = parameters
+        } else if let args = object["args"] {
+            argsObject = args
         } else {
-            let reserved = Set(["tool", "tool_name", "name", "function", "arguments", "parameters", "type", "id"])
+            let reserved = Set([
+                "tool", "tool_name", "name", "function", "arguments", "parameters", "args",
+                "type", "id", "api_type", "api_name",
+            ])
             argsObject = object.filter { !reserved.contains($0.key) }
         }
 
@@ -308,6 +443,83 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
             }
         }
         return ToolCall(function: .init(name: name, arguments: args))
+    }
+
+    /// Live DSV4 JANGTQ2 rows can emit a schema-bound API-tool object inside
+    /// malformed control text, for example:
+    /// `_only_call...{"api_type":"api_tool","api_name":"line_count",...}`.
+    /// Treat only registered `api_tool` objects as protocol so ordinary JSON
+    /// answers stay visible.
+    private func parseEmbeddedAPIToolJSONFallback(
+        in text: String,
+        tools: [[String: any Sendable]]?
+    ) -> ToolCall? {
+        guard let tools, !tools.isEmpty else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.hasPrefix("{"),
+            let jsonObject = firstBalancedJSONObject(in: trimmed[...]),
+            let object = parseJSONObjectAllowingLiteralInvalidEscapes(jsonObject),
+            object["api_type"] as? String == "api_tool",
+            object["api_name"] as? String != nil
+        else { return nil }
+        return parseInlineJSONObject(object, tools: tools, allowBareName: true)
+    }
+
+    private func actionJSONPayload(in text: String) -> String? {
+        let prefixes = ["action:", ":"]
+        for prefix in prefixes where text.hasPrefix(prefix) {
+            guard
+                let prefixEnd = text.index(
+                    text.startIndex,
+                    offsetBy: prefix.count,
+                    limitedBy: text.endIndex)
+            else { return nil }
+            var cursor = prefixEnd
+            while cursor < text.endIndex, isInlineFallbackWhitespace(text[cursor]) {
+                cursor = text.index(after: cursor)
+            }
+            if text[cursor...].lowercased().hasPrefix("json") {
+                guard let afterJSON = text.index(cursor, offsetBy: 4, limitedBy: text.endIndex)
+                else { return nil }
+                cursor = afterJSON
+                while cursor < text.endIndex, isInlineFallbackWhitespace(text[cursor]) {
+                    cursor = text.index(after: cursor)
+                }
+            }
+            guard cursor < text.endIndex, text[cursor] == "{" else { return nil }
+            return firstBalancedJSONObject(in: text[cursor...]) ?? String(text[cursor...])
+        }
+        return nil
+    }
+
+    private func actionJSONToolName(in text: String, allowBareName: Bool) -> String? {
+        for key in allowBareName ? ["tool", "tool_name", "name"] : ["tool", "tool_name"] {
+            if let value = firstJSONStringValue(for: key, in: text) {
+                return value
+            }
+        }
+        if let functionRange = text.range(of: #""function""#),
+            let value = firstJSONStringValue(for: "name", in: String(text[functionRange.upperBound...]))
+        {
+            return value
+        }
+        return nil
+    }
+
+    private func firstJSONStringValue(for key: String, in text: String) -> String? {
+        let pattern = #""# + NSRegularExpression.escapedPattern(for: key)
+            + #""\s*:\s*"((?:[^"\\]|\\.)*)""#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(text.startIndex ..< text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: range),
+            let valueRange = Range(match.range(at: 1), in: text)
+        else { return nil }
+        let raw = String(text[valueRange])
+        let literal = "\"\(raw)\""
+        guard let data = literal.data(using: .utf8),
+            let decoded = try? JSONDecoder().decode(String.self, from: data)
+        else { return raw }
+        return decoded
     }
 
     /// Some live DSV4 JANGTQ2 app rows try to invoke folder tools as a
@@ -338,6 +550,52 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
         return ToolCall(function: .init(name: candidate.name, arguments: args))
     }
 
+    /// Live DSV4 JANGTQ2 can emit a structured request-tool rail after
+    /// multi-turn tool history, for example:
+    ///
+    /// `_only:request_tool<invoke><target_name>line_count</target><params><string>one\ntwo</string></params></invoke>`
+    ///
+    /// This is an alternate tool protocol, not visible assistant prose. Map the
+    /// target to the tool name and the single `<string>` param to the only
+    /// required string parameter declared by the selected tool schema.
+    private func parseRequestToolXMLFallback(
+        in text: String,
+        tools: [[String: any Sendable]]?
+    ) -> ToolCall? {
+        guard
+            let invokeStart = text.range(of: "<invoke>"),
+            let invokeEnd = text.range(of: "</invoke>", range: invokeStart.upperBound ..< text.endIndex)
+        else { return nil }
+
+        let body = String(text[invokeStart.upperBound ..< invokeEnd.lowerBound])
+        guard let name = firstXMLBody(in: body, tags: [("target_name", "target"), ("target", "target")]),
+            !name.isEmpty
+        else { return nil }
+
+        let args: [String: any Sendable]
+        if let stringValue = firstXMLBody(in: body, tags: [("string", "string")]) {
+            let decoded = decodeJSONStringLiteralIfPresent(stringValue)
+            let argumentName = singleRequiredStringArgumentName(for: name, tools: tools) ?? "text"
+            args = [argumentName: trimBoundaryNewlines(decoded)]
+        } else {
+            args = [:]
+        }
+
+        if let tools, !tools.isEmpty {
+            guard let spec = functionSpec(named: name, in: tools) else { return nil }
+            if let invalidArgs = inlineSchemaValidationFailure(
+                toolName: name,
+                arguments: args,
+                functionSpec: spec)
+            {
+                return ToolCall(function: .init(name: name, arguments: invalidArgs))
+            }
+        } else if !Self.schemaLessFallbackToolNames.contains(name) {
+            return nil
+        }
+        return ToolCall(function: .init(name: name, arguments: args))
+    }
+
     /// Live DSV4 JANGTQ2 app rows have also emitted a bare tool name followed
     /// by a JSON argument object, for example:
     ///
@@ -350,7 +608,8 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
     /// leaks into the answer.
     private func parseBareNameJSONToolFallback(
         in text: String,
-        tools: [[String: any Sendable]]?
+        tools: [[String: any Sendable]]?,
+        allowMalformedEOF: Bool
     ) -> ToolCall? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !trimmed.hasPrefix("{") else { return nil }
@@ -366,17 +625,37 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
             guard afterName == trimmed.endIndex
                 || isInlineFallbackWhitespace(trimmed[afterName])
                 || trimmed[afterName] == "{"
+                || trimmed[afterName] == ":"
             else { continue }
 
             let cursor = bareNameJSONTailObjectStart(in: trimmed, afterName: afterName)
             guard cursor < trimmed.endIndex, trimmed[cursor] == "{" else { continue }
             guard let jsonObject = firstBalancedJSONObject(in: trimmed[cursor...]) else {
+                if (allowMalformedEOF || jsonBracesBalanced(String(trimmed[cursor...]))),
+                    let tools, !tools.isEmpty,
+                    functionSpec(named: name, in: tools) != nil
+                {
+                    let invalidArgs = invalidInlineToolArguments(
+                        toolName: name,
+                        message: "malformed JSON argument object",
+                        field: "arguments",
+                        expected: "valid JSON object")
+                    return ToolCall(function: .init(name: name, arguments: invalidArgs))
+                }
                 continue
             }
-            guard
-                let data = jsonObject.data(using: .utf8),
-                let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else { continue }
+            guard let object = parseJSONObjectAllowingLiteralInvalidEscapes(jsonObject) else {
+                if let tools, !tools.isEmpty {
+                    guard functionSpec(named: name, in: tools) != nil else { return nil }
+                    let invalidArgs = invalidInlineToolArguments(
+                        toolName: name,
+                        message: "malformed JSON argument object",
+                        field: "arguments",
+                        expected: "valid JSON object")
+                    return ToolCall(function: .init(name: name, arguments: invalidArgs))
+                }
+                return nil
+            }
 
             let args = normalizeInlineArguments(object)
             if let tools, !tools.isEmpty {
@@ -396,6 +675,278 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
         return nil
     }
 
+    private func jsonBracesBalanced(_ text: String) -> Bool {
+        var depth = 0
+        var sawOpen = false
+        for ch in text {
+            if ch == "{" {
+                sawOpen = true
+                depth += 1
+            } else if ch == "}" {
+                depth -= 1
+                if depth < 0 { return false }
+            }
+        }
+        return sawOpen && depth == 0
+    }
+
+    private func parseJSONObjectAllowingLiteralInvalidEscapes(_ jsonObject: String) -> [String: Any]? {
+        if let object = parseJSONObject(jsonObject) {
+            return object
+        }
+        let repaired = jsonObjectWithInvalidStringEscapesMadeLiteral(jsonObject)
+        guard repaired != jsonObject else { return nil }
+        return parseJSONObject(repaired)
+    }
+
+    private func parseJSONObject(_ jsonObject: String) -> [String: Any]? {
+        guard let data = jsonObject.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private func jsonObjectWithInvalidStringEscapesMadeLiteral(_ jsonObject: String) -> String {
+        var output = ""
+        var inString = false
+        var escaped = false
+        let validEscapes = Set(["\"", "\\", "/", "b", "f", "n", "r", "t", "u"])
+
+        for ch in jsonObject {
+            if escaped {
+                let scalar = String(ch)
+                if !validEscapes.contains(scalar) {
+                    output.append("\\")
+                }
+                output.append(ch)
+                escaped = false
+                continue
+            }
+            if inString && ch == "\\" {
+                output.append(ch)
+                escaped = true
+                continue
+            }
+            if ch == "\"" {
+                inString.toggle()
+            }
+            output.append(ch)
+        }
+        if escaped {
+            output.append("\\")
+        }
+        return output
+    }
+
+    /// Live DSV4 JANGTQ2 UI rows can emit a bare tool name followed by
+    /// shell-like key/value arguments, for example:
+    ///
+    ///     file_read
+    ///     path=/tmp/file.swift
+    ///
+    /// This is a tool attempt, not assistant prose. Parse only consecutive
+    /// key/value lines immediately after a known tool name; trailing text is
+    /// deliberately ignored so a post-tool answer cannot leak before the tool
+    /// result has been fed back through the chat loop.
+    private func parseBareNameKeyValueToolFallback(
+        in text: String,
+        tools: [[String: any Sendable]]?,
+        allowEOF: Bool
+    ) -> ToolCall? {
+        var leadingStart = text.startIndex
+        while leadingStart < text.endIndex, isInlineFallbackWhitespace(text[leadingStart]) {
+            leadingStart = text.index(after: leadingStart)
+        }
+        let trimmed = String(text[leadingStart...])
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("{") else { return nil }
+
+        for name in pythonStyleToolNames(from: tools) {
+            guard trimmed.hasPrefix(name) else { continue }
+            guard
+                let afterName = trimmed.index(
+                    trimmed.startIndex,
+                    offsetBy: name.count,
+                    limitedBy: trimmed.endIndex)
+            else { continue }
+            guard afterName < trimmed.endIndex,
+                isInlineFallbackWhitespace(trimmed[afterName])
+            else { continue }
+
+            let tail = String(trimmed[afterName...])
+            let args = parseLeadingKeyValueLines(tail)
+            guard !args.isEmpty else { continue }
+            guard allowEOF || bareNameKeyValueTailIsTerminated(tail, toolName: name, tools: tools)
+            else { continue }
+
+            if let tools, !tools.isEmpty {
+                guard let spec = functionSpec(named: name, in: tools) else { return nil }
+                if let invalidArgs = inlineSchemaValidationFailure(
+                    toolName: name,
+                    arguments: args,
+                    functionSpec: spec)
+                {
+                    return ToolCall(function: .init(name: name, arguments: invalidArgs))
+                }
+            } else if !Self.schemaLessFallbackToolNames.contains(name) {
+                return nil
+            }
+            return ToolCall(function: .init(name: name, arguments: args))
+        }
+        return nil
+    }
+
+    private func parseLeadingKeyValueLines(_ text: String) -> [String: any Sendable] {
+        var result: [String: any Sendable] = [:]
+        for rawLine in text.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+            guard let separator = firstKeyValueSeparator(in: line) else {
+                break
+            }
+            let key = line[..<separator]
+                .trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty, key.allSatisfy(isKeyValueIdentifierCharacter) else {
+                break
+            }
+            var value = line[line.index(after: separator)...]
+                .trimmingCharacters(in: .whitespaces)
+            guard !value.isEmpty else { break }
+            if (value.hasPrefix("'") && value.hasSuffix("'"))
+                || (value.hasPrefix("\"") && value.hasSuffix("\""))
+            {
+                value = String(value.dropFirst().dropLast())
+                result[key] = value
+            } else {
+                result[key] = decodeJSONValue(value, fallbackString: value)
+            }
+        }
+        return result
+    }
+
+    private func bareNameKeyValueTailIsTerminated(
+        _ text: String,
+        toolName: String,
+        tools: [[String: any Sendable]]?
+    ) -> Bool {
+        let lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        let endsWithNewline = text.last?.isNewline == true
+        var sawKeyValue = false
+        for (index, rawLine) in lines.enumerated() {
+            let isLastLine = index == lines.count - 1
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty {
+                if isLastLine { return false }
+                if sawKeyValue { return true }
+                continue
+            }
+            if isKeyValueArgumentLine(line, toolName: toolName, tools: tools) {
+                sawKeyValue = true
+                continue
+            }
+            if sawKeyValue {
+                if isLastLine && !endsWithNewline
+                    && (line.allSatisfy(isKeyValueIdentifierCharacter)
+                        || isPartialKeyValueArgumentLine(line, toolName: toolName, tools: tools))
+                {
+                    return false
+                }
+                return true
+            }
+            return false
+        }
+        return false
+    }
+
+    private func isPartialKeyValueArgumentLine(
+        _ line: String,
+        toolName: String,
+        tools: [[String: any Sendable]]?
+    ) -> Bool {
+        guard let separator = firstKeyValueSeparator(in: line) else { return false }
+        let key = line[..<separator]
+            .trimmingCharacters(in: .whitespaces)
+        guard !key.isEmpty, key.allSatisfy(isKeyValueIdentifierCharacter) else {
+            return false
+        }
+        let value = line[line.index(after: separator)...]
+            .trimmingCharacters(in: .whitespaces)
+        guard value.isEmpty else { return false }
+        if let allowed = keyValueArgumentNames(for: toolName, tools: tools),
+            allowed.contains(String(key))
+        {
+            return true
+        }
+        if Self.schemaLessKeyValueArgumentNames.contains(String(key)) {
+            return true
+        }
+        if let allowed = keyValueArgumentNames(for: toolName, tools: tools), !allowed.isEmpty {
+            return allowed.contains(String(key))
+        }
+        return false
+    }
+
+    private func isKeyValueArgumentLine(
+        _ line: String,
+        toolName: String,
+        tools: [[String: any Sendable]]?
+    ) -> Bool {
+        guard let separator = firstKeyValueSeparator(in: line) else { return false }
+        let key = line[..<separator]
+            .trimmingCharacters(in: .whitespaces)
+        guard !key.isEmpty, key.allSatisfy(isKeyValueIdentifierCharacter) else {
+            return false
+        }
+        let value = line[line.index(after: separator)...]
+            .trimmingCharacters(in: .whitespaces)
+        guard !value.isEmpty else { return false }
+        if let allowed = keyValueArgumentNames(for: toolName, tools: tools),
+            allowed.contains(String(key))
+        {
+            return true
+        }
+        if Self.schemaLessKeyValueArgumentNames.contains(String(key)) {
+            return true
+        }
+        if let allowed = keyValueArgumentNames(for: toolName, tools: tools), !allowed.isEmpty {
+            return allowed.contains(String(key))
+        }
+        return false
+    }
+
+    private func keyValueArgumentNames(
+        for toolName: String,
+        tools: [[String: any Sendable]]?
+    ) -> Set<String>? {
+        guard let tools else { return nil }
+        for tool in tools {
+            let function = (tool["function"] as? [String: any Sendable]) ?? tool
+            guard function["name"] as? String == toolName else { continue }
+            guard
+                let parameters = function["parameters"] as? [String: any Sendable],
+                let properties = parameters["properties"] as? [String: any Sendable]
+            else { return nil }
+            return Set(properties.keys)
+        }
+        return nil
+    }
+
+    private func firstKeyValueSeparator(in line: String) -> String.Index? {
+        let equals = line.firstIndex(of: "=")
+        let colon = line.firstIndex(of: ":")
+        switch (equals, colon) {
+        case (let e?, let c?):
+            return e < c ? e : c
+        case (let e?, nil):
+            return e
+        case (nil, let c?):
+            return c
+        case (nil, nil):
+            return nil
+        }
+    }
+
+    private func isKeyValueIdentifierCharacter(_ character: Character) -> Bool {
+        character == "_" || character.isLetter || character.isNumber
+    }
+
     private func bareNameJSONTailObjectStart(
         in text: String,
         afterName: String.Index
@@ -404,6 +955,7 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
         while cursor < text.endIndex, isInlineFallbackWhitespace(text[cursor]) {
             cursor = text.index(after: cursor)
         }
+        cursor = consumeOptionalJSONLabel(in: text, at: cursor)
         guard cursor < text.endIndex else { return cursor }
         guard text[cursor...].hasPrefix("```") else { return cursor }
 
@@ -424,6 +976,30 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
         return fenceCursor
     }
 
+    private func consumeOptionalJSONLabel(in text: String, at cursor: String.Index) -> String.Index {
+        guard cursor < text.endIndex, text[cursor] == ":" else { return cursor }
+        var labelStart = text.index(after: cursor)
+        while labelStart < text.endIndex, isInlineFallbackWhitespace(text[labelStart]) {
+            labelStart = text.index(after: labelStart)
+        }
+        guard text[labelStart...].lowercased().hasPrefix("json") else { return cursor }
+        guard
+            let labelEnd = text.index(labelStart, offsetBy: 4, limitedBy: text.endIndex)
+        else { return cursor }
+        if labelEnd < text.endIndex,
+            !isInlineFallbackWhitespace(text[labelEnd]),
+            text[labelEnd] != "{",
+            !text[labelEnd...].hasPrefix("```")
+        {
+            return cursor
+        }
+        var next = labelEnd
+        while next < text.endIndex, isInlineFallbackWhitespace(text[next]) {
+            next = text.index(after: next)
+        }
+        return next
+    }
+
     private static let schemaLessFallbackToolNames: Set<String> = [
         "file_tree",
         "file_read",
@@ -434,6 +1010,22 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
         "git_status",
         "git_diff",
         "git_commit",
+    ]
+
+    private static let schemaLessKeyValueArgumentNames: Set<String> = [
+        "path",
+        "start_line",
+        "end_line",
+        "content",
+        "command",
+        "query",
+        "pattern",
+        "replacement",
+        "old",
+        "new",
+        "message",
+        "cwd",
+        "recursive",
     ]
 
     private func firstPythonStyleToolCallCandidate(
@@ -594,6 +1186,11 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
     private func fallbackToolName(in object: [String: Any], allowBareName: Bool) -> String? {
         if let tool = object["tool"] as? String { return tool }
         if let toolName = object["tool_name"] as? String { return toolName }
+        if object["api_type"] as? String == "api_tool",
+            let apiName = object["api_name"] as? String
+        {
+            return apiName
+        }
         if let function = object["function"] as? [String: Any],
             let name = function["name"] as? String
         {
@@ -614,6 +1211,58 @@ public struct DSMLToolCallParser: ToolCallParser, Sendable {
             }
         }
         return nil
+    }
+
+    private func singleRequiredStringArgumentName(
+        for toolName: String,
+        tools: [[String: any Sendable]]?
+    ) -> String? {
+        guard let tools, let spec = functionSpec(named: toolName, in: tools),
+            let parameters = sendableObject(spec["parameters"]),
+            let properties = sendableObject(parameters["properties"])
+        else { return nil }
+
+        let required = sendableStringArray(parameters["required"])
+        let candidates = required.isEmpty ? Array(properties.keys) : required
+        let stringNames = candidates.filter { name in
+            guard let property = sendableObject(properties[name]) else { return false }
+            return normalizedTypeStrings(from: property["type"]).contains("string")
+        }
+        return stringNames.count == 1 ? stringNames[0] : nil
+    }
+
+    private func firstXMLBody(in text: String, tags: [(open: String, close: String)]) -> String? {
+        for tag in tags {
+            let open = "<\(tag.open)>"
+            let close = "</\(tag.close)>"
+            guard let openRange = text.range(of: open),
+                let closeRange = text.range(of: close, range: openRange.upperBound ..< text.endIndex)
+            else { continue }
+            return String(text[openRange.upperBound ..< closeRange.lowerBound])
+        }
+        return nil
+    }
+
+    private func decodeJSONStringLiteralIfPresent(_ raw: String) -> String {
+        let trimmed = trimBoundaryNewlines(raw)
+        let literal = "\"\(trimmed)\""
+        guard let data = literal.data(using: .utf8),
+            let decoded = try? JSONDecoder().decode(String.self, from: data)
+        else { return raw }
+        return decoded
+    }
+
+    private func normalizedTypeStrings(from value: (any Sendable)?) -> Set<String> {
+        if let type = value as? String {
+            return [type.lowercased()]
+        }
+        if let types = value as? [String] {
+            return Set(types.map { $0.lowercased() })
+        }
+        if let types = value as? [any Sendable] {
+            return Set(types.compactMap { ($0 as? String)?.lowercased() })
+        }
+        return []
     }
 
     private func inlineSchemaValidationFailure(

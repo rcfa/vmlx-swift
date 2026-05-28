@@ -46,6 +46,13 @@ struct Zaya1VLRegistrationTests {
                 atPath: dir.appendingPathComponent("preprocessor_config.json").path)
     }
 
+    static var hasJANGTQ4TokenizerBundle: Bool {
+        let dir = URL(fileURLWithPath: bundlePath("ZAYA1-VL-8B-JANGTQ4"))
+        return FileManager.default.fileExists(atPath: dir.appendingPathComponent("tokenizer.json").path)
+            && FileManager.default.fileExists(
+                atPath: dir.appendingPathComponent("preprocessor_config.json").path)
+    }
+
     struct VisionPadTokenizer: MLXLMCommon.Tokenizer {
         var forcedImageCount: Int? = nil
         var bosToken: String? = nil
@@ -368,6 +375,25 @@ struct Zaya1VLRegistrationTests {
         }
     }
 
+    @Test("ZAYA1-VL processor drops stale history images when template emits no image placeholder")
+    func processorDropsStaleHistoryImagesWhenTemplateHasNoImagePlaceholder() async throws {
+        try await MLXMetalTestLock.withLock {
+            let config = try JSONDecoder.json5().decode(
+                Qwen25VLProcessorConfiguration.self,
+                from: Self.processorConfigurationData())
+            let processor = Zaya1VLProcessor(
+                config, tokenizer: VisionPadTokenizer(forcedImageCount: 0))
+
+            let input = try await processor.prepare(input: UserInput(
+                prompt: "The rendered follow-up template has no image placeholder.",
+                images: [.ciImage(Self.solidImage(width: 56, height: 56, color: .red))],
+                additionalContext: ["enable_thinking": false]))
+
+            #expect(input.image == nil)
+            #expect(input.cacheScopeSalt == "reasoning=off")
+        }
+    }
+
     @Test("Real ZAYA1-VL tokenizer renders image placeholders from sidecar template",
           .enabled(if: hasJANGTQ2TokenizerBundle))
     func realTokenizerRendersImagePlaceholderFromSidecarTemplate() async throws {
@@ -386,6 +412,68 @@ struct Zaya1VLRegistrationTests {
         #expect(decoded.contains("<|vision_start|>"), "decoded prompt: \(decoded)")
         #expect(decoded.contains("<image>") || tokens.contains(262_147),
             "decoded prompt: \(decoded)")
+    }
+
+    @Test("Real ZAYA1-VL tokenizer renders text-only tool schemas from shimmed template",
+          .enabled(if: hasJANGTQ4TokenizerBundle))
+    func realTokenizerRendersTextOnlyToolSchemaFromShimmedTemplate() async throws {
+        let dir = URL(fileURLWithPath: Self.bundlePath("ZAYA1-VL-8B-JANGTQ4"))
+        let tokenizerDir = JangLoader.resolveTokenizerClassSubstitution(
+            for: JangLoader.resolveChatTemplateSidecarSubstitution(
+                for: JangLoader.resolveTokenizerDirectory(for: dir)))
+        let tokenizer = try await #huggingFaceTokenizerLoader().load(from: tokenizerDir)
+        let messages: [[String: any Sendable]] = [
+            [
+                "role": "user",
+                "content": "Count the lines in exactly this text: alpha\nbeta\ngamma",
+            ],
+        ]
+        let tools: [[String: any Sendable]] = [
+            [
+                "type": "function",
+                "function": [
+                    "name": "line_count",
+                    "description": "Count newline-delimited lines.",
+                    "parameters": [
+                        "type": "object",
+                        "properties": [
+                            "text": [
+                                "type": "string",
+                                "description": "Text whose lines should be counted.",
+                            ] as [String: any Sendable],
+                        ] as [String: any Sendable],
+                        "required": ["text"],
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable],
+            ] as [String: any Sendable],
+        ]
+        let tokens = try tokenizer.applyChatTemplate(
+            messages: messages,
+            tools: tools,
+            additionalContext: [
+                "enable_thinking": false,
+                "tool_choice": "required",
+                "tool_choice_name": "line_count",
+            ])
+        let decoded = tokenizer.decode(tokenIds: tokens, skipSpecialTokens: false)
+
+        #expect(decoded.contains("# Tools"), "decoded prompt: \(decoded)")
+        #expect(decoded.contains("<name>line_count</name>"), "decoded prompt: \(decoded)")
+        #expect(decoded.contains("<name>text</name>"), "decoded prompt: \(decoded)")
+        #expect(decoded.contains("<required>[\"text\"]</required>"), "decoded prompt: \(decoded)")
+        #expect(decoded.contains("<zyphra_tool_call>"), "decoded prompt: \(decoded)")
+        #expect(decoded.contains("Use the `line_count` function."), "decoded prompt: \(decoded)")
+        #expect(decoded.contains("Required parameters for `line_count`: text."),
+            "decoded prompt: \(decoded)")
+        #expect(decoded.contains("<function=line_count>"), "decoded prompt: \(decoded)")
+        #expect(decoded.contains("<parameter=text>\nalpha\nbeta\ngamma\n</parameter>"),
+            "decoded prompt: \(decoded)")
+        #expect(decoded.contains("Required call shape for the current request"),
+            "decoded prompt: \(decoded)")
+        #expect(!decoded.contains("ACTUAL_ARGUMENT_VALUE"), "decoded prompt: \(decoded)")
+        #expect(!decoded.contains("PARAMETER_NAME"), "decoded prompt: \(decoded)")
+        #expect(!decoded.contains("VALUE_FOR_text"), "decoded prompt: \(decoded)")
+        #expect(!decoded.contains("VALUE_FOR_*"), "decoded prompt: \(decoded)")
     }
 
     @Test("Real ZAYA1-VL processor expands sidecar-rendered image placeholders",

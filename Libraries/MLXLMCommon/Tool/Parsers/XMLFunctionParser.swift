@@ -7,10 +7,19 @@ import Foundation
 public struct XMLFunctionParser: ToolCallParser, Sendable {
     public let startTag: String?
     public let endTag: String?
+    public let decodesHTMLLineBreaks: Bool
+    public let unwrapJSONQuotedStringParameters: Bool
 
-    public init(startTag: String, endTag: String) {
+    public init(
+        startTag: String,
+        endTag: String,
+        decodesHTMLLineBreaks: Bool = false,
+        unwrapJSONQuotedStringParameters: Bool = false
+    ) {
         self.startTag = startTag
         self.endTag = endTag
+        self.decodesHTMLLineBreaks = decodesHTMLLineBreaks
+        self.unwrapJSONQuotedStringParameters = unwrapJSONQuotedStringParameters
     }
 
     public func parse(content: String, tools: [[String: any Sendable]]?) -> ToolCall? {
@@ -22,14 +31,47 @@ public struct XMLFunctionParser: ToolCallParser, Sendable {
 
         let funcContent = String(content[funcMatch])
 
-        // Extract function name (everything between <function= and first >)
-        guard let nameStart = funcContent.range(of: "<function="),
-            let nameEnd = funcContent.range(
-                of: ">", range: nameStart.upperBound ..< funcContent.endIndex)
-        else { return nil }
+        // Extract function name. Most models emit `<function=name>`, but
+        // live Zyphra/Gemma-family rows can put the nested parameter tag on
+        // the next line before closing the function opener:
+        //
+        //   <function=line_count
+        //   <parameter=text
+        //   >...
+        //
+        // Treat that as the same XML-function transport instead of leaking a
+        // protocol block as visible assistant text.
+        guard let nameStart = funcContent.range(of: "<function=") else {
+            return nil
+        }
 
-        let funcName = String(funcContent[nameStart.upperBound ..< nameEnd.lowerBound])
-        let paramSection = String(funcContent[nameEnd.upperBound...])
+        let firstParameter = funcContent.range(
+            of: "<parameter=", range: nameStart.upperBound ..< funcContent.endIndex)
+        let firstHeaderEnd = funcContent.range(
+            of: ">", range: nameStart.upperBound ..< funcContent.endIndex)
+
+        let nameEnd: String.Index
+        let paramSectionStart: String.Index
+        if let firstParameter,
+            let firstHeaderEnd,
+            firstParameter.lowerBound < firstHeaderEnd.lowerBound
+        {
+            nameEnd = firstParameter.lowerBound
+            paramSectionStart = firstParameter.lowerBound
+        } else if let firstHeaderEnd {
+            nameEnd = firstHeaderEnd.lowerBound
+            paramSectionStart = firstHeaderEnd.upperBound
+        } else if let firstParameter {
+            nameEnd = firstParameter.lowerBound
+            paramSectionStart = firstParameter.lowerBound
+        } else {
+            return nil
+        }
+
+        let funcName = String(funcContent[nameStart.upperBound ..< nameEnd])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !funcName.isEmpty else { return nil }
+        let paramSection = String(funcContent[paramSectionStart...])
 
         var arguments: [String: any Sendable] = [:]
 
@@ -43,6 +85,11 @@ public struct XMLFunctionParser: ToolCallParser, Sendable {
             else { break }
 
             let paramName = String(paramSection[paramStart.upperBound ..< nameEnd.lowerBound])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !paramName.isEmpty else {
+                searchRange = nameEnd.upperBound ..< paramSection.endIndex
+                continue
+            }
 
             // Find the closing </parameter> tag
             guard
@@ -53,11 +100,16 @@ public struct XMLFunctionParser: ToolCallParser, Sendable {
             var paramValue = String(paramSection[nameEnd.upperBound ..< paramEnd.lowerBound])
 
             // Trim leading/trailing newlines (matching Python behavior)
-            if paramValue.hasPrefix("\n") {
-                paramValue = String(paramValue.dropFirst())
+            paramValue = trimBoundaryNewlines(paramValue)
+
+            if decodesHTMLLineBreaks,
+               isStringType(funcName: funcName, argName: paramName, tools: tools) {
+                paramValue = decodeHTMLLineBreaks(paramValue)
             }
-            if paramValue.hasSuffix("\n") {
-                paramValue = String(paramValue.dropLast())
+            if unwrapJSONQuotedStringParameters,
+               isStringType(funcName: funcName, argName: paramName, tools: tools),
+               let unwrapped = decodeQuotedStringParameter(paramValue) {
+                paramValue = trimBoundaryNewlines(unwrapped)
             }
 
             // Convert value based on schema type
@@ -67,6 +119,164 @@ public struct XMLFunctionParser: ToolCallParser, Sendable {
             searchRange = paramEnd.upperBound ..< paramSection.endIndex
         }
 
+        if let invalidArguments = schemaValidationFailure(
+            toolName: funcName,
+            arguments: arguments,
+            tools: tools)
+        {
+            return ToolCall(function: .init(name: funcName, arguments: invalidArguments))
+        }
+
         return ToolCall(function: .init(name: funcName, arguments: arguments))
     }
+
+    private func schemaValidationFailure(
+        toolName: String,
+        arguments: [String: any Sendable],
+        tools: [[String: any Sendable]]?
+    ) -> [String: any Sendable]? {
+        guard let tools,
+            let functionSpec = functionSpec(named: toolName, in: tools),
+            let parameters = sendableObject(functionSpec["parameters"])
+        else { return nil }
+
+        for required in sendableStringArray(parameters["required"]) {
+            if arguments[required] == nil {
+                return invalidToolArguments(
+                    toolName: toolName,
+                    message: "missing required argument: \(required)",
+                    field: required,
+                    expected: "required parameter")
+            }
+        }
+
+        return nil
+    }
+
+    private func functionSpec(
+        named name: String,
+        in tools: [[String: any Sendable]]
+    ) -> [String: any Sendable]? {
+        for tool in tools {
+            let function = sendableObject(tool["function"]) ?? tool
+            if function["name"] as? String == name {
+                return function
+            }
+        }
+        return nil
+    }
+
+    private func invalidToolArguments(
+        toolName: String,
+        message: String,
+        field: String,
+        expected: String
+    ) -> [String: any Sendable] {
+        [
+            "_error": "invalid_tool_arguments",
+            "_tool": toolName,
+            "_message": message,
+            "_field": field,
+            "_expected": expected,
+        ]
+    }
+
+    private func trimBoundaryNewlines(_ value: String) -> String {
+        var result = value
+        while result.hasPrefix("\n") || result.hasPrefix("\r") {
+            result = String(result.dropFirst())
+        }
+        while result.hasSuffix("\n") || result.hasSuffix("\r") {
+            result = String(result.dropLast())
+        }
+        return result
+    }
+
+    private func sendableObject(_ value: (any Sendable)?) -> [String: any Sendable]? {
+        if let object = value as? [String: any Sendable] {
+            return object
+        }
+        if let object = value as? NSDictionary {
+            return sendableNSDictionary(object)
+        }
+        if case .object(let object)? = value as? JSONValue {
+            return object.mapValues { $0.sendableValue }
+        }
+        return nil
+    }
+
+    private func sendableFoundationJSONValue(_ value: Any) -> (any Sendable)? {
+        if let string = value as? String {
+            return string
+        }
+        if let number = value as? NSNumber {
+            return number
+        }
+        if let object = value as? NSDictionary {
+            return sendableNSDictionary(object)
+        }
+        if let array = value as? NSArray {
+            return array.compactMap { sendableFoundationJSONValue($0) } as [any Sendable]
+        }
+        if value is NSNull {
+            return nil
+        }
+        return nil
+    }
+
+    private func sendableNSDictionary(_ object: NSDictionary) -> [String: any Sendable] {
+        var out: [String: any Sendable] = [:]
+        for (key, child) in object {
+            guard let key = key as? String else { continue }
+            if let sendable = sendableFoundationJSONValue(child) {
+                out[key] = sendable
+            }
+        }
+        return out
+    }
+
+    private func sendableStringArray(_ value: (any Sendable)?) -> [String] {
+        if let strings = value as? [String] {
+            return strings
+        }
+        if let values = value as? [any Sendable] {
+            return values.compactMap { $0 as? String }
+        }
+        if let values = value as? NSArray {
+            return values.compactMap { $0 as? String }
+        }
+        if case .array(let values)? = value as? JSONValue {
+            return values.compactMap {
+                if case .string(let value) = $0 { return value }
+                return nil
+            }
+        }
+        return []
+    }
+
+    private func decodeHTMLLineBreaks(_ value: String) -> String {
+        value.replacingOccurrences(
+            of: #"<br\s*/?>"#,
+            with: "\n",
+            options: [.regularExpression, .caseInsensitive])
+    }
+}
+
+private func decodeQuotedStringParameter(_ value: String) -> String? {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.hasPrefix("\""), trimmed.hasSuffix("\"") else {
+        return nil
+    }
+    if let data = trimmed.data(using: .utf8),
+       let decoded = try? JSONDecoder().decode(String.self, from: data) {
+        return decoded
+    }
+    let innerStart = trimmed.index(after: trimmed.startIndex)
+    let innerEnd = trimmed.index(before: trimmed.endIndex)
+    guard innerStart <= innerEnd else { return "" }
+    let inner = String(trimmed[innerStart..<innerEnd])
+    if inner.contains("\n") || inner.contains("\r") {
+        return inner
+    }
+    return nil
 }

@@ -241,12 +241,11 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
                     if cacheLookupUsesPostPrepareAlias {
                         self.promptTokenIds = cacheLookupTokenIds
                     }
-                    let hasPathDependentLayer = self.cache.contains { layer in
-                        layer is MambaCache || layer is ArraysCache || layer is ZayaCCACache
-                    }
+                    let requiresDiskBackedRestore =
+                        cacheRequiresDiskBackedCoordinatorRestore(self.cache)
                     let unsafePartial =
                         input.cacheHitSuffixContainsMediaPlaceholder(remainingTokens)
-                    let unsafeFullHit = remainingTokens.isEmpty && hasPathDependentLayer
+                    let unsafeFullHit = remainingTokens.isEmpty && requiresDiskBackedRestore
                     if unsafePartial || unsafeFullHit {
                         self.cache = model.newCache(parameters: effectiveParameters)
                         inputForPrepare = input
@@ -592,6 +591,15 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
         {
             MLX.eval(trimmed)
             return trimmed
+        }
+
+        if shouldSkipHistoryBoundaryRederiveAfterTrimMiss(promptSnapshot) {
+            if Self.traceEnabled {
+                let line =
+                    "[NativeMTPTrace] skipped history-boundary cache rederive after trim miss for disk-backed cache topology\n"
+                FileHandle.standardError.write(Data(line.utf8))
+            }
+            return nil
         }
 
         if String(describing: Swift.type(of: model)).contains("Gemma3n") {

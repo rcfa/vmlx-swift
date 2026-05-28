@@ -104,11 +104,16 @@ public struct DeepseekV4ChatEncoder: Sendable {
         reasoningEffort: DeepseekV4ReasoningEffort? = nil,
         dropEarlierReasoning: Bool = true,
         context: [Message] = [],
-        addBOS: Bool = true
+        addBOS: Bool = true,
+        toolChoiceRequired: Bool = false,
+        toolChoiceName: String? = nil
     ) -> String {
         // Preprocess: merge tool messages into user, sort tool_result
         // blocks by the order they were called in the prior assistant.
-        var processedMessages = Self.mergeToolMessages(messages)
+        let compactedMessages = toolChoiceRequired
+            ? Self.compactRequiredToolChoiceHistory(messages)
+            : messages
+        var processedMessages = Self.mergeToolMessages(compactedMessages)
         var processedContext = Self.mergeToolMessages(context)
         let merged = Self.sortToolResultsByCallOrder(processedContext + processedMessages)
         processedMessages = Array(merged[processedContext.count...])
@@ -135,13 +140,36 @@ public struct DeepseekV4ChatEncoder: Sendable {
             contextLen = processedContext.count
         }
 
-        for i in 0..<(rendered.count - contextLen) {
+        var finalRendered = rendered
+        if toolChoiceRequired,
+            finalRendered.contains(where: { !($0.tools?.isEmpty ?? true) }),
+            finalRendered.last?.role != .latestReminder
+        {
+            let requiredToolName =
+                Self.normalizedToolChoiceName(toolChoiceName)
+                ?? Self.singleAvailableToolName(in: finalRendered)
+            let reminder = Self.requiredToolChoiceReminder(toolName: requiredToolName)
+            if let tailIndex = finalRendered.lastIndex(where: {
+                $0.role == .user || $0.role == .developer
+            }), tailIndex >= contextLen {
+                let insertionIndex = finalRendered[tailIndex].task == nil
+                    ? finalRendered.index(after: tailIndex)
+                    : tailIndex
+                finalRendered.insert(reminder, at: insertionIndex)
+            } else {
+                finalRendered.append(reminder)
+            }
+        }
+
+        for i in 0..<(finalRendered.count - contextLen) {
             prompt += renderMessage(
                 at: i + contextLen,
-                in: rendered,
+                in: finalRendered,
                 thinkingMode: thinkingMode,
                 dropThinking: effectiveDrop,
-                reasoningEffort: reasoningEffort
+                reasoningEffort: reasoningEffort,
+                toolChoiceRequired: toolChoiceRequired,
+                toolChoiceName: toolChoiceName
             )
         }
 
@@ -155,7 +183,9 @@ public struct DeepseekV4ChatEncoder: Sendable {
         in messages: [Message],
         thinkingMode: DeepseekV4ThinkingMode,
         dropThinking: Bool,
-        reasoningEffort: DeepseekV4ReasoningEffort?
+        reasoningEffort: DeepseekV4ReasoningEffort?,
+        toolChoiceRequired: Bool,
+        toolChoiceName: String?
     ) -> String {
         let msg = messages[index]
         let lastUserIdx = Self.findLastUserIndex(messages)
@@ -170,7 +200,11 @@ public struct DeepseekV4ChatEncoder: Sendable {
         case .system:
             out += msg.content ?? ""
             if let tools = msg.tools, !tools.isEmpty {
-                out += "\n\n" + Self.renderTools(tools)
+                out += "\n\n" + Self.renderTools(
+                    tools,
+                    toolChoiceRequired: toolChoiceRequired,
+                    toolChoiceName: toolChoiceName
+                )
             }
             if let rf = msg.responseFormat {
                 out += "\n\n" + Self.renderResponseFormat(rf)
@@ -183,7 +217,11 @@ public struct DeepseekV4ChatEncoder: Sendable {
             var s = DeepseekV4Tokens.user
             s += msg.content ?? ""
             if let tools = msg.tools, !tools.isEmpty {
-                s += "\n\n" + Self.renderTools(tools)
+                s += "\n\n" + Self.renderTools(
+                    tools,
+                    toolChoiceRequired: toolChoiceRequired,
+                    toolChoiceName: toolChoiceName
+                )
             }
             if let rf = msg.responseFormat {
                 s += "\n\n" + Self.renderResponseFormat(rf)
@@ -254,7 +292,7 @@ public struct DeepseekV4ChatEncoder: Sendable {
         // of a user/developer turn OR there's a following assistant.
         let nextRole: MessageRole? =
             (index + 1 < messages.count) ? messages[index + 1].role : nil
-        if nextRole != nil && nextRole != .assistant && nextRole != .latestReminder {
+        if nextRole != nil && nextRole != .assistant {
             return out
         }
 
@@ -269,7 +307,7 @@ public struct DeepseekV4ChatEncoder: Sendable {
                     : DeepseekV4Tokens.thinkEnd
                 out += taskSP
             }
-        } else if msg.role == .user || msg.role == .developer {
+        } else if msg.role == .user || msg.role == .developer || msg.role == .latestReminder {
             out += DeepseekV4Tokens.assistant
             // Decision tree for the final tail tag:
             //   dropThinking=false + thinking → `<think>` (open)
@@ -313,7 +351,7 @@ public struct DeepseekV4ChatEncoder: Sendable {
 
         Do not emit JSON objects for tool calls; tool calls must use DSML invoke blocks.
 
-        String parameters should be specified as is and set `string="true"`. For all other types (numbers, booleans, arrays, objects), pass the value in JSON format and set `string="false"`.
+        String parameters should be specified as is and set `string="true"`. For multiline strings, put real newline characters inside the parameter body; do not write backslash-n escape sequences. For all other types (numbers, booleans, arrays, objects), pass the value in JSON format and set `string="false"`.
 
         If thinking_mode is enabled (triggered by \(DeepseekV4Tokens.thinkStart)), you MUST output your complete reasoning inside \(DeepseekV4Tokens.thinkStart)...\(DeepseekV4Tokens.thinkEnd) BEFORE any tool calls or final response.
 
@@ -326,11 +364,76 @@ public struct DeepseekV4ChatEncoder: Sendable {
         You MUST strictly follow the above defined tool name and parameter schemas to invoke tool calls.
         """
 
-    static func renderTools(_ tools: [[String: any Sendable]]) -> String {
+    static func renderTools(
+        _ tools: [[String: any Sendable]],
+        toolChoiceRequired: Bool = false,
+        toolChoiceName: String? = nil
+    ) -> String {
         let schemas = tools.map { Self.functionSpec(from: $0) }
         let schemaJson = schemas.map { $0.jsonSerialized() }
         let schemasBlock = schemaJson.joined(separator: "\n")
-        return toolsTemplate.replacingOccurrences(of: "%@", with: schemasBlock)
+        var rendered = toolsTemplate.replacingOccurrences(of: "%@", with: schemasBlock)
+        if toolChoiceRequired {
+            let requiredToolName =
+                Self.normalizedToolChoiceName(toolChoiceName)
+                ?? Self.singleAvailableToolName(in: tools)
+            let namedInstruction = requiredToolName.map {
+                " Use the `\($0)` function."
+            } ?? ""
+            rendered +=
+                "\n\nThe current assistant response MUST be a tool call. "
+                + "Start with a \"<\(DeepseekV4Tokens.dsml)tool_calls>\" block "
+                + "and do not answer in prose before the tool result."
+                + namedInstruction
+        }
+        return rendered
+    }
+
+    static func requiredToolChoiceReminder(toolName: String? = nil) -> Message {
+        let namedInstruction = toolName.map {
+            " Use the `\($0)` function."
+        } ?? ""
+        return Message(
+            role: .latestReminder,
+            content:
+                "The active API tool_choice is required for this assistant turn. "
+                + "Call exactly one available tool now using a <\(DeepseekV4Tokens.dsml)tool_calls> block. "
+                + "Do not answer in prose before the tool result."
+                + namedInstruction
+        )
+    }
+
+    static func normalizedToolChoiceName(_ name: String?) -> String? {
+        guard let name else { return nil }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func singleAvailableToolName(in messages: [Message]) -> String? {
+        var names: Set<String> = []
+        for message in messages {
+            guard let tools = message.tools else { continue }
+            for tool in tools {
+                if let name = Self.functionSpec(from: tool)["name"] as? String,
+                    let normalized = Self.normalizedToolChoiceName(name)
+                {
+                    names.insert(normalized)
+                }
+            }
+        }
+        return names.count == 1 ? names.first : nil
+    }
+
+    static func singleAvailableToolName(in tools: [[String: any Sendable]]) -> String? {
+        var names: Set<String> = []
+        for tool in tools {
+            if let name = Self.functionSpec(from: tool)["name"] as? String,
+                let normalized = Self.normalizedToolChoiceName(name)
+            {
+                names.insert(normalized)
+            }
+        }
+        return names.count == 1 ? names.first : nil
     }
 
     static func renderResponseFormat(_ rf: [String: any Sendable]) -> String {
@@ -450,6 +553,10 @@ public struct DeepseekV4ChatEncoder: Sendable {
                 {
                     blocks.append(textBlock)
                     last.contentBlocks = blocks
+                    last.task = m.task
+                    last.tools = m.tools ?? last.tools
+                    last.responseFormat = m.responseFormat ?? last.responseFormat
+                    last.woEOS = m.woEOS
                     merged[merged.count - 1] = last
                 } else {
                     m.contentBlocks = [textBlock]
@@ -504,6 +611,36 @@ public struct DeepseekV4ChatEncoder: Sendable {
             out.append(msg)
         }
         return out
+    }
+
+    /// DSV4's required-tool template is sensitive to an ordinary prose
+    /// assistant answer sitting between a previous tool result and the next
+    /// required tool turn: live rows showed it can terminate with a blank
+    /// assistant response instead of entering DSML. For required tool-choice
+    /// turns, collapse that completed prose exchange so the prior tool result
+    /// merges directly with the latest user request. This preserves the
+    /// actual tool result and latest user instruction; it does not synthesize
+    /// a tool call or alter sampler behavior.
+    static func compactRequiredToolChoiceHistory(_ messages: [Message]) -> [Message] {
+        guard
+            let finalUserIndex = messages.indices.last(where: {
+                messages[$0].role == .user || messages[$0].role == .developer
+            }),
+            finalUserIndex == messages.indices.last,
+            let lastToolIndex = messages[..<finalUserIndex].indices.last(where: {
+                messages[$0].role == .tool
+            }),
+            finalUserIndex > lastToolIndex + 1,
+            messages[(lastToolIndex + 1)..<finalUserIndex].contains(where: {
+                $0.role == .assistant && ($0.toolCalls?.isEmpty ?? true)
+            })
+        else {
+            return messages
+        }
+
+        var compacted = Array(messages[...lastToolIndex])
+        compacted.append(messages[finalUserIndex])
+        return compacted
     }
 
     static func findLastUserIndex(_ messages: [Message]) -> Int {

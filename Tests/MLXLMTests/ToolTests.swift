@@ -369,6 +369,41 @@ struct ToolTests {
         #expect(toolCall.function.arguments.isEmpty)
     }
 
+    @Test("XML Function Parser marks missing required arguments invalid")
+    func testXMLFunctionParserMissingRequiredArgument() throws {
+        let parser = XMLFunctionParser(startTag: "<tool_call>", endTag: "</tool_call>")
+        let swiftTools: [[String: any Sendable]] = [
+            [
+                "function": [
+                    "name": "line_count",
+                    "parameters": [
+                        "properties": [
+                            "text": ["type": "string"] as [String: any Sendable]
+                        ] as [String: any Sendable],
+                        "required": ["text"],
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable]
+            ]
+        ]
+        let content = "<tool_call>\n<function=line_count>\n</function>\n</tool_call>"
+
+        let toolCall = try #require(parser.parse(content: content, tools: swiftTools))
+
+        #expect(toolCall.function.name == "line_count")
+        #expect(toolCall.function.arguments["text"] == nil)
+        #expect(toolCall.function.arguments["_error"] == .string("invalid_tool_arguments"))
+        #expect(toolCall.function.arguments["_field"] == .string("text"))
+
+        let bridgedTools = try #require(
+            JSONSerialization.jsonObject(
+                with: JSONSerialization.data(withJSONObject: swiftTools),
+                options: []) as? [[String: any Sendable]]
+        )
+        let bridgedToolCall = try #require(parser.parse(content: content, tools: bridgedTools))
+        #expect(bridgedToolCall.function.arguments["_error"] == .string("invalid_tool_arguments"))
+        #expect(bridgedToolCall.function.arguments["_field"] == .string("text"))
+    }
+
     // MARK: - GLM4 Format Tests
 
     @Test("Test GLM4 Tool Call Parser")
@@ -576,6 +611,45 @@ struct ToolTests {
         #expect(toolCall.function.arguments["query"] == .string("ZAYA CCA cache"))
     }
 
+    @Test("ZAYA XML parser trims protocol-edge newlines from string parameters")
+    func testZayaXMLParserTrimsProtocolEdgeNewlines() throws {
+        let parameters: [String: any Sendable] = [
+            "type": "object",
+            "properties": [
+                "text": ["type": "string"] as [String: any Sendable],
+            ] as [String: any Sendable],
+            "required": ["text"],
+        ]
+        let function: [String: any Sendable] = [
+            "name": "line_count",
+            "parameters": parameters,
+        ]
+        let processor = ToolCallProcessor(format: .zayaXml, tools: [
+            [
+                "type": "function",
+                "function": function,
+            ] as [String: any Sendable]
+        ])
+        let content = """
+            <zyphra_tool_call>
+            <function=line_count>
+            <parameter=text>
+            one
+            two
+
+            </parameter>
+            </function>
+            </zyphra_tool_call>
+            """
+
+        _ = processor.processChunk(content)
+
+        #expect(processor.toolCalls.count == 1)
+        let toolCall = try #require(processor.toolCalls.first)
+        #expect(toolCall.function.name == "line_count")
+        #expect(toolCall.function.arguments["text"] == .string("one\ntwo"))
+    }
+
     // MARK: - ToolCallFormat Serialization Tests
 
     @Test("Test ToolCallFormat Raw Values for Serialization")
@@ -621,8 +695,8 @@ struct ToolTests {
         #expect(ToolCallFormat.infer(from: "GEMMA") == .gemma)
 
         // Nemotron models (prefix matching)
-        #expect(ToolCallFormat.infer(from: "nemotron_h") == .xmlFunction)
-        #expect(ToolCallFormat.infer(from: "NEMOTRON_H") == .xmlFunction)
+        #expect(ToolCallFormat.infer(from: "nemotron_h") == .nemotron)
+        #expect(ToolCallFormat.infer(from: "NEMOTRON_H") == .nemotron)
 
         // Qwen3.5 models (prefix matching)
         #expect(ToolCallFormat.infer(from: "qwen3_5") == .xmlFunction)

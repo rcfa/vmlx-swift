@@ -80,20 +80,7 @@ private func debugDumpReasoningPrompt(
           !dir.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     else { return }
 
-    let promptTokens = input.text.tokens
-    guard promptTokens.ndim >= 1 else { return }
-    let total = promptTokens.ndim == 1
-        ? promptTokens.dim(0)
-        : promptTokens.dim(promptTokens.ndim - 1)
-    guard total > 0 else { return }
-
-    let tokenArray: MLXArray
-    if promptTokens.ndim == 1 {
-        tokenArray = promptTokens[0 ..< total]
-    } else {
-        tokenArray = promptTokens[.ellipsis, 0 ..< total]
-    }
-    let tokenIds = tokenArray.asArray(Int32.self).map { Int($0) }
+    guard let tokenIds = input.text.tokenIds, !tokenIds.isEmpty else { return }
     let rendered = tokenizer.decode(tokenIds: tokenIds, skipSpecialTokens: false)
 
     let safeModel = modelName
@@ -604,7 +591,10 @@ public actor BatchEngine {
 
         Task {
             var detokenizer = NaiveStreamingDetokenizer(tokenizer: tokenizer)
-            let toolCallProcessor = ToolCallProcessor(format: toolCallFormat, tools: toolSchemas)
+            let activeToolSchemas = toolSchemas?.isEmpty == false ? toolSchemas : nil
+            let toolCallProcessor = activeToolSchemas.map {
+                ToolCallProcessor(format: toolCallFormat, tools: $0)
+            }
             var reasoningParser = ReasoningParser.forPrompt(
                 stampName: reasoningParserName,
                 promptTail: promptTail)
@@ -1297,6 +1287,17 @@ public actor BatchEngine {
                 activeSlots[slotIndex] = slot
                 return stepPrefillAfterCacheLookup(slotIndex: slotIndex, inputForPrepare: inputForPrepare)
             }
+            if slot.originalInput.toolSchemas?.isEmpty == false,
+               cacheHasStandaloneRotatingWindowState(slot.cache)
+            {
+                Self.logger.info(
+                    "Slot \(slot.id.description, privacy: .public): skipped disk-backed rotating cache fetch for active tool schema"
+                )
+                activeSlots[slotIndex] = slot
+                return stepPrefillAfterCacheLookup(
+                    slotIndex: slotIndex,
+                    inputForPrepare: inputForPrepare)
+            }
             let result = coordinator.fetch(tokens: tokenIds, mediaSalt: slot.mediaSalt)
             if case .hit(_, let remaining, let detail, let blocks, let ssmStates, let diskArrays) = result {
                 var restored = false
@@ -1373,9 +1374,6 @@ public actor BatchEngine {
                     //    different: a complete state at boundary N plus
                     //    prefill over [N...M] is the intended Markov resume
                     //    path for MambaCache, ArraysCache, and ZayaCCACache.
-                    let hasPathDependentLayer = slot.cache.contains { layer in
-                        layer is MambaCache || layer is ArraysCache || layer is ZayaCCACache
-                    }
                     // Full disk hit on hybrid-SSM is ALSO unsafe: the
                     // restored SSM state already includes the last
                     // token's recurrence contribution, so the
@@ -1388,11 +1386,13 @@ public actor BatchEngine {
                     // remaining.nonEmpty case below.
                     let unsafePartial =
                         slot.originalInput.cacheHitSuffixContainsMediaPlaceholder(remaining)
-                    let unsafeFullHit = remaining.isEmpty && hasPathDependentLayer
+                    let requiresDiskBackedRestore =
+                        cacheRequiresDiskBackedCoordinatorRestore(slot.cache)
+                    let unsafeFullHit = remaining.isEmpty && requiresDiskBackedRestore
                     if unsafePartial || unsafeFullHit {
                         let why: String
                         if unsafePartial { why = "media placeholder tokens remain in cache-hit suffix" }
-                        else if unsafeFullHit { why = "path-dependent full disk hit: re-feeding last token would double-count recurrent state" }
+                        else if unsafeFullHit { why = "disk-backed full cache hit: re-feeding last token can corrupt path-dependent or rotating state" }
                         else                { why = "path-dependent cache hit can't be extended safely" }
                         let slotIDStr = slot.id.description
                         Self.logger.info(
@@ -2236,6 +2236,13 @@ public actor BatchEngine {
                     return trimmed
                 }
 
+                if shouldSkipHistoryBoundaryRederiveAfterTrimMiss(promptCacheSnapshot) {
+                    Self.logger.debug(
+                        "Skipped history-boundary cache rederive after trim miss for slot \(slot.id.description, privacy: .public): disk-backed cache topology"
+                    )
+                    return nil
+                }
+
                 if String(describing: Swift.type(of: context.model)).contains("Gemma3n") {
                     Self.logger.debug(
                         "Skipped Gemma3n history-boundary cache rederive for slot \(slot.id.description, privacy: .public) after trim miss"
@@ -2315,6 +2322,7 @@ public actor BatchEngine {
             // it covers prompt + generated tokens exactly enough to resume.
             let generatedBoundaryTokens = promptTokens + slot.generatedTokenIds
             if reason == .stop,
+               !slot.disablesGeneratedCacheBoundary,
                !slot.generatedTokenIds.isEmpty,
                cacheCovers(generatedBoundaryTokens.count, cache: slot.cache)
             {

@@ -120,11 +120,46 @@ public enum ChatTemplateFallbacks {
     {%- endif -%}
     {%- if tools -%}
         {%- for tool in tools -%}
-            {{- '<|tool>declaration:' + tool['function']['name'] -}}
-            {%- if tool['function']['description'] -%}
-                {{- '{description:<|"|>' + tool['function']['description'] + '<|"|>}' -}}
+            {%- set fn = tool['function'] if tool['function'] is defined else tool -%}
+            {{- '<|tool>declaration:' + fn['name'] + '{' -}}
+            {%- if fn['description'] is defined and fn['description'] -%}
+                {{- 'description:<|"|>' + (fn['description'] | trim) + '<|"|>' -}}
             {%- endif -%}
-            {{- '<tool|>' -}}
+            {%- if fn['parameters'] is defined and fn['parameters']['properties'] is defined -%}
+                {%- if fn['description'] is defined and fn['description'] -%}
+                    {{- ',' -}}
+                {%- endif -%}
+                {{- 'parameters:{' -}}
+                {%- set first_param = true -%}
+                {%- for param_name, param in fn['parameters']['properties'] | dictsort -%}
+                    {%- if not first_param -%}
+                        {{- ',' -}}
+                    {%- endif -%}
+                    {%- set first_param = false -%}
+                    {{- param_name + ':{' -}}
+                    {%- if param['type'] is defined -%}
+                        {{- 'type:<|"|>' -}}
+                        {%- if param['type'] is string -%}
+                            {{- param['type'] -}}
+                        {%- else -%}
+                            {{- param['type'] | tojson -}}
+                        {%- endif -%}
+                        {{- '<|"|>' -}}
+                    {%- endif -%}
+                    {%- if param['description'] is defined -%}
+                        {%- if param['type'] is defined -%}
+                            {{- ',' -}}
+                        {%- endif -%}
+                        {{- 'description:<|"|>' + (param['description'] | trim) + '<|"|>' -}}
+                    {%- endif -%}
+                    {{- '}' -}}
+                {%- endfor -%}
+                {{- '}' -}}
+                {%- if fn['parameters']['required'] is defined -%}
+                    {{- ',required:' + (fn['parameters']['required'] | tojson) -}}
+                {%- endif -%}
+            {%- endif -%}
+            {{- '}<tool|>' -}}
         {%- endfor -%}
     {%- endif -%}
     {{- '<turn|>\n' -}}
@@ -158,31 +193,39 @@ public enum ChatTemplateFallbacks {
 {%- endif -%}
 """#
 
-    /// Nemotron-Cascade-2 minimal. Avoids the `for k in dict if k not
-    /// in handled_keys` construct that trips swift-jinja's runtime.
-    /// Uses the ChatML-style `<|im_start|>role` / `<|im_end|>` turn
-    /// markers Nemotron was actually trained on (the first attempt
-    /// incorrectly used `<extra_id_*>`; see tokenizer special-token
-    /// inspection — `<|im_start|>` + `[AVAILABLE_TOOLS]` are the real
-    /// markers). Tool declarations use the `[AVAILABLE_TOOLS]` /
-    /// `[/AVAILABLE_TOOLS]` block and assistant tool calls use the
-    /// `<tool_call><function=name></function></tool_call>` XML form.
+    /// Nemotron-Cascade-2 minimal. Avoids the native template's
+    /// `for k in dict if k not in handled_keys` construct that trips
+    /// swift-jinja's runtime, but preserves the trained prompt contract:
+    /// ChatML turns, `# Tools`, `<tools>/<function>` declarations,
+    /// `<tool_call>` XML assistant calls, `<tool_response>` tool replies,
+    /// and the `<think></think>` generation prefix when thinking is off.
     public static let nemotronMinimal: String = #"""
 {%- set loop_messages = messages -%}
+{%- set enable_thinking = enable_thinking if enable_thinking is defined else false -%}
+{%- set required_tool_choice = false -%}
+{%- if tool_choice is defined and tool_choice == 'required' -%}
+    {%- set required_tool_choice = true -%}
+{%- elif additionalContext is defined and additionalContext['tool_choice'] == 'required' -%}
+    {%- set required_tool_choice = true -%}
+{%- endif -%}
 {%- if messages[0]['role'] == 'system' -%}
     {%- set system_message = messages[0]['content'] -%}
     {%- set loop_messages = messages[1:] -%}
 {%- else -%}
-    {%- set system_message = 'You are a helpful and harmless assistant.' -%}
+    {%- set system_message = '' -%}
 {%- endif -%}
 <|im_start|>system
 {{ system_message }}
 {%- if tools %}
 
-[AVAILABLE_TOOLS]
+# Tools
+
+You have access to the following functions:
+
+<tools>
 {%- for tool in tools %}
   {%- set fn = tool['function'] if tool['function'] is defined else tool -%}
-  <tool>
+  <function>
     <name>{{ fn['name'] }}</name>
     {%- if fn['description'] is defined %}
     <description>{{ fn['description'] | trim }}</description>
@@ -196,11 +239,30 @@ public enum ChatTemplateFallbacks {
         {%- if param['description'] is defined %}<description>{{ param['description'] | trim }}</description>{%- endif %}
       </parameter>
       {%- endfor %}
+      {%- if fn['parameters']['required'] is defined %}
+      <required>{{ fn['parameters']['required'] }}</required>
+      {%- endif %}
     </parameters>
     {%- endif %}
-  </tool>
+  </function>
 {%- endfor %}
-[/AVAILABLE_TOOLS]
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+</function>
+</tool_call>
+{%- if required_tool_choice %}
+
+<IMPORTANT>
+The current assistant response MUST be a tool call. Reply only with a `<tool_call>` block for one available tool and no prose before the tool result.
+</IMPORTANT>
+{%- endif %}
 {%- endif %}
 <|im_end|>
 {% for message in loop_messages -%}
@@ -232,14 +294,21 @@ public enum ChatTemplateFallbacks {
 {%- endif %}
 <|im_end|>
 {%- elif message['role'] == 'tool' -%}
-<|im_start|>tool
+<|im_start|>user
+<tool_response>
 {{ message['content'] }}
+</tool_response>
 <|im_end|>
 {%- endif -%}
 
 {% endfor -%}
 {%- if add_generation_prompt %}
 <|im_start|>assistant
+{%- if enable_thinking %}
+<think>
+{%- else %}
+<think></think>
+{%- endif %}
 {%- endif %}
 """#
 
@@ -284,7 +353,7 @@ public enum ChatTemplateFallbacks {
 {{- '</' + dsml + 'invoke>\n' -}}
 {{- '</' + dsml + 'tool_calls>\n\n' -}}
 {{- 'Do not emit JSON objects for tool calls; tool calls must use DSML invoke blocks.\n\n' -}}
-{{- 'String parameters should be specified as is and set `string="true"`. For all other types (numbers, booleans, arrays, objects), pass the value in JSON format and set `string="false"`.\n\n' -}}
+{{- 'String parameters should be specified as is and set `string="true"`. For multiline strings, put real newline characters inside the parameter body; do not write backslash-n escape sequences. For all other types (numbers, booleans, arrays, objects), pass the value in JSON format and set `string="false"`.\n\n' -}}
 {{- 'If thinking_mode is enabled (triggered by ' + think_open + '), you MUST output your complete reasoning inside ' + think_open + '...' + think_close + ' BEFORE any tool calls or final response.\n\n' -}}
 {{- 'Otherwise, output directly after ' + think_close + ' with tool calls or final response.\n\n' -}}
 {{- '### Available Tool Schemas\n\n' -}}
@@ -296,6 +365,9 @@ public enum ChatTemplateFallbacks {
 {%- endif -%}
 {%- endfor -%}
 {{- '\nYou MUST strictly follow the above defined tool name and parameter schemas to invoke tool calls.' -}}
+{%- if tool_choice is defined and tool_choice == 'required' -%}
+{{- '\n\nThe current assistant response MUST be a tool call. Start with a "<' + dsml + 'tool_calls>" block and do not answer in prose before the tool result.' -}}
+{%- endif -%}
 {%- endmacro -%}
 {%- macro render_dsml_invoke(tool_call) -%}
 {%- set fn = tool_call['function'] if tool_call['function'] is defined else tool_call -%}
@@ -743,6 +815,24 @@ public enum ChatTemplateFallbacks {
 {%- if tools is not defined -%}
     {%- set tools = [] -%}
 {%- endif -%}
+{%- set required_tool_choice = false -%}
+{%- set required_tool_name = '' -%}
+{%- if tool_choice is defined and tool_choice == 'required' -%}
+    {%- set required_tool_choice = true -%}
+{%- elif additionalContext is defined and additionalContext['tool_choice'] == 'required' -%}
+    {%- set required_tool_choice = true -%}
+{%- endif -%}
+{%- if tool_choice_name is defined -%}
+    {%- set required_tool_name = tool_choice_name -%}
+{%- elif additionalContext is defined and additionalContext['tool_choice_name'] is defined -%}
+    {%- set required_tool_name = additionalContext['tool_choice_name'] -%}
+{%- endif -%}
+{%- if required_tool_choice and not required_tool_name and tools is iterable and tools | length == 1 -%}
+    {%- set only_required_tool = tools[0]['function'] if tools[0]['function'] is defined else tools[0] -%}
+    {%- if only_required_tool['name'] is defined -%}
+        {%- set required_tool_name = only_required_tool['name'] -%}
+    {%- endif -%}
+{%- endif -%}
 
 {%- macro render_content(content) -%}
     {%- if content is string -%}
@@ -775,6 +865,51 @@ public enum ChatTemplateFallbacks {
     {{- '</function>\n</zyphra_tool_call>\n' -}}
 {%- endmacro -%}
 
+{%- macro render_required_tool_choice_instruction(latest_user_content='') -%}
+    {{- '<IMPORTANT>\nThe current assistant response MUST be a tool call. Reply only with a `<zyphra_tool_call>` block for one available function and no prose before the tool result. Include every required `<parameter=...>` value exactly as requested.' -}}
+    {%- if required_tool_name -%}
+        {{- '\nUse the `' ~ required_tool_name ~ '` function.' -}}
+        {%- for tool in tools -%}
+            {%- set selected_tool = tool['function'] if tool['function'] is defined else tool -%}
+            {%- if selected_tool['name'] == required_tool_name and selected_tool['parameters'] is defined and selected_tool['parameters']['required'] is defined -%}
+                {{- '\nRequired parameters for `' ~ required_tool_name ~ '`: ' ~ (selected_tool['parameters']['required'] | join(', ')) ~ '.' -}}
+                {{- '\nRequired call shape for the current request:\n<zyphra_tool_call>\n<function=' ~ required_tool_name ~ '>' -}}
+                {%- for param_name in selected_tool['parameters']['required'] -%}
+                    {%- set exact = namespace(value='') -%}
+                    {%- if latest_user_content is string -%}
+                        {%- set exact_markers = [
+                            'exact ' ~ param_name ~ ':',
+                            'this exact ' ~ param_name ~ ':',
+                            'exactly this ' ~ param_name ~ ':',
+                            'exactly ' ~ param_name ~ ':',
+                            'exactly this new ' ~ param_name ~ ', preserving newlines:',
+                            'exactly this ' ~ param_name ~ ', preserving newlines:',
+                            'this new ' ~ param_name ~ ', preserving newlines:',
+                            'new ' ~ param_name ~ ', preserving newlines:',
+                            param_name ~ ', preserving newlines:',
+                            'preserving newlines:'
+                        ] -%}
+                        {%- for exact_marker in exact_markers -%}
+                            {%- if not exact.value and exact_marker in latest_user_content -%}
+                                {%- set exact.value = latest_user_content.split(exact_marker)[1] | trim -%}
+                            {%- endif -%}
+                        {%- endfor -%}
+                    {%- endif -%}
+                    {{- '\n<parameter=' ~ param_name ~ '>\n' -}}
+                    {%- if exact.value -%}
+                        {{- exact.value -}}
+                    {%- endif -%}
+                    {{- '\n</parameter>' -}}
+                {%- endfor -%}
+                {{- '\n</function>\n</zyphra_tool_call>' -}}
+                {{- '\nDo not omit required parameters. If the latest user message asks to use the tool on exact text, copy that exact text into the string parameter body, preserving newlines.' -}}
+                {{- '\nFor string parameters, write the raw string value only. Do not wrap the parameter value in JSON quotes unless the requested value itself includes quote characters.' -}}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- endif -%}
+    {{- '\n</IMPORTANT>' -}}
+{%- endmacro -%}
+
 {%- set loop_messages = messages -%}
 {%- set has_system = (messages | length > 0 and messages[0]['role'] == 'system') -%}
 {%- if has_system or (tools is iterable and tools | length > 0) -%}
@@ -794,34 +929,75 @@ public enum ChatTemplateFallbacks {
             {%- if tool['description'] is defined -%}
                 {{- '\n<description>' ~ (tool['description'] | trim) ~ '</description>' -}}
             {%- endif -%}
-            {%- if tool['parameters'] is defined -%}
+            {%- if tool['parameters'] is defined and tool['parameters']['properties'] is defined -%}
+                {{- '\n<parameters>' -}}
+                {%- for param_name, param in tool['parameters']['properties'] | dictsort -%}
+                    {{- '\n<parameter>\n<name>' ~ param_name ~ '</name>' -}}
+                    {%- if param['type'] is defined -%}
+                        {{- '\n<type>' ~ param['type'] ~ '</type>' -}}
+                    {%- endif -%}
+                    {%- if param['description'] is defined -%}
+                        {{- '\n<description>' ~ (param['description'] | trim) ~ '</description>' -}}
+                    {%- endif -%}
+                    {{- '\n</parameter>' -}}
+                {%- endfor -%}
+                {%- if tool['parameters']['required'] is defined -%}
+                    {{- '\n<required>' ~ (tool['parameters']['required'] | tojson | safe) ~ '</required>' -}}
+                {%- endif -%}
+                {{- '\n</parameters>' -}}
+            {%- elif tool['parameters'] is defined -%}
                 {{- '\n<parameters>' ~ (tool['parameters'] | tojson | safe) ~ '</parameters>' -}}
             {%- endif -%}
             {{- '\n</function>' -}}
         {%- endfor -%}
         {{- '\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<zyphra_tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n</function>\n</zyphra_tool_call>' -}}
+        {%- if required_tool_choice -%}
+            {{- '\n\n' -}}
+            {{- render_required_tool_choice_instruction() -}}
+        {%- endif -%}
     {%- endif -%}
     {{- '<|im_end|>\n' -}}
 {%- endif -%}
 
 {%- for message in loop_messages -%}
     {%- if message['role'] == 'user' or message['role'] == 'question' -%}
+        {%- set next_is_pure_tool_call = false -%}
+        {%- if required_tool_choice and not loop.last -%}
+            {%- set next_message = loop_messages[loop.index0 + 1] -%}
+            {%- set next_has_tool_calls = next_message['tool_calls'] is defined and next_message['tool_calls'] is iterable and next_message['tool_calls'] | length > 0 -%}
+            {%- set next_assistant_content = render_content(next_message['content']) -%}
+            {%- if next_message['role'] == 'assistant' and next_has_tool_calls and not next_assistant_content -%}
+                {%- set next_is_pure_tool_call = true -%}
+            {%- endif -%}
+        {%- endif -%}
+        {%- if (not required_tool_choice or loop.last) and not next_is_pure_tool_call -%}
         {{- '<|im_start|>user\n' -}}
         {{- render_content(message['content']) -}}
+        {%- if required_tool_choice and loop.last -%}
+            {{- '\n\n' -}}
+            {{- render_required_tool_choice_instruction(message['content']) -}}
+        {%- endif -%}
         {{- '<|im_end|>\n' -}}
+        {%- endif -%}
     {%- elif message['role'] == 'assistant' -%}
+        {%- set has_tool_calls = message['tool_calls'] is defined and message['tool_calls'] is iterable and message['tool_calls'] | length > 0 -%}
+        {%- set assistant_content = render_content(message['content']) -%}
+        {%- if not required_tool_choice and not (required_tool_choice and has_tool_calls and not assistant_content) -%}
         {{- '<|im_start|>assistant\n' -}}
-        {{- render_content(message['content']) -}}
-        {%- if message['tool_calls'] is defined and message['tool_calls'] is iterable and message['tool_calls'] | length > 0 -%}
+        {{- assistant_content -}}
+        {%- if has_tool_calls and not required_tool_choice -%}
             {%- for tool_call in message['tool_calls'] -%}
                 {{- render_tool_call(tool_call) -}}
             {%- endfor -%}
         {%- endif -%}
         {{- '<|im_end|>\n' -}}
+        {%- endif -%}
     {%- elif message['role'] == 'tool' -%}
-        {{- '<|im_start|>user\n<zyphra_tool_response>\n' -}}
-        {{- render_content(message['content']) -}}
-        {{- '\n</zyphra_tool_response>\n<|im_end|>\n' -}}
+        {%- if not required_tool_choice -%}
+            {{- '<|im_start|>user\n<zyphra_tool_response>\n' -}}
+            {{- render_content(message['content']) -}}
+            {{- '\n</zyphra_tool_response>\n<|im_end|>\n' -}}
+        {%- endif -%}
     {%- elif message['role'] == 'system' -%}
         {{- '<|im_start|>system\n' -}}
         {{- render_content(message['content']) -}}

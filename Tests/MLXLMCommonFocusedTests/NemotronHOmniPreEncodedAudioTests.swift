@@ -276,6 +276,98 @@ struct NemotronHOmniPreEncodedAudioTests {
         }
     }
 
+    @Test("required tool choice does not inject Nemotron Omni VLM prompt directive")
+    func requiredToolChoiceDoesNotInjectNemotronOmniVLMPromptDirective() {
+        var messages: [Message] = [
+            ["role": "user", "content": "Use line_count on red\ngreen\nblue."],
+        ]
+
+        NemotronHOmniProcessor.addRequiredToolChoiceInstruction(
+            to: &messages,
+            tools: [lineCountTool()],
+            additionalContext: ["tool_choice": "required"])
+
+        #expect(messages.count == 1)
+        #expect(messages[0]["role"] as? String == "user")
+        #expect(messages[0]["content"] as? String == "Use line_count on red\ngreen\nblue.")
+    }
+
+    @Test("required tool choice leaves Nemotron Omni history unchanged")
+    func requiredToolChoiceLeavesNemotronOmniHistoryUnchanged() throws {
+        var messages: [Message] = [
+            ["role": "user", "content": "Use line_count on red\ngreen\nblue."],
+            [
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    [
+                        "id": "call_lines",
+                        "type": "function",
+                        "function": [
+                            "name": "line_count",
+                            "arguments": #"{"text":"red\ngreen\nblue"}"#,
+                        ] as [String: any Sendable],
+                    ] as [String: any Sendable],
+                ],
+            ] as [String: any Sendable],
+            ["role": "tool", "tool_call_id": "call_lines", "content": #"{"lines":3}"#],
+            [
+                "role": "user",
+                "content": "How many lines were counted? Answer plainly. Do not call another tool.",
+            ],
+            ["role": "assistant", "content": "Three lines were counted."],
+            ["role": "user", "content": "Now use line_count on one\ntwo."],
+        ]
+
+        NemotronHOmniProcessor.addRequiredToolChoiceInstruction(
+            to: &messages,
+            tools: [lineCountTool()],
+            additionalContext: ["tool_choice": "required"])
+
+        let finalUserIndex = try #require(messages.lastIndex {
+            ($0["role"] as? String) == "user"
+                && (($0["content"] as? String)?.contains("one\ntwo") == true)
+        })
+        #expect(finalUserIndex == messages.count - 1)
+        #expect(!messages.contains {
+            ($0["role"] as? String) == "system"
+                && (($0["content"] as? String)?.contains("return exactly one <tool_call>") == true)
+        })
+    }
+
+    @Test("non-required tool choice leaves Nemotron Omni VLM messages unchanged")
+    func nonRequiredToolChoiceLeavesNemotronOmniVLMMessagesUnchanged() {
+        var messages: [Message] = [
+            ["role": "user", "content": "hello"],
+        ]
+
+        NemotronHOmniProcessor.addRequiredToolChoiceInstruction(
+            to: &messages,
+            tools: [lineCountTool()],
+            additionalContext: ["tool_choice": "none"])
+
+        #expect(messages.count == 1)
+        #expect(messages[0]["role"] as? String == "user")
+        #expect(messages[0]["content"] as? String == "hello")
+    }
+
+    private func lineCountTool() -> ToolSpec {
+        [
+            "type": "function",
+            "function": [
+                "name": "line_count",
+                "description": "Count newline-separated text lines.",
+                "parameters": [
+                    "type": "object",
+                    "properties": [
+                        "text": ["type": "string"] as [String: any Sendable],
+                    ] as [String: any Sendable],
+                    "required": ["text"],
+                ] as [String: any Sendable],
+            ] as [String: any Sendable],
+        ]
+    }
+
     @Test("media no-thinking prompt carries explicit direct-answer instruction")
     func mediaNoThinkingPromptCarriesDirectAnswerInstruction() async throws {
         try await FocusedMLXTestSupport.withLock {

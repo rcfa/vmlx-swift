@@ -114,6 +114,99 @@ struct DSMLToolCallParserFocusedTests {
         #expect(!visible.contains("invoke name"))
     }
 
+    @Test("DSML processor accepts live tool_crs alias after bare tool-name marker")
+    func processorAcceptsLiveToolCRSAliasAfterBareToolNameMarker() {
+        let dsml = DeepseekV4Tokens.dsml
+        let output = """
+            -line_count
+            <\(dsml)tool_crs>
+            <\(dsml)invoke name="line_count">
+            <\(dsml)parameter name="text" string="true">alpha
+            beta
+            gamma</\(dsml)parameter>
+            </\(dsml)inv>
+            </\(dsml)tool_crs>
+            """
+        let processor = ToolCallProcessor(format: .dsml, tools: lineCountToolSchema())
+        var visible = ""
+        for ch in output {
+            visible += processor.processChunk(String(ch)) ?? ""
+        }
+        visible += processor.processEOS() ?? ""
+
+        #expect(processor.toolCalls.count == 1)
+        #expect(processor.toolCalls.first?.function.name == "line_count")
+        #expect(
+            processor.toolCalls.first?.function.arguments["text"]
+                == .string("alpha\nbeta\ngamma")
+        )
+        #expect(visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(!visible.contains("DSML"))
+        #expect(!visible.contains("tool_crs"))
+        #expect(!visible.contains("invoke name"))
+        #expect(!visible.contains("line_count"))
+    }
+
+    @Test("DSV4 processor accepts live request_tool XML rail")
+    func processorAcceptsLiveRequestToolXMLRail() {
+        let output =
+            "_only:request_tool<invoke><target_name>line_count</target><params><string>\n"
+            + #"one\ntwo"#
+            + "\n</string></params></invoke>"
+        let processor = ToolCallProcessor(format: .dsml, tools: lineCountToolSchema())
+        var visible = ""
+        for ch in output {
+            visible += processor.processChunk(String(ch)) ?? ""
+        }
+        visible += processor.processEOS() ?? ""
+
+        #expect(processor.toolCalls.count == 1)
+        #expect(processor.toolCalls.first?.function.name == "line_count")
+        #expect(processor.toolCalls.first?.function.arguments["text"] == .string("one\ntwo"))
+        #expect(visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(!visible.contains("request_tool"))
+        #expect(!visible.contains("<invoke>"))
+        #expect(!visible.contains("line_count"))
+    }
+
+    @Test("DSML processor accepts live bare-name JSON with malformed string escape")
+    func processorAcceptsLiveBareNameJSONWithMalformedStringEscape() {
+        let output = #"line_count{"text":"alpha\nbeta\gamma"}"#
+        let processor = ToolCallProcessor(format: .dsml, tools: lineCountToolSchema())
+        var visible = ""
+        for ch in output {
+            visible += processor.processChunk(String(ch)) ?? ""
+        }
+        visible += processor.processEOS() ?? ""
+
+        #expect(processor.toolCalls.count == 1)
+        #expect(processor.toolCalls.first?.function.name == "line_count")
+        #expect(
+            processor.toolCalls.first?.function.arguments["text"]
+                == .string("alpha\nbeta\\gamma")
+        )
+        #expect(visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(!visible.contains("line_count"))
+        #expect(!visible.contains(#"{"text":"#))
+    }
+
+    @Test("DSML processor suppresses incomplete protocol opener at EOS")
+    func processorSuppressesIncompleteProtocolOpenerAtEOS() {
+        let dsml = DeepseekV4Tokens.dsml
+        let output = "\n\n<\(dsml)tool_c"
+        let processor = ToolCallProcessor(format: .dsml, tools: fileReadToolSchema())
+        var visible = ""
+        for ch in output {
+            visible += processor.processChunk(String(ch)) ?? ""
+        }
+        visible += processor.processEOS() ?? ""
+
+        #expect(processor.toolCalls.isEmpty)
+        #expect(visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(!visible.contains("DSML"))
+        #expect(!visible.contains("tool_c"))
+    }
+
     @Test("DSML processor routes Osaurus folder and git tools through live aliases")
     func processorRoutesOsaurusFolderAndGitToolsThroughLiveAliases() {
         let fixtures: [DSMLToolFixture] = [
@@ -342,6 +435,181 @@ struct DSMLToolCallParserFocusedTests {
         #expect(toolProcessor.toolCalls.first?.function.arguments["city"] == .string("Paris"))
     }
 
+    @Test("DSV4 chunked reasoning close routes following DSML to tool call")
+    func chunkedReasoningCloseRoutesFollowingDSMLToToolCall() {
+        var reasoningParser = ReasoningParser.forPrompt(
+            stampName: "think_xml",
+            promptTail: "<\u{FF5C}Assistant\u{FF5C}><think>"
+        )
+        let toolProcessor = ToolCallProcessor(format: .dsml)
+        let dsml = DeepseekV4Tokens.dsml
+        let chunks = [
+            "Need the weather</think>",
+            """
+            <\(dsml)tool_calls>
+            <\(dsml)invoke name="get_weather">
+            <\(dsml)parameter name="location" string="true">Paris</\(dsml)parameter>
+            </\(dsml)invoke>
+            </\(dsml)tool_calls>
+            """,
+        ]
+
+        var reasoning = ""
+        var visible = ""
+        var calls: [ToolCall] = []
+        func route(_ segments: [ReasoningSegment]) {
+            for segment in segments {
+                let events: [Generation]
+                switch segment {
+                case .reasoning(let text):
+                    events = routeGenerationText(
+                        text, channel: .reasoning, through: toolProcessor)
+                case .content(let text):
+                    events = routeGenerationText(text, channel: .content, through: toolProcessor)
+                }
+                for event in events {
+                    switch event {
+                    case .reasoning(let text): reasoning += text
+                    case .chunk(let text): visible += text
+                    case .toolCall(let call): calls.append(call)
+                    default: break
+                    }
+                }
+            }
+        }
+
+        for chunk in chunks {
+            if var parser = reasoningParser {
+                route(parser.feed(chunk))
+                reasoningParser = parser
+            }
+        }
+        if var parser = reasoningParser {
+            route(parser.flush())
+            reasoningParser = parser
+        }
+        for event in flushGenerationText(channel: .content, through: toolProcessor) {
+            switch event {
+            case .chunk(let text): visible += text
+            case .toolCall(let call): calls.append(call)
+            default: break
+            }
+        }
+
+        #expect(reasoning == "Need the weather")
+        #expect(visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(calls.count == 1)
+        #expect(calls.first?.function.name == "get_weather")
+        #expect(calls.first?.function.arguments["location"] == .string("Paris"))
+    }
+
+    @Test("DSV4 Osaurus split reasoning and DSML stream routes to one tool call")
+    func osaurusSplitReasoningAndDSMLStreamRoutesToOneToolCall() {
+        var reasoningParser = ReasoningParser.forPrompt(
+            stampName: "think_xml",
+            promptTail: "<\u{FF5C}Assistant\u{FF5C}><think>"
+        )!
+        let toolCallProcessor = ToolCallProcessor(format: .dsml)
+        var events: [Generation] = []
+
+        func route(_ text: String, channel: GenerationTextChannel) {
+            events.append(
+                contentsOf: routeGenerationText(
+                    text,
+                    channel: channel,
+                    through: toolCallProcessor
+                )
+            )
+        }
+
+        for raw in [
+            "Need the weather</think>",
+            "<\u{FF5C}DSML\u{FF5C}tool_calls>\n",
+            "<\u{FF5C}DSML\u{FF5C}invoke name=\"get_weather\">\n",
+            "<\u{FF5C}DSML\u{FF5C}parameter name=\"location\" string=\"true\">Paris</\u{FF5C}DSML\u{FF5C}parameter>\n",
+            "</\u{FF5C}DSML\u{FF5C}invoke>\n",
+            "</\u{FF5C}DSML\u{FF5C}tool_calls>",
+        ] {
+            for segment in reasoningParser.feed(raw) {
+                switch segment {
+                case .reasoning(let reasoning):
+                    route(reasoning, channel: .reasoning)
+                case .content(let content):
+                    route(content, channel: .content)
+                }
+            }
+        }
+        for segment in reasoningParser.flush() {
+            switch segment {
+            case .reasoning(let reasoning):
+                route(reasoning, channel: .reasoning)
+            case .content(let content):
+                route(content, channel: .content)
+            }
+        }
+        if let visible = toolCallProcessor.processEOS() {
+            route(visible, channel: .content)
+        }
+        events.append(contentsOf: drainToolCallEvents(from: toolCallProcessor))
+
+        let reasoning = events.compactMap(\.reasoning).joined()
+        let visible = events.compactMap(\.chunk).joined()
+        let calls = events.compactMap(\.toolCall)
+
+        #expect(reasoning == "Need the weather")
+        #expect(visible.isEmpty)
+        #expect(calls.count == 1)
+        #expect(calls.first?.function.name == "get_weather")
+        #expect(calls.first?.function.arguments["location"] == .string("Paris"))
+    }
+
+    @Test("DSV4 split DSML chunks buffer directly in the tool processor")
+    func splitDSMLChunksBufferDirectlyInToolProcessor() {
+        let processor = ToolCallProcessor(format: .dsml)
+        let chunks = [
+            "<\u{FF5C}DSML\u{FF5C}tool_calls>\n",
+            "<\u{FF5C}DSML\u{FF5C}invoke name=\"get_weather\">\n",
+            "<\u{FF5C}DSML\u{FF5C}parameter name=\"location\" string=\"true\">Paris</\u{FF5C}DSML\u{FF5C}parameter>\n",
+            "</\u{FF5C}DSML\u{FF5C}invoke>\n",
+            "</\u{FF5C}DSML\u{FF5C}tool_calls>",
+        ]
+
+        var visible = ""
+        for chunk in chunks {
+            visible += processor.processChunk(chunk) ?? ""
+        }
+        visible += processor.processEOS() ?? ""
+
+        #expect(visible.isEmpty)
+        #expect(processor.toolCalls.count == 1)
+        #expect(processor.toolCalls.first?.function.name == "get_weather")
+        #expect(processor.toolCalls.first?.function.arguments["location"] == .string("Paris"))
+    }
+
+    @Test("DSV4 ReasoningParser split DSML chunks buffer directly in the tool processor")
+    func reasoningParserSplitDSMLChunksBufferDirectlyInToolProcessor() {
+        let processor = ToolCallProcessor(format: .dsml)
+        let chunks = [
+            "<\u{FF5C}DSML\u{FF5C}tool_",
+            "calls>\n<\u{FF5C}DSML\u{FF5C}invoke name=\"get_wea",
+            "ther\">\n<\u{FF5C}DSML\u{FF5C}parameter name=\"location\" string=\"true\">Paris</\u{FF5C}DSML\u{FF5C}para",
+            "meter>\n</\u{FF5C}DSML\u{FF5C}i",
+            "nvoke>\n</\u{FF5C}DSML\u{FF5C}tool",
+            "_calls>",
+        ]
+
+        var visible = ""
+        for chunk in chunks {
+            visible += processor.processChunk(chunk) ?? ""
+        }
+        visible += processor.processEOS() ?? ""
+
+        #expect(visible.isEmpty)
+        #expect(processor.toolCalls.count == 1)
+        #expect(processor.toolCalls.first?.function.name == "get_weather")
+        #expect(processor.toolCalls.first?.function.arguments["location"] == .string("Paris"))
+    }
+
     @Test("DSV4 capability aliases route to DSML before generic DeepSeek")
     func capabilityAliasesPreferDSML() {
         for stamp in ["dsml", "deepseek_v4", "deepseek_v4_flash", "deepseekv4"] {
@@ -425,6 +693,24 @@ struct DSMLToolCallParserFocusedTests {
                             "end_line": ["type": "integer"] as [String: any Sendable],
                         ] as [String: any Sendable],
                         "required": ["path"],
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable],
+            ] as [String: any Sendable],
+        ]
+    }
+
+    private func lineCountToolSchema() -> [[String: any Sendable]] {
+        [
+            [
+                "type": "function",
+                "function": [
+                    "name": "line_count",
+                    "parameters": [
+                        "type": "object",
+                        "properties": [
+                            "text": ["type": "string"] as [String: any Sendable],
+                        ] as [String: any Sendable],
+                        "required": ["text"],
                     ] as [String: any Sendable],
                 ] as [String: any Sendable],
             ] as [String: any Sendable],

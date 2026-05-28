@@ -122,6 +122,11 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
     /// Example: `<tool_call><function=name><parameter=key>value</parameter></function></tool_call>`
     case xmlFunction = "xml_function"
 
+    /// Nemotron-H / Omni tool format. Canonical templates advertise XML
+    /// function calls, but live Omni JANGTQ rows can emit DSML envelopes; this
+    /// format buffers and parses both protocols instead of leaking either one.
+    case nemotron
+
     /// GLM4 format with arg_key/arg_value tags.
     /// Example: `func<arg_key>k</arg_key><arg_value>v</arg_value>`
     case glm4
@@ -179,13 +184,14 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
                 startTag: "<|tool_call_start|>", endTag: "<|tool_call_end|>")
         case .xmlFunction:
             return XMLFunctionParser(startTag: "<tool_call>", endTag: "</tool_call>")
+        case .nemotron:
+            return NemotronToolCallParser()
         case .glm4:
             return GLM4ToolCallParser()
         case .gemma:
             return GemmaFunctionParser()
         case .gemma4:
-            return GemmaFunctionParser(
-                startTag: "<|tool_call>", endTag: "<tool_call|>", escapeMarker: "<|\"|>")
+            return Gemma4ToolCallParser()
         case .kimiK2:
             return KimiK2ToolCallParser()
         case .minimaxM2:
@@ -199,7 +205,9 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         case .zayaXml:
             return XMLFunctionParser(
                 startTag: "<zyphra_tool_call>",
-                endTag: "</zyphra_tool_call>")
+                endTag: "</zyphra_tool_call>",
+                decodesHTMLLineBreaks: true,
+                unwrapJSONQuotedStringParameters: true)
         case .hunyuan:
             return HunyuanToolCallParser()
         }
@@ -277,9 +285,19 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
             return .minimaxM2
         }
 
+        // MiMo V2.5 uses the Qwen/Nemotron-style XML function tool
+        // envelope in its chat template:
+        // <tool_call><function=name><parameter=key>...</parameter></function></tool_call>.
+        if normalized == "mimo_v2"
+            || normalized.hasPrefix("mimo_v2_")
+            || compact.hasPrefix("mimov2")
+        {
+            return .xmlFunction
+        }
+
         // Nemotron family (nemotron_h, etc.)
         if compact.hasPrefix("nemotron") {
-            return .xmlFunction
+            return .nemotron
         }
 
         // Qwen3.5 family (qwen3_5, qwen3_5_moe, etc.)
@@ -447,6 +465,13 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
             return .glm4
         }
 
+        if normalized == "mimo_v2"
+            || normalized.hasPrefix("mimo_v2_")
+            || compact.hasPrefix("mimov2")
+        {
+            return .xmlFunction
+        }
+
         // Tencent Hunyuan / Hy3 parser aliases. Product capability stamps
         // may carry a suffix (`hy3-preview`, `hy_v3_preview`) rather than
         // the exact parser family name.
@@ -462,7 +487,7 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         // Qwen 3.5 / 3.6 family — XML-style <tool_call>…</tool_call>
         // (vLLM ecosystem name `qwen3_coder` aliased here).
         case "qwen", "qwen3", "qwen3_5", "qwen35", "qwen3_6", "qwen36",
-            "qwen3_coder":
+            "qwen3_coder", "mimo", "mimo_v2", "mimo_v2_flash":
             return .xmlFunction
         // MiniMax — JANG converter stamps `minimax`; older artifacts use
         // the canonical `minimax_m2`. Future M2.5 variants use
@@ -476,13 +501,12 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         case "glm4", "glm47", "glm5", "glm4_moe", "deepseek",
             "laguna", "laguna_xs", "laguna_s":
             return .glm4
-        // Nemotron-H / Cascade — same XML-style envelope as Qwen3 Coder.
-        // Our `XMLFunctionParser` handles `<tool_call><function=name>…`
-        // which Nemotron's variant matches; if a future Nemotron release
-        // uses Hermes-style `<TOOLCALL>` tags, a dedicated enum case
-        // should be added here.
+        // Nemotron-H / Cascade — canonical templates use Qwen-style XML
+        // function calls, but live Omni/JANGTQ rows can emit DSML protocol
+        // markers. Route through the family parser so either protocol is
+        // treated as tool-call transport instead of visible content.
         case "nemotron", "nemotron_h":
-            return .xmlFunction
+            return .nemotron
         // Gemma — JANG stamps `gemma4`; the `gemma` short form maps to
         // legacy Gemma 3 format and is included for forward compatibility
         // with older stamps. Both produce `<|tool_call>…<tool_call|>`

@@ -5494,10 +5494,13 @@ func runLagunaLoopProbe(modelPath: String, maxNew: Int) async throws {
     await engine.shutdown()
 
     func printResult(_ r: ProbeResult) {
-        let visible = r.text.isEmpty ? r.reasoning : r.text
-        let preview = visible.count > 500
-            ? String(visible.prefix(500)) + "..."
+        let visible = r.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let previewSource = visible.isEmpty
+            ? "[empty visible; reasoning chars=\(r.reasoning.count)]"
             : visible
+        let preview = previewSource.count > 500
+            ? String(previewSource.prefix(500)) + "..."
+            : previewSource
         print(String(format:
             "\n[%@] finish=%@ total=%.2fs apiGen=%.2fs genTok=%d wallTokps=%.1f infoTokps=%.1f chunks=%d reasoningDeltas=%d text=%d reasoning=%d loop=%@ unclosedReasoning=%@ leaks=%@",
             r.thinking ? "thinking=ON" : "thinking=OFF",
@@ -5794,7 +5797,9 @@ func runNoGuardSamplingProbe(modelPath: String, maxNew: Int) async throws {
         for c in cases {
             let r = try await run(c)
             let visible = r.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            let display = visible.isEmpty ? r.reasoning : visible
+            let display = visible.isEmpty
+                ? "[empty visible; reasoning chars=\(r.reasoning.count)]"
+                : visible
             let combined = r.text + "\n" + r.reasoning
             let loop = lagunaLoopHeuristic(combined)
             let leaks = markerLeaks(in: r.text)
@@ -6124,7 +6129,9 @@ func runReasoningTurnMatrix(modelPath: String, maxNew: Int) async throws {
             stop: stopString(info),
             unclosedReasoning: info?.unclosedReasoning ?? false)
         let visible = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let previewSource = visible.isEmpty ? reasoning : visible
+        let previewSource = visible.isEmpty
+            ? "[empty visible; reasoning chars=\(reasoning.count)]"
+            : visible
         let preview = String(previewSource.prefix(180))
             .replacingOccurrences(of: "\n", with: "\\n")
         print(String(format:
@@ -6254,14 +6261,21 @@ func runDSV4CoherenceGate(modelPath: String, maxNew: Int) async throws {
         ?? max(96, maxNew)
     let chatMaxNew = Int(env["BENCH_DSV4_CHAT_MAX_TOKENS"] ?? "\(max(160, maxNew))")
         ?? max(160, maxNew)
-    let reasoningMaxNew = Int(env["BENCH_DSV4_REASONING_MAX_TOKENS"] ?? "384")
-        ?? 384
-    let dsv4Temperature = Float(env["BENCH_DSV4_TEMP"] ?? "0") ?? 0
-    let dsv4TopP = Float(env["BENCH_DSV4_TOP_P"] ?? "0.95") ?? 0.95
-    let dsv4RepetitionPenalty =
-        Float(env["BENCH_DSV4_REPETITION_PENALTY"] ?? "1.0") ?? 1.0
-    let dsv4MaxRepetitionPenalty =
-        Float(env["BENCH_DSV4_MAX_REPETITION_PENALTY"] ?? "1.05") ?? 1.05
+    // DSV4 max-effort prompts need enough budget to close the think_xml block
+    // at bundle-derived sampling defaults; too small a cap can length-stop
+    // before visible text and create a false coherence failure.
+    let reasoningMaxDefault = max(1024, maxNew)
+    let reasoningMaxNew = Int(env["BENCH_DSV4_REASONING_MAX_TOKENS"] ?? "\(reasoningMaxDefault)")
+        ?? reasoningMaxDefault
+    let dsv4Temperature = env["BENCH_DSV4_TEMP"].flatMap(Float.init)
+    let dsv4TopP = env["BENCH_DSV4_TOP_P"].flatMap(Float.init)
+    let dsv4TopK = env["BENCH_DSV4_TOP_K"].flatMap(Int.init)
+    let dsv4MinP = env["BENCH_DSV4_MIN_P"].flatMap(Float.init)
+    let dsv4Seed = env["BENCH_DSV4_SEED"].flatMap(UInt64.init)
+    let dsv4RepetitionPenaltyOverride =
+        env["BENCH_DSV4_REPETITION_PENALTY"].flatMap(Float.init)
+    let dsv4MaxRepetitionPenaltyOverride =
+        env["BENCH_DSV4_MAX_REPETITION_PENALTY"].flatMap(Float.init)
     let dsv4RepetitionContext =
         Int(env["BENCH_DSV4_REPETITION_CONTEXT"] ?? "64") ?? 64
     let useCacheCoordinator =
@@ -6281,6 +6295,18 @@ func runDSV4CoherenceGate(modelPath: String, maxNew: Int) async throws {
     print(String(format: "Load: %.2fs", CFAbsoluteTimeGetCurrent() - loadStart))
     print("Model: \(type(of: context.model))")
     print("Reasoning stamp: \(context.configuration.reasoningParserName ?? "nil")")
+    if let defaults = context.configuration.generationDefaults {
+        print(String(format:
+            "Generation defaults: temp=%@ topP=%@ topK=%@ minP=%@ rep=%@ doSample=%@",
+            defaults.temperature.map { String(format: "%.3f", Double($0)) } ?? "nil",
+            defaults.topP.map { String(format: "%.3f", Double($0)) } ?? "nil",
+            defaults.topK.map(String.init) ?? "nil",
+            defaults.minP.map { String(format: "%.3f", Double($0)) } ?? "nil",
+            defaults.repetitionPenalty.map { String(format: "%.3f", Double($0)) } ?? "nil",
+            defaults.doSample.map(String.init) ?? "nil"))
+    } else {
+        print("Generation defaults: nil")
+    }
 
     nonisolated(unsafe) let ctx = context
     let engine: BatchEngine
@@ -6362,15 +6388,39 @@ func runDSV4CoherenceGate(modelPath: String, maxNew: Int) async throws {
         }
         nonisolated(unsafe) let sendable = lm
 
-        let requestedPenalty =
-            reasoningEffort == "max" ? dsv4MaxRepetitionPenalty : dsv4RepetitionPenalty
-        var params = GenerateParameters(
+        let fallbackParams = GenerateParameters(
             maxTokens: maxTokens,
-            temperature: dsv4Temperature,
-            topP: dsv4TopP,
-            repetitionPenalty: requestedPenalty == 1.0 ? nil : requestedPenalty,
-            repetitionContextSize: dsv4RepetitionContext,
+            randomSeed: dsv4Seed,
             prefillStepSize: 512)
+        var params = GenerateParameters(
+            generationConfig: ctx.configuration.generationDefaults,
+            fallback: fallbackParams)
+        // The row owns decode budget and any explicit diagnostic overrides.
+        // Sampling defaults otherwise stay bundle-derived.
+        params.maxTokens = maxTokens
+        params.randomSeed = dsv4Seed
+        params.prefillStepSize = 512
+        if let dsv4Temperature {
+            params.temperature = dsv4Temperature
+        }
+        if let dsv4TopP {
+            params.topP = dsv4TopP
+        }
+        if let dsv4TopK {
+            params.topK = dsv4TopK
+        }
+        if let dsv4MinP {
+            params.minP = dsv4MinP
+        }
+        let requestedPenaltyOverride =
+            reasoningEffort == "max"
+                ? dsv4MaxRepetitionPenaltyOverride
+                : dsv4RepetitionPenaltyOverride
+        if let requestedPenaltyOverride {
+            params.repetitionPenalty =
+                requestedPenaltyOverride == 1.0 ? nil : requestedPenaltyOverride
+        }
+        params.repetitionContextSize = dsv4RepetitionContext
         params.enableCompiledBatchDecode = false
 
         let t0 = CFAbsoluteTimeGetCurrent()
@@ -8684,7 +8734,10 @@ func runProdMatrix(modelPath: String, maxNew: Int) async throws {
         let v = validate(r)
         let status = v.ok ? "PASS" : "FAIL"
         if v.ok { stats.pass += 1 } else { stats.fail += 1 }
-        let preview = r.text.isEmpty ? r.reasoning : r.text
+        let visible = r.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let preview = visible.isEmpty
+            ? "[empty visible; reasoning chars=\(r.reasoning.count)]"
+            : visible
         let short = preview.count > 120 ? String(preview.prefix(120)) + "…" : preview
         print(String(format:
             "  [%@] %@  ttft=%4dms prompt=%4.0fms total=%5.2fs genTokens=%d tokps=%5.1f stop=%@ chunks=%4d reasoning=%4d tools=%d rss=%.0fMiB %@-> \"%@\"",

@@ -22,10 +22,17 @@ struct BatchEngineGrowingChatCacheSourceTests {
         #expect(source.contains("let promptTokens = slot.cachePromptTokenIds"))
         #expect(source.contains(#"label: "post-answer""#))
         #expect(source.contains("promptTokens + slot.generatedTokenIds"))
+        #expect(scheduler.contains("let disablesGeneratedCacheBoundary: Bool"))
+        #expect(scheduler.contains("request.input.toolSchemas?.isEmpty == false"))
+        #expect(source.contains("!slot.disablesGeneratedCacheBoundary"))
         #expect(source.contains("slot.originalInput.cacheHitSuffixContainsMediaPlaceholder(remaining)"))
-        #expect(source.contains("let unsafeFullHit = remaining.isEmpty && hasPathDependentLayer"))
+        #expect(source.contains("let requiresDiskBackedRestore ="))
+        #expect(source.contains("cacheRequiresDiskBackedCoordinatorRestore(slot.cache)"))
+        #expect(source.contains("let unsafeFullHit = remaining.isEmpty && requiresDiskBackedRestore"))
         #expect(source.contains("!slot.originalInput.requiresPostPrepareCacheKey"))
-        #expect(source.contains("layer is MambaCache || layer is ArraysCache || layer is ZayaCCACache"))
+        #expect(!source.contains("let hasPathDependentLayer = slot.cache.contains"))
+        #expect(source.contains("shouldSkipHistoryBoundaryRederiveAfterTrimMiss(promptCacheSnapshot)"))
+        #expect(source.contains("Skipped history-boundary cache rederive after trim miss for slot"))
         #expect(!source.contains("let unsafePartial = !remaining.isEmpty &&\n                        (hasMediaContent || hasSSMLayer)"))
     }
 
@@ -41,11 +48,26 @@ struct BatchEngineGrowingChatCacheSourceTests {
         #expect(source.contains("!input.requiresPostPrepareCacheKey"))
         #expect(source.contains("!originalInput.requiresPostPrepareCacheKey"))
         #expect(source.contains("let generatedBoundaryTokens = promptTokenIds + generatedTokenIds"))
-        #expect(source.contains("includeGeneratedBoundary: stopReason == .stop && !handler.stopSequenceHit"))
+        #expect(source.contains("&& !handler.emittedToolCall"))
         #expect(source.contains("input.cacheHitSuffixContainsMediaPlaceholder(remainingTokens)"))
-        #expect(source.contains("let unsafeFullHit = remainingTokens.isEmpty && hasPathDependentLayer"))
-        #expect(source.contains("layer is MambaCache || layer is ArraysCache || layer is ZayaCCACache"))
+        #expect(source.contains("let requiresDiskBackedRestore ="))
+        #expect(source.contains("cacheRequiresDiskBackedCoordinatorRestore(self.cache)"))
+        #expect(source.contains("let unsafeFullHit = remainingTokens.isEmpty && requiresDiskBackedRestore"))
+        #expect(source.contains("cacheContainsPathDependentState(self.cache)"))
+        #expect(!source.contains("let hasPathDependentLayer = self.cache.contains"))
+        #expect(source.contains("shouldSkipHistoryBoundaryRederiveAfterTrimMiss(promptSnapshot)"))
+        #expect(source.contains("TokenIterator: skipped history-boundary cache rederive after trim miss"))
         #expect(!source.contains("let unsafePartial = !remainingTokens.isEmpty &&\n                        (hasMediaContent || hasSSMLayer)"))
+    }
+
+    @Test("native MTP iterator skips disk-backed history boundary rederive")
+    func nativeMTPIteratorSkipsDiskBackedHistoryBoundaryReDerive() throws {
+        let source = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/SpecDec/NativeMTPTokenIterator.swift",
+            encoding: .utf8)
+
+        #expect(source.contains("shouldSkipHistoryBoundaryRederiveAfterTrimMiss(promptSnapshot)"))
+        #expect(source.contains("return nil"))
     }
 
     @Test("token iterator drains MLX around cache store before completion info")
@@ -96,6 +118,56 @@ struct BatchEngineGrowingChatCacheSourceTests {
         #expect(source.contains("Cache \\(detail.rawValue) hit: restored \\(diskRestored) tokens from disk"))
     }
 
+    @Test("history-boundary rederive skips disk-backed cache topologies after trim miss")
+    func historyBoundaryRederiveSkipsDiskBackedTopologiesAfterTrimMiss() throws {
+        let helpers = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/Cache/CacheHelpers.swift",
+            encoding: .utf8)
+        let evaluate = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/Evaluate.swift",
+            encoding: .utf8)
+        let batch = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/BatchEngine/BatchEngine.swift",
+            encoding: .utf8)
+        let nativeMTP = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/SpecDec/NativeMTPTokenIterator.swift",
+            encoding: .utf8)
+
+        #expect(helpers.contains("func shouldSkipHistoryBoundaryRederiveAfterTrimMiss"))
+        #expect(helpers.contains("cacheRequiresDiskBackedCoordinatorRestore(cache)"))
+        #expect(evaluate.contains("cacheRequiresDiskBackedCoordinatorRestore(self.cache)"))
+        #expect(evaluate.contains("disk-backed full cache hit: re-feeding last token can corrupt path-dependent or rotating state"))
+        #expect(batch.contains("cacheRequiresDiskBackedCoordinatorRestore(slot.cache)"))
+        #expect(nativeMTP.contains("cacheRequiresDiskBackedCoordinatorRestore(self.cache)"))
+        #expect(helpers.contains("func cacheHasStandaloneRotatingWindowState"))
+        #expect(evaluate.contains("skipped disk-backed rotating cache fetch for active tool schema"))
+        #expect(batch.contains("skipped disk-backed rotating cache fetch for active tool schema"))
+
+        for source in [evaluate, batch, nativeMTP] {
+            #expect(source.contains("shouldSkipHistoryBoundaryRederiveAfterTrimMiss("))
+        }
+        #expect(evaluate.contains("history-boundary cache rederive after trim miss"))
+        #expect(batch.contains("history-boundary cache rederive after trim miss"))
+        #expect(nativeMTP.contains("cacheContainsPathDependentState(self.cache)"))
+    }
+
+    @Test("token iterator does not blanket-eval disk-backed cache snapshots before store")
+    func tokenIteratorDoesNotBlanketEvalDiskBackedSnapshotsBeforeStore() throws {
+        let source = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/Evaluate.swift",
+            encoding: .utf8)
+        let storeRange = try #require(source.range(of: "func store(\n            tokens: [Int],"))
+        let store = String(source[storeRange.lowerBound...])
+        let requiresRange = try #require(store.range(
+            of: "let requiresDiskBackedRestore =\n                cacheRequiresDiskBackedCoordinatorRestore(snapshot)"))
+        let evalRange = try #require(store.range(of: "if !requiresDiskBackedRestore {\n                MLX.eval(snapshot)\n            }"))
+        let perLayerRange = try #require(store.range(of: "let perLayerData = requiresDiskBackedRestore"))
+
+        #expect(requiresRange.lowerBound < evalRange.lowerBound)
+        #expect(evalRange.upperBound < perLayerRange.lowerBound)
+        #expect(!store.contains("let snapshot = cacheToStore.map { $0.copy() }\n            MLX.eval(snapshot)"))
+    }
+
     @Test("disk cache serializes MLX safetensors IO across model cache instances")
     func diskCacheSerializesMLXSafetensorsIOAcrossInstances() throws {
         let disk = try String(
@@ -106,6 +178,8 @@ struct BatchEngineGrowingChatCacheSourceTests {
             encoding: .utf8)
 
         #expect(disk.contains("enum MLXDiskCacheIOLock"))
+        #expect(disk.contains("public enum MLXCacheIOLock"))
+        #expect(disk.contains("withSerializedMLXCacheIO"))
         #expect(disk.contains("MLXDiskCacheIOLock.shared.lock()"))
         #expect(disk.contains("Stream.gpu.synchronize()"))
         #expect(disk.contains("try loadArraysAndMetadata(url: url)"))
@@ -114,6 +188,48 @@ struct BatchEngineGrowingChatCacheSourceTests {
         #expect(ssm.contains("Stream.gpu.synchronize()"))
         #expect(ssm.contains("loadArraysAndMetadata(url: safetensorsURL)"))
         #expect(ssm.contains("try save(arrays: arrays, metadata: [\"format\": \"mlx\"], url: safetensorsURL)"))
+    }
+
+    @Test("load-time stack materialization serializes with cache IO")
+    func loadTimeStackMaterializationSerializesWithCacheIO() throws {
+        let source = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/LoadTimeStacking.swift",
+            encoding: .utf8)
+        let helper = try #require(source.range(of: "public func loadTimeMaterializedStacked"))
+        let helperSource = String(source[helper.lowerBound...])
+
+        #expect(helperSource.contains("MLXCacheIOLock.withSerializedMLXCacheIO"))
+        #expect(helperSource.contains("MLX.eval(result)"))
+        #expect(helperSource.contains("Stream.gpu.synchronize()"))
+        #expect(helperSource.contains("MLX.Memory.clearCache()"))
+    }
+
+    @Test("SSM companion cache serializes in-memory MLX materialization")
+    func ssmCompanionCacheSerializesInMemoryMLXMaterialization() throws {
+        let source = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/Cache/SSMStateCache.swift",
+            encoding: .utf8)
+        let evaluate = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/Evaluate.swift",
+            encoding: .utf8)
+        let store = try #require(source.range(of: "public func store("))
+        let storeSource = String(source[store.lowerBound...])
+        let promptTail = try #require(evaluate.range(of: "internal func _decodePromptTail("))
+        let promptTailSource = String(evaluate[promptTail.lowerBound...])
+
+        #expect(storeSource.contains("MLXCacheIOLock.withSerializedMLXCacheIO"))
+        #expect(storeSource.contains("MLX.eval(materialized)"))
+        #expect(storeSource.contains("Stream.gpu.synchronize()"))
+        #expect(storeSource.contains("let disk: SSMCompanionDiskStore?"))
+        #expect(promptTailSource.contains("input.text.tokenIds"))
+        #expect(!promptTailSource.contains("tailArray.asArray"))
+
+        let materialize = try #require(storeSource.range(of: "MLX.eval(materialized)"))
+        let lruLock = try #require(storeSource.range(of: "lock.lock()"))
+        let diskWrite = try #require(storeSource.range(of: "try? disk.store("))
+
+        #expect(materialize.lowerBound < lruLock.lowerBound)
+        #expect(lruLock.lowerBound < diskWrite.lowerBound)
     }
 
     @Test("token iterator trims full cache hits before one-token seed prefill")
@@ -175,6 +291,29 @@ struct BatchEngineGrowingChatCacheSourceTests {
         #expect(evaluate.contains("typeName.contains(\"minimax\")"))
         #expect(engine.contains("modelName.contains(\"minimax\")"))
         #expect(engine.contains("modelTypeName.contains(\"minimax\")"))
+    }
+
+    @Test("MiMo V2 cache topology keeps TurboQuant limited to full-attention KV layers")
+    func mimoV2CacheTopologyLimitsTurboQuantToFullAttentionKVLayers() throws {
+        let model = try String(
+            contentsOfFile: "Libraries/MLXLLM/Models/MiMoV2Flash.swift",
+            encoding: .utf8)
+        let kvCache = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/KVCache.swift",
+            encoding: .utf8)
+
+        #expect(model.contains("modelType = try c.decodeIfPresent(String.self, forKey: .modelType) ?? \"mimo_v2_flash\""))
+        #expect(model.contains("public func newCache(parameters: GenerateParameters?) -> [KVCache]"))
+        #expect(model.contains("configuration.hybridLayerPattern.indices.map"))
+        #expect(model.contains("configuration.isSlidingLayer(layerIndex)"))
+        #expect(model.contains("RotatingKVCache(maxSize: configuration.slidingWindowSize)"))
+        #expect(model.contains("KVCacheSimple()"))
+        #expect(model.contains("if let quantizedKVCache = cache as? QuantizedKVCacheProtocol"))
+        #expect(model.contains("precondition(sinks == nil, \"Quantized SDPA does not support attention sinks.\")"))
+        #expect(kvCache.contains("Only converts `KVCacheSimple` layers. `RotatingKVCache`, `DeepseekV4Cache`,"))
+        #expect(kvCache.contains("if let simpleCache = cache[i] as? KVCacheSimple"))
+        #expect(kvCache.contains("TurboQuantKVCache.fromSimpleCache("))
+        #expect(kvCache.contains("// RotatingKVCache, DeepseekV4Cache, MambaCache, CacheList: skip"))
     }
 
     @Test("Laguna stays off compiled decode until parity is proven")

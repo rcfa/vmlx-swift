@@ -3,10 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OSAURUS_ROOT="${OSAURUS_ROOT:-/Users/eric/osaurus-staging}"
-QWEN_DIR="${VMLINUX_QWEN_PROOF_DIR:-/tmp/vmlx-qwen35-jangtq-turnmatrix-post-vlfix-20260524-1545}"
-GEMMA_DIR="${VMLINUX_GEMMA_PROOF_DIR:-/tmp/vmlx-gemma4-turnmatrix-post-thoughtfix-20260524}"
-ZAYA_DIR="${VMLINUX_ZAYA_PROOF_DIR:-/tmp/vmlx-zaya-text-turnmatrix-20260524-1456}"
-DSV4_DIR="${VMLINUX_DSV4_PROOF_DIR:-/tmp/vmlx-dsv4-band-pe2-turnmatrix-20260524-1445}"
+QWEN_DIR="${VMLX_QWEN_PROOF_DIR:-${VMLINUX_QWEN_PROOF_DIR:-/tmp/vmlx-qwen35-jangtq-turnmatrix-post-vlfix-20260524-1545}}"
+GEMMA_DIR="${VMLX_GEMMA_PROOF_DIR:-${VMLINUX_GEMMA_PROOF_DIR:-/tmp/vmlx-gemma4-turnmatrix-post-thoughtfix-20260524}}"
+ZAYA_DIR="${VMLX_ZAYA_PROOF_DIR:-${VMLINUX_ZAYA_PROOF_DIR:-/tmp/vmlx-zaya-text-turnmatrix-20260524-1456}}"
+DSV4_DIR="${VMLX_DSV4_PROOF_DIR:-${VMLINUX_DSV4_PROOF_DIR:-/tmp/vmlx-dsv4-band-pe2-turnmatrix-20260524-1445}}"
 fail=0
 
 pass() { echo "PASS $*"; }
@@ -49,8 +49,12 @@ reject_text() {
 }
 
 MATRIX="$ROOT/scripts/vmlx-live-model-matrix.sh"
-RELEASE_LEDGER="$ROOT/.agents/vmlx-osaurus/codex/RELEASE-READINESS.md"
-PR_CHECKLIST="$ROOT/.agents/vmlx-osaurus/codex/PR-PROOF-CHECKLIST.md"
+AGENTS_CODEX_ROOT="${VMLX_AGENTS_CODEX_ROOT:-${VMLINUX_AGENTS_CODEX_ROOT:-$ROOT/.agents/vmlx-osaurus/codex}}"
+if [[ ! -d "$AGENTS_CODEX_ROOT" && -d /Users/eric/.agents/vmlx-osaurus/codex ]]; then
+  AGENTS_CODEX_ROOT="/Users/eric/.agents/vmlx-osaurus/codex"
+fi
+RELEASE_LEDGER="$AGENTS_CODEX_ROOT/RELEASE-READINESS.md"
+PR_CHECKLIST="$AGENTS_CODEX_ROOT/PR-PROOF-CHECKLIST.md"
 RUNBENCH="$ROOT/RunBench/Bench.swift"
 NO_HIDDEN_TESTS="$ROOT/Tests/MLXLMCommonFocusedTests/NoHiddenReasoningCloseBiasFocusedTests.swift"
 ARCH_GUARD="$ROOT/scripts/vmlx-architecture-cache-proof-check.sh"
@@ -155,7 +159,7 @@ require_text "$PR_CHECKLIST" 'ZAYA/CCA|CCA/HY3' \
   "PR checklist names CCA/ZAYA family"
 require_text "$PR_CHECKLIST" 'Qwen35 JANGTQ RAM/OOM' \
   "PR checklist names Qwen35 RAM/OOM"
-reject_text "$RELEASE_LEDGER" 'Qwen35 RAM/OOM user crash path is fully proven|Qwen35.*is release-ready|Qwen35.*release-ready: yes|ZAYA.*is promoted|DSV4.*is promoted|ZAYA.*is release-ready|DSV4.*is release-ready' \
+reject_text "$RELEASE_LEDGER" 'Qwen35 RAM/OOM user crash path is fully proven|Qwen35.*is release-ready|Qwen35.*release-ready: yes|ZAYA.*is promoted|regular.*DSV4.*promoted|plain.*DSV4.*promoted|DSV4.*low-footprint.*is promoted|DSV4.*low-footprint.*release-ready: yes|ZAYA.*is release-ready|DSV4.*is release-ready' \
   "release overclaim wording"
 
 active="$({ ps -axo pid,ppid,rss,etime,command || true; } \

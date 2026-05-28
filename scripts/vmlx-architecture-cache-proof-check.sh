@@ -120,10 +120,10 @@ require_text "$ZAYA_DISK" 'readCCA\(\)\.conv' "ZAYA CCA conv state round-trip co
 require_text "$ZAYA_DISK" 'readCCA\(\)\.prev' "ZAYA CCA previous-state round-trip covered"
 require_text "$ZAYA_DISK" 'Mixed per-layer round-trip: KVCacheSimple \+ ZayaCCACache \+ RotatingKVCache' \
   "ZAYA mixed per-layer cache round-trip covered"
-require_text "$TOPO" 'ZAYA CCA format-v2 disk payload is enough for hybrid cache hit' \
-  "ZAYA topology guard accepts CCA v2 payload as companion cache"
-require_text "$TOPO" 'ZAYA CCA v2 disk payload already carries path-dependent state' \
-  "ZAYA topology guard documents path-dependent CCA state"
+require_text "$TOPO" 'ZAYA CCA format-v2 disk payload is not reused without proven companion boundary' \
+  "ZAYA topology guard rejects unproven CCA v2 reusable prefix hit"
+require_text "$TOPO" 'ZAYA CCA disk payload must not be promoted to a reusable prefix hit without a proven companion boundary' \
+  "ZAYA topology guard documents path-dependent CCA state boundary"
 
 require_text "$TOPO" 'hybridPagedHitRequiresSSMCompanion' \
   "hybrid SSM paged hit requires companion state"
@@ -152,7 +152,7 @@ require_text "$GEMMA_PARSER" 'empty thought channel without newline does not sur
   "Gemma4 no-newline thought regression covered"
 require_text "$GEMMA_PARSER" 'pre<\|channel>thought<channel\|>answer' \
   "Gemma4 no-newline thought fixture covered"
-require_text "$PARSER" 'stripIdentifierOnlyAtEnd: true\)' \
+require_text "$PARSER" 'stripIdentifierOnlyAtEnd: Bool = true' \
   "Gemma4 parser source fix guarded"
 
 require_text "$MEDIA" 'mediaSalt is not folded into the paged block hash chain' \

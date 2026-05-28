@@ -322,6 +322,16 @@ final class Gemma4ChatTemplateProbeTests: XCTestCase {
                 "function": [
                     "name": "get_weather",
                     "description": "fetch current weather",
+                    "parameters": [
+                        "type": "object",
+                        "properties": [
+                            "location": [
+                                "type": "string",
+                                "description": "city name",
+                            ] as [String: Any],
+                        ] as [String: Any],
+                        "required": ["location"],
+                    ] as [String: Any],
                 ] as [String: Any]
             ] as [String: Any]
         ]
@@ -356,6 +366,10 @@ final class Gemma4ChatTemplateProbeTests: XCTestCase {
 
         XCTAssertTrue(out.contains("<|tool>declaration:get_weather"),
             "Tool declaration must emit Gemma-4's <|tool> wrapper. Got: \(out)")
+        XCTAssertTrue(out.contains(#"parameters:{location:{type:<|"|>string<|"|>,description:<|"|>city name<|"|>}}"#),
+            "Tool declaration must include parameter schema and required fields. Got: \(out)")
+        XCTAssertTrue(out.contains(#"required:["location"]"#),
+            "Tool declaration must include required fields. Got: \(out)")
         XCTAssertTrue(out.contains("<|tool_call>call:get_weather{location:<|\"|>Paris<|\"|>}<tool_call|>"),
             "Assistant tool_call must render inline with Gemma's invoke syntax. Got: \(out)")
         XCTAssertTrue(out.contains("<|tool_response>response:get_weather{22°C, sunny}<tool_response|>"),

@@ -98,6 +98,208 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         assertNoSystemToolsRenderBetweenUserAndAssistant(rendered)
     }
 
+    @Test("DSV4 required tool choice reaches DSML protocol block")
+    func dsv4RequiredToolChoiceReachesDSMLProtocolBlock() throws {
+        var context = noSystemToolProbeContext()
+        context["tool_choice"] = "required"
+
+        let compiled = try Template(ChatTemplateFallbacks.dsv4Minimal).renderDSV4(context)
+        assertRequiredToolChoiceDirective(compiled)
+
+        let source = try repositoryFile("Libraries/MLXLMCommon/ChatTemplates/DSV4Minimal.jinja")
+        let standalone = try Template(source).renderDSV4(context)
+        assertRequiredToolChoiceDirective(standalone)
+
+        let swiftRendered = DeepseekV4ChatEncoder().encode(
+            messages: [
+                .init(
+                    role: .system,
+                    content: "You are a local agent.",
+                    tools: [fileReadToolSpec()]
+                ),
+                .init(role: .user, content: "Use file_read."),
+            ],
+            thinkingMode: .chat,
+            toolChoiceRequired: true
+        )
+        assertRequiredToolChoiceDirective(swiftRendered)
+    }
+
+    @Test("Swift DSV4 required tool choice appends latest reminder after conflicting no-tool history")
+    func swiftDSV4RequiredToolChoiceAppendsLatestReminderAfterNoToolHistory() {
+        let rendered = DeepseekV4ChatEncoder().encode(
+            messages: [
+                .init(role: .system, content: "", tools: [lineCountToolSpec()]),
+                .init(role: .user, content: "Use line_count on red\ngreen\nblue."),
+                .init(
+                    role: .assistant,
+                    toolCalls: [
+                        .init(
+                            id: "call_lines",
+                            name: "line_count",
+                            arguments: #"{"text":"red\ngreen\nblue"}"#)
+                    ]),
+                .init(role: .tool, content: #"{"lines":3}"#, toolCallId: "call_lines"),
+                .init(role: .user, content: "How many lines? Do not call another tool."),
+                .init(role: .assistant, content: "Three lines were counted."),
+                .init(role: .user, content: "Now use line_count on one\ntwo.", task: "action"),
+            ],
+            thinkingMode: .chat,
+            toolChoiceRequired: true
+        )
+
+        let action = "<\u{FF5C}action\u{FF5C}>"
+        let reminder = "<\u{FF5C}latest_reminder\u{FF5C}>"
+        let tail = "<\u{FF5C}Assistant\u{FF5C}></think><\u{FF5C}action\u{FF5C}>"
+        let actionRange = rendered.range(of: action)
+        let reminderRange = rendered.range(of: reminder)
+        #expect(actionRange != nil)
+        #expect(reminderRange != nil)
+        #expect(reminderRange!.lowerBound < actionRange!.lowerBound)
+        #expect(rendered.contains("The active API tool_choice is required"))
+        #expect(rendered.contains("<\u{FF5C}DSML\u{FF5C}tool_calls> block"))
+        #expect(rendered.hasSuffix(tail))
+    }
+
+    @Test("Swift DSV4 required tool choice preserves assistant tail after plain no-tool history")
+    func swiftDSV4RequiredToolChoicePreservesAssistantTailAfterPlainNoToolHistory() {
+        let rendered = DeepseekV4ChatEncoder().encode(
+            messages: [
+                .init(role: .system, content: "", tools: [lineCountToolSpec()]),
+                .init(role: .user, content: "Use line_count on red\ngreen\nblue."),
+                .init(
+                    role: .assistant,
+                    toolCalls: [
+                        .init(
+                            id: "call_lines",
+                            name: "line_count",
+                            arguments: #"{"text":"red\ngreen\nblue"}"#)
+                    ]),
+                .init(role: .tool, content: #"{"lines":3}"#, toolCallId: "call_lines"),
+                .init(role: .user, content: "How many lines? Do not call another tool."),
+                .init(role: .assistant, content: "Three lines were counted."),
+                .init(role: .user, content: "Now use line_count on one\ntwo."),
+            ],
+            thinkingMode: .chat,
+            toolChoiceRequired: true
+        )
+
+        let finalUser = "Now use line_count on one\ntwo."
+        let reminder = "<\u{FF5C}latest_reminder\u{FF5C}>"
+        let tail = "<\u{FF5C}Assistant\u{FF5C}></think>"
+        let finalUserRange = rendered.range(of: finalUser)
+        let reminderRange = rendered.range(of: reminder)
+        #expect(finalUserRange != nil)
+        #expect(reminderRange != nil)
+        #expect(reminderRange!.lowerBound < finalUserRange!.lowerBound)
+        #expect(rendered.contains("The active API tool_choice is required"))
+        #expect(rendered.contains("<\u{FF5C}DSML\u{FF5C}tool_calls> block"))
+        #expect(rendered.hasSuffix(tail))
+    }
+
+    @Test("Nemotron required tool choice keeps native XML tool contract")
+    func nemotronRequiredToolChoiceKeepsNativeXMLToolContract() throws {
+        let template = try Template(ChatTemplateFallbacks.nemotronMinimal)
+        let rendered = try template.renderDSV4([
+            "messages": [
+                ["role": "user", "content": "Use line_count on alpha\nbeta."],
+            ],
+            "tools": [
+                [
+                    "type": "function",
+                    "function": [
+                        "name": "line_count",
+                        "description": "Count newline-separated lines in text.",
+                        "parameters": [
+                            "type": "object",
+                            "properties": [
+                                "text": [
+                                    "type": "string",
+                                    "description": "Text to count.",
+                                ] as [String: any Sendable],
+                            ] as [String: any Sendable],
+                            "required": ["text"],
+                        ] as [String: any Sendable],
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable],
+            ],
+            "tool_choice": "required",
+            "add_generation_prompt": true,
+            "enable_thinking": false,
+        ])
+
+        #expect(rendered.contains("# Tools"))
+        #expect(rendered.contains("<tools>"))
+        #expect(rendered.contains("<function>"))
+        #expect(rendered.contains("<name>line_count</name>"))
+        #expect(rendered.contains("<tool_call>"))
+        #expect(rendered.contains("<function=example_function_name>"))
+        #expect(rendered.contains("MUST be a tool call"))
+        #expect(rendered.contains("one available tool and no prose before the tool result"))
+        #expect(!rendered.contains("[AVAILABLE_TOOLS]"))
+        #expect(!rendered.contains("<｜DSML｜"))
+        #expect(rendered.hasSuffix("<|im_start|>assistant\n<think></think>"))
+    }
+
+    @Test("Nemotron required tool choice repeats contract after no-tool history")
+    func nemotronRequiredToolChoiceRepeatsContractAfterNoToolHistory() throws {
+        let template = try Template(ChatTemplateFallbacks.nemotronMinimal)
+        let rendered = try template.renderDSV4([
+            "messages": [
+                ["role": "user", "content": "Use line_count on red\ngreen\nblue."],
+                [
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        [
+                            "id": "call_lines",
+                            "type": "function",
+                            "name": "line_count",
+                            "arguments": ["text": "red\ngreen\nblue"],
+                            "function": [
+                                "name": "line_count",
+                                "arguments": ["text": "red\ngreen\nblue"],
+                            ] as [String: any Sendable],
+                        ] as [String: any Sendable],
+                    ],
+                ] as [String: any Sendable],
+                ["role": "tool", "tool_call_id": "call_lines", "content": #"{"lines":3}"#],
+                ["role": "user", "content": "How many lines? Do not call another tool."],
+                ["role": "assistant", "content": "Three lines were counted."],
+                ["role": "user", "content": "Now use line_count on one\ntwo."],
+            ],
+            "tools": [
+                [
+                    "type": "function",
+                    "function": [
+                        "name": "line_count",
+                        "description": "Count newline-separated lines in text.",
+                        "parameters": [
+                            "type": "object",
+                            "properties": [
+                                "text": ["type": "string"] as [String: any Sendable],
+                            ] as [String: any Sendable],
+                            "required": ["text"],
+                        ] as [String: any Sendable],
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable],
+            ],
+            "tool_choice": "required",
+            "add_generation_prompt": true,
+            "enable_thinking": false,
+        ])
+
+        let finalUser = "Now use line_count on one\ntwo."
+        let tailDirective = "The current assistant response MUST be a tool call."
+        let finalUserRange = try #require(rendered.range(of: finalUser))
+        let tailDirectiveRange = try #require(
+            rendered.range(of: tailDirective, options: .backwards))
+        #expect(tailDirectiveRange.lowerBound > finalUserRange.upperBound)
+        #expect(rendered.contains("<parameter=text>\nred\ngreen\nblue\n</parameter>"))
+        #expect(rendered.contains("<tool_response>\n{\"lines\":3}\n</tool_response>"))
+        #expect(rendered.hasSuffix("<|im_start|>assistant\n<think></think>"))
+    }
+
     @Test("compiled DSV4 fallback renders assistant DSML tool history and tool results")
     func compiledDSV4FallbackRendersAssistantToolHistory() throws {
         let template = try Template(ChatTemplateFallbacks.dsv4Minimal)
@@ -273,6 +475,40 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         ] as [String: any Sendable]
     }
 
+    private func fileReadToolSpec() -> [String: any Sendable] {
+        [
+            "type": "function",
+            "function": [
+                "name": "file_read",
+                "description": "Read a file.",
+                "parameters": [
+                    "type": "object",
+                    "properties": [
+                        "path": ["type": "string"] as [String: any Sendable],
+                    ] as [String: any Sendable],
+                    "required": ["path"] as [String],
+                ] as [String: any Sendable],
+            ] as [String: any Sendable],
+        ] as [String: any Sendable]
+    }
+
+    private func lineCountToolSpec() -> [String: any Sendable] {
+        [
+            "type": "function",
+            "function": [
+                "name": "line_count",
+                "description": "Count newline-separated text lines.",
+                "parameters": [
+                    "type": "object",
+                    "properties": [
+                        "text": ["type": "string"] as [String: any Sendable],
+                    ] as [String: any Sendable],
+                    "required": ["text"] as [String],
+                ] as [String: any Sendable],
+            ] as [String: any Sendable],
+        ] as [String: any Sendable]
+    }
+
     private func assertNoSystemToolsRenderBetweenUserAndAssistant(_ rendered: String) {
         #expect(rendered.contains("## Tools"))
         #expect(rendered.contains("osaurus_no_system_probe"))
@@ -297,6 +533,15 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
             )
         )
         #expect(rendered.contains("Do not emit JSON objects for tool calls"))
+        #expect(rendered.contains("real newline characters inside the parameter body"))
+        #expect(rendered.contains("do not write backslash-n escape sequences"))
+    }
+
+    private func assertRequiredToolChoiceDirective(_ rendered: String) {
+        #expect(rendered.contains("file_read") || rendered.contains("osaurus_no_system_probe"))
+        #expect(rendered.contains("The current assistant response MUST be a tool call"))
+        #expect(rendered.contains("Start with a \"<\u{FF5C}DSML\u{FF5C}tool_calls>\" block"))
+        #expect(rendered.contains("do not answer in prose before the tool result"))
     }
 
     private func assertSystemSeparatedFromUser(_ rendered: String) {
@@ -374,7 +619,10 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
                         "parameters": [
                             "type": "object",
                             "properties": [
-                                "query": ["type": "string"] as [String: any Sendable],
+                                "query": [
+                                    "type": "string",
+                                    "description": "Search query text.",
+                                ] as [String: any Sendable],
                             ] as [String: any Sendable],
                             "required": ["query"],
                         ] as [String: any Sendable],
@@ -384,15 +632,195 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
             "bos_token": "<bos>",
             "add_generation_prompt": true,
             "enable_thinking": false,
+            "tool_choice": "required",
+            "tool_choice_name": "osaurus_probe_tool_0",
         ])
 
         #expect(rendered.contains("<|vision_start|><image><|vision_end|>"))
         #expect(rendered.contains("Describe the image"))
         #expect(rendered.contains("<name>osaurus_probe_tool_0</name>"))
+        #expect(rendered.contains("<name>query</name>"))
+        #expect(rendered.contains("<type>string</type>"))
+        #expect(rendered.contains("<description>Search query text.</description>"))
+        #expect(rendered.contains("<required>[\"query\"]</required>"))
         #expect(rendered.contains("<zyphra_tool_call>"))
+        #expect(rendered.contains("The current assistant response MUST be a tool call"))
+        #expect(rendered.contains("Use the `osaurus_probe_tool_0` function."))
+        #expect(rendered.contains("Required parameters for `osaurus_probe_tool_0`: query."))
+        #expect(rendered.contains("<function=osaurus_probe_tool_0>"))
+        #expect(rendered.contains("<parameter=query>\n\n</parameter>"))
+        #expect(rendered.contains("Required call shape for the current request"))
+        #expect(!rendered.contains("ACTUAL_ARGUMENT_VALUE"))
+        #expect(!rendered.contains("PARAMETER_NAME"))
+        #expect(!rendered.contains("VALUE_FOR_query"))
+        #expect(!rendered.contains("VALUE_FOR_*"))
+        #expect(rendered.contains("Do not wrap the parameter value in JSON quotes"))
         #expect(rendered.hasSuffix("<|im_start|>assistant\n"))
         #expect(!rendered.contains("<think>"))
         #expect(!rendered.contains("enable_thinking"))
+    }
+
+    @Test("ZAYA1-VL required tool choice repeats at current turn after no-tool history")
+    func zayaVLRequiredToolChoiceRepeatsAfterNoToolHistory() throws {
+        let template = try Template(ChatTemplateFallbacks.zayaVLVisionToolMinimal)
+        let rendered = try template.renderDSV4([
+            "messages": [
+                ["role": "user", "content": "Use line_count on red\ngreen\nblue."],
+                [
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        [
+                            "id": "call_lines",
+                            "type": "function",
+                            "function": [
+                                "name": "line_count",
+                                "arguments": ["text": "red\ngreen\nblue"],
+                            ] as [String: any Sendable],
+                        ] as [String: any Sendable],
+                    ],
+                ] as [String: any Sendable],
+                ["role": "tool", "tool_call_id": "call_lines", "content": #"{"lines":3}"#],
+                ["role": "user", "content": "How many lines? Do not call another tool."],
+                ["role": "assistant", "content": "Three lines were counted."],
+                ["role": "user", "content": "Now use line_count on exactly this new text, preserving newlines:\none\ntwo"],
+            ],
+            "tools": [
+                [
+                    "type": "function",
+                    "function": [
+                        "name": "line_count",
+                        "description": "Count newline-separated lines in text.",
+                        "parameters": [
+                            "type": "object",
+                            "properties": [
+                                "text": ["type": "string"] as [String: any Sendable],
+                            ] as [String: any Sendable],
+                            "required": ["text"],
+                        ] as [String: any Sendable],
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable],
+            ],
+            "bos_token": "<bos>",
+            "add_generation_prompt": true,
+            "enable_thinking": false,
+            "tool_choice": "required",
+        ])
+
+        let finalUser = "Now use line_count on exactly this new text, preserving newlines:\none\ntwo"
+        let currentReminder = "The current assistant response MUST be a tool call."
+        let tail = "<|im_start|>assistant\n"
+        let finalUserRange = rendered.range(of: finalUser)
+        let reminderRange = rendered.range(of: currentReminder, options: .backwards)
+        #expect(finalUserRange != nil)
+        #expect(reminderRange != nil)
+        #expect(finalUserRange!.lowerBound < reminderRange!.lowerBound)
+        let afterFinalUser = rendered[finalUserRange!.upperBound...]
+        #expect(afterFinalUser.contains(currentReminder))
+        #expect(!afterFinalUser.contains("<|im_start|>system\n" + currentReminder))
+        let turnRoles = rendered.components(separatedBy: "<|im_start|>")
+            .dropFirst()
+            .compactMap { segment in
+                segment.split(separator: "\n", maxSplits: 1).first.map(String.init)
+            }
+        #expect(turnRoles == ["system", "user", "assistant"])
+        #expect(!rendered.contains("Use line_count on red\ngreen\nblue."))
+        #expect(!rendered.contains("How many lines? Do not call another tool."))
+        #expect(!rendered.contains("Three lines were counted."))
+        #expect(!rendered.contains("Previous tool result available."))
+        #expect(!rendered.contains("<zyphra_tool_response>\n{\"lines\":3}"))
+        #expect(!rendered.contains("<function=line_count>\n<parameter=text>\nred\ngreen\nblue\n</parameter>\n</function>"))
+        #expect(rendered.contains("Required call shape for the current request:\n<zyphra_tool_call>\n<function=line_count>"))
+        #expect(rendered.contains("<parameter=text>\none\ntwo\n</parameter>"))
+        #expect(!rendered.contains("ACTUAL_ARGUMENT_VALUE"))
+        #expect(!rendered.contains("PARAMETER_NAME"))
+        #expect(rendered.contains("Do not omit required parameters."))
+        #expect(rendered.contains("copy that exact text into the string parameter body"))
+        #expect(!rendered.contains("Do not stop before emitting the tool call."))
+        #expect(!rendered.contains("The next assistant message must begin with `<zyphra_tool_call>`."))
+        #expect(!rendered.contains("VALUE_FOR_text"))
+        #expect(rendered.contains("For string parameters, write the raw string value only."))
+        #expect(rendered.hasSuffix(tail))
+    }
+
+    @Test("ZAYA XML parser decodes live HTML line breaks in string parameters")
+    func zayaXMLParserDecodesLiveHTMLLineBreaksInStringParameters() throws {
+        let output = #"""
+            <zyphra_tool_call>
+            <function=line_count>
+            <parameter=text>one<br>two</parameter>
+            </function>
+            </zyphra_tool_call>
+            """#
+        let call = try #require(
+            ToolCallFormat.zayaXml.createParser().parse(
+                content: output,
+                tools: [lineCountToolSpec()]
+            )
+        )
+
+        #expect(call.function.name == "line_count")
+        #expect(call.function.arguments["text"] == .string("one\ntwo"))
+    }
+
+    @Test("ZAYA XML parser unwraps accidental JSON-quoted string parameters")
+    func zayaXMLParserUnwrapsJSONQuotedStringParameters() throws {
+        let content = #"""
+        <zyphra_tool_call>
+        <function=line_count>
+        <parameter=text>
+        "red\ngreen\nblue"
+        </parameter>
+        </function>
+        </zyphra_tool_call>
+        """#
+        let call = try #require(
+            ToolCallFormat.zayaXml.createParser().parse(
+                content: content,
+                tools: [lineCountToolSpec()]))
+
+        #expect(call.function.name == "line_count")
+        #expect(call.function.arguments["text"] == .string("red\ngreen\nblue"))
+    }
+
+    @Test("ZAYA XML parser trims boundary newline after JSON string unwrapping")
+    func zayaXMLParserTrimsBoundaryNewlineAfterJSONStringUnwrapping() throws {
+        let content = #"""
+        <zyphra_tool_call>
+        <function=line_count>
+        <parameter=text>"red\ngreen\nblue\n"</parameter>
+        </function>
+        </zyphra_tool_call>
+        """#
+        let call = try #require(
+            ToolCallFormat.zayaXml.createParser().parse(
+                content: content,
+                tools: [lineCountToolSpec()]))
+
+        #expect(call.function.name == "line_count")
+        #expect(call.function.arguments["text"] == .string("red\ngreen\nblue"))
+    }
+
+    @Test("ZAYA XML parser unwraps accidental raw multiline quoted string parameters")
+    func zayaXMLParserUnwrapsRawMultilineQuotedStringParameters() throws {
+        let content = """
+        <zyphra_tool_call>
+        <function=line_count>
+        <parameter=text>
+        "red
+        green
+        blue"
+        </parameter>
+        </function>
+        </zyphra_tool_call>
+        """
+        let call = try #require(
+            ToolCallFormat.zayaXml.createParser().parse(
+                content: content,
+                tools: [lineCountToolSpec()]))
+
+        #expect(call.function.name == "line_count")
+        #expect(call.function.arguments["text"] == .string("red\ngreen\nblue"))
     }
 
     @Test("ZAYA1-VL sidecar shim rewrites every loader-visible template source")
@@ -489,5 +917,43 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         #expect(tokenizerTemplate.contains("<|vision_start|><image><|vision_end|>"))
         #expect(!tokenizerTemplate.contains("enable_thinking"))
         #expect(!tokenizerTemplate.contains("<think>"))
+    }
+
+    @Test("ZAYA1-VL metadata shim tolerates missing supports_tools key")
+    func zayaVLMetadataShimToleratesMissingSupportsToolsKey() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(
+            "zaya-vl-missing-supports-tools-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let tokenizerConfig: [String: Any] = [
+            "bos_token": "<bos>",
+            "eos_token": "<|im_end|>",
+            "chat_template": "user: {{ messages[0]['content'] }}\nassistant: ",
+        ]
+        let jangConfig: [String: Any] = [
+            "capabilities": [
+                "family": "zaya1_vl",
+                "tool_parser": "zaya_xml",
+                "think_in_template": false,
+                "supports_thinking": true,
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: tokenizerConfig).write(
+            to: root.appendingPathComponent("tokenizer_config.json"))
+        try JSONSerialization.data(withJSONObject: jangConfig).write(
+            to: root.appendingPathComponent("jang_config.json"))
+
+        let shim = JangLoader.resolveChatTemplateSidecarSubstitution(for: root)
+        #expect(shim != root)
+
+        let rewrittenTokenizerData = try Data(
+            contentsOf: shim.appendingPathComponent("tokenizer_config.json"))
+        let rewrittenTokenizer = try #require(
+            JSONSerialization.jsonObject(with: rewrittenTokenizerData) as? [String: Any])
+        let tokenizerTemplate = try #require(rewrittenTokenizer["chat_template"] as? String)
+        #expect(tokenizerTemplate.contains("zyphra_tool_call"))
+        #expect(tokenizerTemplate.contains("<|vision_start|><image><|vision_end|>"))
     }
 }

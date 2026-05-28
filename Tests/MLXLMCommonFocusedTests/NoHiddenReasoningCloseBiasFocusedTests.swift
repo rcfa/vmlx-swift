@@ -31,6 +31,51 @@ struct NoHiddenReasoningCloseBiasFocusedTests {
         #expect(!engine.contains("_parametersWithAutomaticReasoningCloseBias"))
     }
 
+    @Test("sampling applies temperature before probability filters")
+    func samplingAppliesTemperatureBeforeProbabilityFilters() throws {
+        let evaluate = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/Evaluate.swift",
+            encoding: .utf8)
+
+        #expect(evaluate.contains("Temperature is applied before probability filters"))
+        #expect(evaluate.contains("var logprobs = logSoftmax(logits * (1 / temp))"))
+        #expect(evaluate.contains("return categorical(logprobs)"))
+        #expect(!evaluate.contains("return categorical(logprobs * (1 / temp))"))
+        #expect(evaluate.contains("var logprobs = logSoftmax(logits * (1 / MLXArray(temperature)))"))
+        #expect(evaluate.contains("return softmax(logprobs, axis: -1, precise: true)"))
+        #expect(!evaluate.contains("return softmax(logprobs * (1 / MLXArray(temperature))"))
+    }
+
+    @Test("Nemotron Omni image preprocessing uses dynamic source grid")
+    func nemotronOmniImagePreprocessingUsesDynamicSourceGrid() throws {
+        let model = try String(
+            contentsOfFile: "Libraries/MLXVLM/Models/NemotronHOmni/NemotronHOmni.swift",
+            encoding: .utf8)
+        let preprocessors = try String(
+            contentsOfFile: "Libraries/MLXVLM/Models/NemotronHOmni/Preprocessors.swift",
+            encoding: .utf8)
+
+        #expect(model.contains("let gridH = pixelValues.dim(2) / config.visionPatchSize"))
+        #expect(model.contains("let gridW = pixelValues.dim(3) / config.visionPatchSize"))
+        #expect(model.contains("gridH * gridW == P"))
+        #expect(!model.contains("RADIO patch count must be a perfect square"))
+        #expect(!model.contains("let side = Int(Double(P).squareRoot())"))
+        #expect(model.contains("minNumPatches"))
+        #expect(model.contains("maxNumPatches"))
+        #expect(model.contains("maxModelLen"))
+        #expect(model.contains("tokenCounts.map { _ in THW(1, pixels.dim(2), pixels.dim(3)) }"))
+        #expect(model.contains("totalImageTokens = tokenCounts.reduce(0, +)"))
+
+        #expect(preprocessors.contains("private func nemotronOmniSourceTargetPatches("))
+        #expect(preprocessors.contains("tokensAvailable: Int"))
+        #expect(preprocessors.contains("private func rasterizeImage("))
+        #expect(preprocessors.contains("width: Int"))
+        #expect(preprocessors.contains("height: Int"))
+        #expect(preprocessors.contains("throws -> (pixelValues: MLXArray, tokenCounts: [Int])"))
+        #expect(preprocessors.contains("Nemotron Omni image batches with mixed dynamic resolutions are not yet supported"))
+        #expect(!preprocessors.contains("rasterizeTile("))
+    }
+
     @Test("RunBench gates do not count reasoning-only output as visible")
     func runBenchGatesDoNotCountReasoningOnlyOutputAsVisible() throws {
         let files = [
@@ -38,10 +83,15 @@ struct NoHiddenReasoningCloseBiasFocusedTests {
             "RunBench/StabilityBench.swift",
             "RunBench/VLBench.swift",
             "RunBench/OmniBench.swift",
+            "RunBench/JangPressRegressionBench.swift",
         ]
         for file in files {
             let source = try String(contentsOfFile: file, encoding: .utf8)
             #expect(!source.contains("text.isEmpty ? reasoning : text"))
+            #expect(!source.contains("visible.isEmpty ? reasoning : visible"))
+            #expect(!source.contains("visible.isEmpty ? r.reasoning : visible"))
+            #expect(!source.contains("r.text.isEmpty ? r.reasoning : r.text"))
+            #expect(!source.contains("visible.isEmpty ? reasoning.trimmingCharacters"))
             #expect(!source.contains("reasoning.isEmpty ? r.text : r.reasoning"))
             #expect(!source.contains("r1.reasoning.isEmpty ? r1.text : r1.reasoning"))
             #expect(!source.contains("r2.reasoning.isEmpty ? r2.text : r2.reasoning"))
@@ -58,6 +108,10 @@ struct NoHiddenReasoningCloseBiasFocusedTests {
             contentsOfFile: "RunBench/StabilityBench.swift",
             encoding: .utf8)
         #expect(stability.contains("empty visible output"))
+        let jangPress = try String(
+            contentsOfFile: "RunBench/JangPressRegressionBench.swift",
+            encoding: .utf8)
+        #expect(!jangPress.contains("var p = GenerateParameters(maxTokens: maxNewTokens, temperature: 0)"))
     }
 
     @Test("VL media-salt proof reports token rate and peak memory gate")
@@ -94,6 +148,19 @@ struct NoHiddenReasoningCloseBiasFocusedTests {
         #expect(source.contains("grep -q $'\\tfail:'"))
         #expect(source.contains("matrix completed with failing rows"))
         #expect(source.contains("exit 1"))
+        #expect(source.contains("bundle-derived"))
+        #expect(source.contains("sampler_defaults"))
+        #expect(source.contains("fail:missing-bundle-sampler-defaults-would-use-engine-fallback"))
+        #expect(source.contains("missing bundle sampler defaults are failing evidence"))
+        #expect(source.contains("assert_runbench_fresh"))
+        #expect(source.contains("VMLX_MATRIX_ALLOW_STALE_RUNBENCH"))
+        #expect(source.contains("Matrix live proof must not reuse a stale RunBench binary"))
+        #expect(source.contains("-newer \"$binary\""))
+        #expect(source.contains("assert_live_lane_clear"))
+        #expect(source.contains("VMLX_RUNBENCH_LOCK_DIR"))
+        #expect(source.contains("VMLX_MATRIX_ALLOW_ACTIVE_RUNBENCH"))
+        #expect(source.contains("Refusing to start matrix while another RunBench live row is active"))
+        #expect(source.contains("Removing stale RunBench lock before matrix start"))
     }
 
     @Test("terminal info snapshots unclosed reasoning before parser flush")
@@ -465,6 +532,25 @@ struct HarmonyParserFocusedTests {
         #expect(function.body.contains("structured .toolCall event"))
     }
 
+    @Test("DSV4 coherence gate honors bundle defaults")
+    func dsv4CoherenceGateHonorsGenerationDefaults() throws {
+        let bench = try String(contentsOfFile: "RunBench/Bench.swift", encoding: .utf8)
+        let function = try #require(
+            Self.extractFunction(named: "runDSV4CoherenceGate", from: bench),
+            "runDSV4CoherenceGate not found"
+        )
+
+        #expect(function.body.contains("generationConfig: ctx.configuration.generationDefaults"))
+        #expect(function.body.contains("BENCH_DSV4_TEMP\"].flatMap(Float.init)"))
+        #expect(function.body.contains("BENCH_DSV4_TOP_P\"].flatMap(Float.init)"))
+        #expect(function.body.contains("BENCH_DSV4_REPETITION_PENALTY\"].flatMap(Float.init)"))
+        #expect(function.body.contains("BENCH_DSV4_MAX_REPETITION_PENALTY\"].flatMap(Float.init)"))
+        #expect(!function.body.contains("BENCH_DSV4_TEMP\"] ?? \"0\""))
+        #expect(!function.body.contains("BENCH_DSV4_TOP_P\"] ?? \"0.95\""))
+        #expect(!function.body.contains("BENCH_DSV4_REPETITION_PENALTY\"] ?? \"1.0\""))
+        #expect(!function.body.contains("BENCH_DSV4_MAX_REPETITION_PENALTY\"] ?? \"1.05\""))
+    }
+
     private func chunked(_ text: String, by size: Int) -> [String] {
         var chunks: [String] = []
         var index = text.startIndex
@@ -831,6 +917,27 @@ struct BailingThinkingTemplateFocusedTests {
         #expect(replaced[0]["content"] as? String == "detailed thinking off\n\nYou are concise.")
     }
 
+    @Test("named required tool choice does not inject a Bailing prompt directive")
+    func namedRequiredToolChoiceDoesNotInjectBailingPromptDirective() {
+        let messages: [Message] = [
+            ["role": "system", "content": "You are concise."],
+            ["role": "user", "content": "count lines"],
+        ]
+
+        let out = BailingThinkingTemplateContext.apply(
+            to: messages,
+            modelType: "bailing_hybrid",
+            additionalContext: [
+                "tool_choice": "required",
+                "tool_choice_name": "line_count",
+            ])
+
+        let system = out[0]["content"] as? String
+        #expect(out[0]["role"] as? String == "system")
+        #expect(system == "You are concise.")
+        #expect(out.count == messages.count)
+    }
+
     @Test("non-Bailing model and missing toggle are unchanged")
     func nonBailingOrMissingToggleUnchanged() {
         let messages: [Message] = [
@@ -851,6 +958,134 @@ struct BailingThinkingTemplateFocusedTests {
             additionalContext: nil)
         #expect(noToggle[0]["content"] as? String == "You are concise.")
         #expect(noToggle.count == messages.count)
+    }
+}
+
+@Suite("Nemotron tool-choice template focused contracts")
+struct NemotronToolChoiceTemplateFocusedTests {
+    @Test("tool_choice required does not prepend Nemotron XML prompt contract")
+    func requiredToolChoiceDoesNotPrependNemotronXMLDirective() {
+        let messages: [Message] = [
+            ["role": "system", "content": "You are concise."],
+            ["role": "user", "content": "Use line_count on red\ngreen\nblue."],
+        ]
+
+        let out = NemotronToolChoiceTemplateContext.apply(
+            to: messages,
+            modelType: "nemotron_h",
+            additionalContext: ["tool_choice": "required", "tool_choice_name": "line_count"])
+
+        let system = out[0]["content"] as? String
+        #expect(out[0]["role"] as? String == "system")
+        #expect(system == "You are concise.")
+        #expect(out[1]["content"] as? String == "Use line_count on red\ngreen\nblue.")
+        #expect(out.count == messages.count)
+    }
+
+    @Test("Nemotron named required tool choice leaves existing messages unchanged")
+    func namedRequiredToolChoiceLeavesExistingMessagesUnchanged() {
+        let messages: [Message] = [
+            [
+                "role": "system",
+                "content": """
+                    You are concise.
+                    """,
+            ],
+            ["role": "user", "content": "Use file_read on ./mandelbrot.py."],
+        ]
+
+        let out = NemotronToolChoiceTemplateContext.apply(
+            to: messages,
+            modelType: "nemotron_h",
+            additionalContext: ["tool_choice": "required", "tool_choice_name": "file_read"])
+
+        let system = out[0]["content"] as? String
+        #expect(system?.contains("You are concise.") == true)
+        #expect(system?.contains("return exactly one <tool_call>") == false)
+        #expect(out.count == messages.count)
+    }
+
+    @Test("Nemotron XML tool parser unescapes multiline string parameters")
+    func nemotronXMLParserUnescapesMultilineStringParameters() {
+        let output = #"""
+            <tool_call>
+            <function=line_count>
+            <parameter=text>red\ngreen\nblue</parameter>
+            </function>
+            </tool_call>
+            """#
+        let call = NemotronToolCallParser().parseEOS(output, tools: lineCountToolSchema()).first
+
+        #expect(call?.function.name == "line_count")
+        #expect(call?.function.arguments["text"] == .string("red\ngreen\nblue"))
+    }
+
+    @Test("Nemotron required tool choice does not insert synthetic system message")
+    func requiredToolChoiceDoesNotInsertSystemWhenMissing() {
+        let messages: [Message] = [
+            ["role": "user", "content": "Use line_count on one\ntwo."],
+        ]
+
+        let out = NemotronToolChoiceTemplateContext.apply(
+            to: messages,
+            modelType: "nemotron_h",
+            additionalContext: ["tool_choice": "required"])
+
+        #expect(out.count == messages.count)
+        #expect(out[0]["role"] as? String == "user")
+        #expect(out[0]["content"] as? String == "Use line_count on one\ntwo.")
+    }
+
+    @Test("Nemotron required fallback does not append a late system turn")
+    func requiredFallbackDoesNotAppendLateSystemTurn() {
+        #expect(ChatTemplateFallbacks.nemotronMinimal.contains("<IMPORTANT>"))
+        #expect(!ChatTemplateFallbacks.nemotronMinimal.contains("""
+            {% endfor -%}
+            {%- if required_tool_choice %}
+            <|im_start|>system
+            """))
+    }
+
+    @Test("non-required or non-Nemotron messages are unchanged")
+    func nonRequiredOrNonNemotronUnchanged() {
+        let messages: [Message] = [
+            ["role": "system", "content": "You are concise."],
+            ["role": "user", "content": "hello"],
+        ]
+
+        let auto = NemotronToolChoiceTemplateContext.apply(
+            to: messages,
+            modelType: "nemotron_h",
+            additionalContext: ["tool_choice": "auto"])
+        let qwen = NemotronToolChoiceTemplateContext.apply(
+            to: messages,
+            modelType: "qwen3_5_moe",
+            additionalContext: ["tool_choice": "required"])
+
+        #expect(auto[0]["content"] as? String == "You are concise.")
+        #expect(qwen[0]["content"] as? String == "You are concise.")
+        #expect(auto.count == messages.count)
+        #expect(qwen.count == messages.count)
+    }
+
+    private func lineCountToolSchema() -> [[String: any Sendable]] {
+        let parameters: [String: any Sendable] = [
+            "type": "object",
+            "properties": [
+                "text": ["type": "string"] as [String: any Sendable],
+            ] as [String: any Sendable],
+            "required": ["text"],
+        ]
+        let function: [String: any Sendable] = [
+            "name": "line_count",
+            "parameters": parameters,
+        ]
+        return [
+            [
+                "type": "function",
+                "function": function,
+            ] as [String: any Sendable]
+        ]
     }
 }
 
@@ -1043,6 +1278,37 @@ struct DirectCapabilityParserAliasFocusedTests {
             #expect(ReasoningParser.fromCapabilityName(stamp) != nil)
             #expect(ToolCallFormat.fromCapabilityName(stamp) == .glm4)
         }
+    }
+
+    @Test("Ling legacy deepseek stamp follows JSON tool_call chat template")
+    func lingLegacyDeepseekStampFollowsJSONToolCallTemplate() {
+        let capabilities = JangCapabilities(
+            reasoningParser: "deepseek_r1",
+            toolParser: "deepseek",
+            supportsTools: true,
+            supportsThinking: true,
+            family: "bailing_hybrid",
+            cacheType: "hybrid")
+        let template = #"""
+        {%- if tools %}
+        <tool_call>
+        {"name": <function-name>, "arguments": <args-json-object>}
+        </tool_call>
+        {%- endif %}
+        """#
+
+        let (format, source) = ParserResolution.toolCall(
+            capabilities: capabilities,
+            modelType: "bailing_hybrid",
+            chatTemplate: template)
+
+        #expect(format == .json)
+        #expect(source == .chatTemplate)
+
+        let processor = ToolCallProcessor(format: format ?? .glm4)
+        #expect(processor.processChunk(#"<tool_call>{"name":"line_count","arguments":{"path":"/tmp/a"}}</tool_call>"#) == nil)
+        #expect(processor.toolCalls.first?.function.name == "line_count")
+        #expect(processor.toolCalls.first?.function.arguments["path"] == .string("/tmp/a"))
     }
 
     @Test("Qwen3.6 and Qwen3-VL model-type fallbacks route to XML tools")
@@ -1380,6 +1646,12 @@ struct Gemma4VLMFocusedSourceContractsTests {
         #expect(overload.contains("ChatTemplateFallbacks.gemma4WithTools"))
         #expect(overload.contains("ChatTemplateFallbacks.dsv4Minimal"))
         #expect(overload.contains("ChatTemplateFallbacks.nemotronMinimal"))
+        #expect(overload.contains("!(tools?.isEmpty ?? true)"))
+        #expect(overload.contains("upstream.bosToken == \"<s>\""))
+        #expect(overload.contains("upstream.convertTokenToId(\"<|im_end|>\") != nil"))
+        #expect(!overload.contains("upstream.convertTokenToId(\"[AVAILABLE_TOOLS]\") != nil"))
+        #expect(!overload.contains("upstream.convertTokenToId(\"<tool_call>\") != nil"))
+        #expect(!overload.contains("upstream.convertTokenToId(\"<tool_response>\") != nil"))
         #expect(overload.contains("addGenerationPrompt: addGenerationPrompt"))
     }
 
