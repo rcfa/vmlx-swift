@@ -305,8 +305,14 @@ struct ChatMessageToolCallTests {
         let priorMessages = Array(compacted.dropLast())
         #expect(priorMessages.allSatisfy { $0["tool_calls"] == nil })
         #expect(!priorMessages.contains { $0["role"] as? String == "tool" })
+        #expect(!compacted.contains {
+            Self.contentText($0["content"]) == "Use line_count on this exact text: red\ngreen\nblue"
+        })
         #expect(compacted.contains {
             Self.contentText($0["content"]) == "Three lines were counted."
+        })
+        #expect(!compacted.contains {
+            Self.contentText($0["content"]) == "How many lines were counted?"
         })
         #expect(Self.contentText(compacted.last?["content"]) == "Now use line_count on this exact text: one\ntwo")
     }
@@ -336,6 +342,9 @@ struct ChatMessageToolCallTests {
         let priorMessages = Array(compacted.dropLast())
         #expect(priorMessages.allSatisfy { $0["tool_calls"] == nil })
         #expect(!priorMessages.contains { $0["role"] as? String == "tool" })
+        #expect(!compacted.contains {
+            Self.contentText($0["content"]) == "Use line_count on this exact text: red\ngreen\nblue"
+        })
         #expect(compacted.contains {
             Self.contentText($0["content"]) == #"Tool line_count returned {"lines":3}."#
         })

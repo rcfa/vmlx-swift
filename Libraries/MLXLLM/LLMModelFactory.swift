@@ -1053,11 +1053,14 @@ private struct LLMUserInputProcessor: UserInputProcessor {
             modelType: modelType,
             additionalContext: additionalContext
         )
-        let messages = NemotronToolChoiceTemplateContext.apply(
+        var messages = NemotronToolChoiceTemplateContext.apply(
             to: bailingMessages,
             modelType: modelType,
             additionalContext: additionalContext
         )
+        if shouldCompactGemma4RequiredToolHistory(additionalContext) {
+            messages = compactGemma4RequiredToolHistory(messages)
+        }
         do {
             let promptTokens = try tokenizer.applyChatTemplate(
                 messages: messages, tools: input.tools, additionalContext: additionalContext)
@@ -1104,6 +1107,52 @@ private struct LLMUserInputProcessor: UserInputProcessor {
             merged.isEmpty ? nil : merged,
             modelType: modelType
         )
+    }
+
+    private func shouldCompactGemma4RequiredToolHistory(
+        _ additionalContext: [String: any Sendable]?
+    ) -> Bool {
+        guard let modelType else { return false }
+        let normalized = modelType
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+        guard normalized == "gemma4" || normalized == "gemma4_text" else {
+            return false
+        }
+        if (additionalContext?["tool_choice"] as? String) == "required" {
+            return true
+        }
+        if let name = additionalContext?["tool_choice_name"] as? String,
+           !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return true
+        }
+        return false
+    }
+
+    private func compactGemma4RequiredToolHistory(
+        _ messages: [[String: any Sendable]]
+    ) -> [[String: any Sendable]] {
+        guard let latestUserIndex = messages.lastIndex(where: {
+            let role = $0["role"] as? String
+            return role == "user" || role == "developer"
+        }) else {
+            return messages
+        }
+
+        var compacted: [[String: any Sendable]] = []
+        compacted.reserveCapacity(messages.count)
+        for message in messages[..<latestUserIndex] {
+            guard let role = message["role"] as? String else { continue }
+            if role == "system" || role == "developer" {
+                compacted.append(message)
+            }
+        }
+        compacted.append(messages[latestUserIndex])
+        if latestUserIndex + 1 < messages.endIndex {
+            compacted.append(contentsOf: messages[(latestUserIndex + 1)...])
+        }
+        return compacted
     }
 
     private func canonicalHistoryCacheBoundaries(

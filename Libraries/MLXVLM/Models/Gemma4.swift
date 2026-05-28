@@ -1138,6 +1138,10 @@ public struct Gemma4Processor: UserInputProcessor {
                 continue
             }
 
+            if message["role"] as? String == "user" {
+                continue
+            }
+
             if message["role"] as? String == "assistant",
                let toolCalls = message["tool_calls"] as? [[String: any Sendable]],
                !toolCalls.isEmpty
