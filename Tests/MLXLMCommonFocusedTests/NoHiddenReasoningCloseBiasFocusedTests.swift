@@ -31,6 +31,51 @@ struct NoHiddenReasoningCloseBiasFocusedTests {
         #expect(!engine.contains("_parametersWithAutomaticReasoningCloseBias"))
     }
 
+    @Test("sampling applies temperature before probability filters")
+    func samplingAppliesTemperatureBeforeProbabilityFilters() throws {
+        let evaluate = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/Evaluate.swift",
+            encoding: .utf8)
+
+        #expect(evaluate.contains("Temperature is applied before probability filters"))
+        #expect(evaluate.contains("var logprobs = logSoftmax(logits * (1 / temp))"))
+        #expect(evaluate.contains("return categorical(logprobs)"))
+        #expect(!evaluate.contains("return categorical(logprobs * (1 / temp))"))
+        #expect(evaluate.contains("var logprobs = logSoftmax(logits * (1 / MLXArray(temperature)))"))
+        #expect(evaluate.contains("return softmax(logprobs, axis: -1, precise: true)"))
+        #expect(!evaluate.contains("return softmax(logprobs * (1 / MLXArray(temperature))"))
+    }
+
+    @Test("Nemotron Omni image preprocessing uses dynamic source grid")
+    func nemotronOmniImagePreprocessingUsesDynamicSourceGrid() throws {
+        let model = try String(
+            contentsOfFile: "Libraries/MLXVLM/Models/NemotronHOmni/NemotronHOmni.swift",
+            encoding: .utf8)
+        let preprocessors = try String(
+            contentsOfFile: "Libraries/MLXVLM/Models/NemotronHOmni/Preprocessors.swift",
+            encoding: .utf8)
+
+        #expect(model.contains("let gridH = pixelValues.dim(2) / config.visionPatchSize"))
+        #expect(model.contains("let gridW = pixelValues.dim(3) / config.visionPatchSize"))
+        #expect(model.contains("gridH * gridW == P"))
+        #expect(!model.contains("RADIO patch count must be a perfect square"))
+        #expect(!model.contains("let side = Int(Double(P).squareRoot())"))
+        #expect(model.contains("minNumPatches"))
+        #expect(model.contains("maxNumPatches"))
+        #expect(model.contains("maxModelLen"))
+        #expect(model.contains("tokenCounts.map { _ in THW(1, pixels.dim(2), pixels.dim(3)) }"))
+        #expect(model.contains("totalImageTokens = tokenCounts.reduce(0, +)"))
+
+        #expect(preprocessors.contains("private func nemotronOmniSourceTargetPatches("))
+        #expect(preprocessors.contains("tokensAvailable: Int"))
+        #expect(preprocessors.contains("private func rasterizeImage("))
+        #expect(preprocessors.contains("width: Int"))
+        #expect(preprocessors.contains("height: Int"))
+        #expect(preprocessors.contains("throws -> (pixelValues: MLXArray, tokenCounts: [Int])"))
+        #expect(preprocessors.contains("Nemotron Omni image batches with mixed dynamic resolutions are not yet supported"))
+        #expect(!preprocessors.contains("rasterizeTile("))
+    }
+
     @Test("RunBench gates do not count reasoning-only output as visible")
     func runBenchGatesDoNotCountReasoningOnlyOutputAsVisible() throws {
         let files = [
