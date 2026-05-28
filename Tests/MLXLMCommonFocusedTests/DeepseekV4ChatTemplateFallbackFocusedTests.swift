@@ -878,6 +878,47 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         #expect(jinjaTemplate == tokenizerTemplate)
     }
 
+    @Test("ZAYA1 text metadata shim uses Zyphra XML tools")
+    func zayaTextMetadataShimUsesZyphraXMLTools() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(
+            "zaya-text-metadata-shim-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let tokenizerConfig: [String: Any] = [
+            "bos_token": "<bos>",
+            "eos_token": "<|im_end|>",
+            "chat_template": "user: {{ messages[0]['content'] }}\nassistant: ",
+        ]
+        let jangConfig: [String: Any] = [
+            "capabilities": [
+                "family": "zaya1",
+                "tool_parser": "zaya_xml",
+                "think_in_template": false,
+                "supports_tools": true,
+                "supports_thinking": true,
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: tokenizerConfig).write(
+            to: root.appendingPathComponent("tokenizer_config.json"))
+        try JSONSerialization.data(withJSONObject: jangConfig).write(
+            to: root.appendingPathComponent("jang_config.json"))
+
+        let shim = JangLoader.resolveChatTemplateSidecarSubstitution(for: root)
+        #expect(shim != root)
+
+        let rewrittenTokenizerData = try Data(
+            contentsOf: shim.appendingPathComponent("tokenizer_config.json"))
+        let rewrittenTokenizer = try #require(
+            JSONSerialization.jsonObject(with: rewrittenTokenizerData) as? [String: Any])
+        let tokenizerTemplate = try #require(rewrittenTokenizer["chat_template"] as? String)
+        #expect(tokenizerTemplate.contains("zyphra_tool_call"))
+        #expect(tokenizerTemplate.contains("<required>"))
+        #expect(!tokenizerTemplate.contains("enable_thinking"))
+        #expect(!tokenizerTemplate.contains("<think>"))
+    }
+
     @Test("ZAYA1-VL metadata shim engages without sidecar template")
     func zayaVLMetadataShimEngagesWithoutSidecarTemplate() throws {
         let fm = FileManager.default

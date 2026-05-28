@@ -803,8 +803,13 @@ public struct JangLoader: Sendable {
         }
 
         let currentTemplate = configJSON["chat_template"] as? String
-        let zayaToolAware = shouldUseZayaVLToolAwareTemplate(for: directory)
-        if let currentTemplate, templateAlreadyMatchesZayaVLToolAware(currentTemplate) {
+        let zayaToolAware = shouldUseZayaToolAwareTemplate(for: directory)
+        let zayaVLToolAware = shouldUseZayaVLToolAwareTemplate(for: directory)
+        if let currentTemplate,
+           zayaToolAware,
+           templateAlreadyMatchesZayaToolAware(currentTemplate),
+           (!zayaVLToolAware || isVisionChatTemplate(currentTemplate))
+        {
             return directory
         }
 
@@ -887,6 +892,28 @@ public struct JangLoader: Sendable {
     private static func templateAlreadyMatchesZayaVLToolAware(_ template: String) -> Bool {
         isVisionChatTemplate(template)
             && template.contains("zyphra_tool_call")
+    }
+
+    private static func templateAlreadyMatchesZayaToolAware(_ template: String) -> Bool {
+        template.contains("zyphra_tool_call")
+    }
+
+    private static func shouldUseZayaToolAwareTemplate(for directory: URL) -> Bool {
+        guard let config = try? loadConfig(at: directory) else {
+            return false
+        }
+
+        let family = config.capabilities?.family?.lowercased() ?? ""
+        let parser = config.capabilities?.toolParser?.lowercased() ?? ""
+        let supportsTools = config.capabilities?.supportsTools
+        let isZayaText = family == "zaya"
+            || family == "zaya1"
+            || family.hasPrefix("zaya1_")
+            || family.hasPrefix("zaya1-")
+        return isZayaText
+            && ["zaya", "zaya_xml", "zyphra", "zyphra_xml"].contains(parser)
+            && config.capabilities?.thinkInTemplate == false
+            && supportsTools != false
     }
 
     private static func shouldUseZayaVLToolAwareTemplate(for directory: URL) -> Bool {
