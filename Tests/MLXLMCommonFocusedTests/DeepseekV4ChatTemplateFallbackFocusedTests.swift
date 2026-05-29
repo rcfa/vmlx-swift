@@ -822,9 +822,11 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         #expect(!rendered.contains("argument_name"))
         #expect(rendered.contains("Use the `line_count` function."))
         #expect(rendered.contains("Required parameters for `line_count`: text."))
-        #expect(rendered.contains(#"Call syntax: [line_count(text="argument value")]."#))
+        #expect(rendered.contains(#"Call syntax: [line_count(text=<real string value>)]."#))
         #expect(rendered.contains("Required assistant message for the current request:"))
         #expect(rendered.contains(#"[line_count(text="red\ngreen\nblue")]"#))
+        #expect(!rendered.contains("argument value"))
+        #expect(!rendered.contains("..."))
         #expect(rendered.contains("instead of replying with JSON"))
         #expect(rendered.contains("Do not think out loud"))
         #expect(!rendered.contains("Liquid/Python call list"))
@@ -832,6 +834,52 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         #expect(rendered.contains(#"preserving every newline as \n and adding no spaces"#))
         #expect(!rendered.contains("<think>"))
         #expect(!rendered.contains("enable_thinking"))
+        #expect(rendered.hasSuffix("<|im_start|>assistant\n"))
+    }
+
+    @Test("LFM2 fallback repeats exact required tool value after history")
+    func lfm2FallbackRepeatsExactRequiredToolValueAfterHistory() throws {
+        let rendered = try Template(ChatTemplateFallbacks.lfm2ToolMinimal).renderDSV4([
+            "messages": [
+                ["role": "user", "content": "Use the line_count tool on this exact text: red\ngreen\nblue"],
+                [
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        [
+                            "id": "call_lines",
+                            "type": "function",
+                            "function": [
+                                "name": "line_count",
+                                "arguments": ["text": "red\ngreen\nblue"],
+                            ] as [String: any Sendable],
+                        ] as [String: any Sendable],
+                    ],
+                ] as [String: any Sendable],
+                ["role": "tool", "tool_call_id": "call_lines", "content": #"{"lines":3}"#],
+                ["role": "user", "content": "How many lines were counted? Answer plainly in one short sentence. Do not call another tool."],
+                ["role": "assistant", "content": "\nThere were 3 lines counted."],
+                ["role": "user", "content": "Now use line_count on this exact text: one\ntwo"],
+            ],
+            "tools": [lineCountToolSpec()],
+            "bos_token": "<|startoftext|>",
+            "add_generation_prompt": true,
+            "enable_thinking": false,
+            "tool_choice": "required",
+            "tool_choice_name": "line_count",
+        ])
+
+        let finalUser = "Now use line_count on this exact text: one\ntwo"
+        let finalUserRange = rendered.range(of: finalUser)
+        #expect(finalUserRange != nil)
+        let afterFinalUser = rendered[finalUserRange!.upperBound...]
+        #expect(afterFinalUser.contains("The active API tool_choice is required"))
+        #expect(afterFinalUser.contains("Current exact value for `text`:\none\ntwo"))
+        #expect(afterFinalUser.contains(#"[line_count(text="one\ntwo")]"#))
+        #expect(afterFinalUser.contains("Do not replace this value with ellipsis"))
+        #expect(!afterFinalUser.contains(#"[line_count(text="red\ngreen\nblue")]"#))
+        #expect(!afterFinalUser.contains("argument value"))
+        #expect(!afterFinalUser.contains("..."))
         #expect(rendered.hasSuffix("<|im_start|>assistant\n"))
     }
 

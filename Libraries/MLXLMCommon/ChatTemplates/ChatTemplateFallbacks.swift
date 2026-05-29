@@ -1193,24 +1193,36 @@ The current assistant response MUST be a tool call. This applies to the latest u
                 {{- '\nRequired parameters for `' ~ required_tool_name ~ '`: ' ~ (selected_tool['parameters']['required'] | join(', ')) ~ '.' -}}
                 {%- if selected_tool['parameters']['required'] | length == 1 -%}
                     {%- set sample_param = selected_tool['parameters']['required'][0] -%}
-                    {{- '\nCall syntax: [' ~ required_tool_name ~ '(' ~ sample_param ~ '="argument value")].' -}}
+                    {{- '\nCall syntax: [' ~ required_tool_name ~ '(' ~ sample_param ~ '=<real string value>)].' -}}
                 {%- endif -%}
                 {%- for param_name in selected_tool['parameters']['required'] -%}
                     {%- set exact = namespace(value='') -%}
                     {%- set latest_user_text = parse_content(latest_user_content) -%}
                     {%- set exact_markers = [
                         'on this exact ' ~ param_name ~ ':',
+                        'On this exact ' ~ param_name ~ ':',
                         'this exact ' ~ param_name ~ ':',
+                        'This exact ' ~ param_name ~ ':',
                         'exact ' ~ param_name ~ ':',
+                        'Exact ' ~ param_name ~ ':',
                         'on exactly this ' ~ param_name ~ ':',
+                        'On exactly this ' ~ param_name ~ ':',
                         'exactly this ' ~ param_name ~ ':',
+                        'Exactly this ' ~ param_name ~ ':',
                         'on this exact text:',
+                        'On this exact text:',
                         'this exact text:',
+                        'This exact text:',
                         'exact text:',
+                        'Exact text:',
                         'on exactly this text:',
+                        'On exactly this text:',
                         'exactly this text:',
+                        'Exactly this text:',
                         'use ' ~ required_tool_name ~ ' on this exact text:',
-                        'now use ' ~ required_tool_name ~ ' on this exact text:'
+                        'Use ' ~ required_tool_name ~ ' on this exact text:',
+                        'now use ' ~ required_tool_name ~ ' on this exact text:',
+                        'Now use ' ~ required_tool_name ~ ' on this exact text:'
                     ] -%}
                     {%- for marker in exact_markers -%}
                         {%- if not exact.value and latest_user_text is string and marker in latest_user_text -%}
@@ -1218,7 +1230,9 @@ The current assistant response MUST be a tool call. This applies to the latest u
                         {%- endif -%}
                     {%- endfor -%}
                     {%- if exact.value -%}
+                        {{- '\nCurrent exact value for `' ~ param_name ~ '`:\n' ~ exact.value -}}
                         {{- '\nRequired assistant message for the current request:\n[' ~ required_tool_name ~ '(' ~ param_name ~ '=' ~ (exact.value | tojson) ~ ')]' -}}
+                        {{- '\nDo not replace this value with ellipsis, placeholders, summaries, or prior-turn text.' -}}
                     {%- endif -%}
                 {%- endfor -%}
                 {{- '\nUse keyword arguments exactly as shown; do not use positional arguments. If the latest user message asks to use exact text, copy that exact text into the string argument, preserving every newline as \\n and adding no spaces.' -}}
