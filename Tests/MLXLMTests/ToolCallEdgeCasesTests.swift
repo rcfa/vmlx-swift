@@ -66,6 +66,23 @@ struct ToolCallEdgeCasesTests {
         return output
     }
 
+    private func lineCountToolSpec() -> [String: any Sendable] {
+        [
+            "type": "function",
+            "function": [
+                "name": "line_count",
+                "parameters": [
+                    "type": "object",
+                    "properties": [
+                        "text": ["type": "string"] as [String: any Sendable],
+                    ] as [String: any Sendable],
+                    "required": ["text"],
+                    "additionalProperties": false,
+                ] as [String: any Sendable],
+            ] as [String: any Sendable],
+        ]
+    }
+
     // MARK: - Gemma-4 escape-marker regression guard
 
     /// The default escape marker on `GemmaFunctionParser.init(startTag:endTag:)`
@@ -184,6 +201,50 @@ struct ToolCallEdgeCasesTests {
             "User-visible text must not contain <tool_call>.")
         #expect(userVisible.contains("Final answer: nice weather"),
             "User-visible text must carry the final answer.")
+    }
+
+    @Test("LFM2 does not parse tool-call-looking deliberation as a tool call")
+    func testLFM2DoesNotParseToolCallLookingReasoning() throws {
+        let processor = ToolCallProcessor(format: .lfm2, tools: [lineCountToolSpec()])
+        let reasoningEvents = routeGenerationText(
+            "We need to call line_count() with the exact text first.",
+            channel: .reasoning,
+            through: processor)
+
+        #expect(reasoningEvents.compactMap(\.toolCall).isEmpty)
+        #expect(reasoningEvents.compactMap(\.reasoning).joined().contains("line_count()"))
+
+        let contentEvents = routeGenerationText(
+            #"<|tool_call_start|>[line_count(text="red\ngreen\nblue")]<|tool_call_end|>"#,
+            channel: .content,
+            through: processor)
+        let call = try #require(contentEvents.compactMap(\.toolCall).first)
+        #expect(call.function.name == "line_count")
+        #expect(call.function.arguments["text"] == .string("red\ngreen\nblue"))
+    }
+
+    @Test("Gemma4 still parses tool calls from reasoning channel")
+    func testGemma4StillParsesToolCallsFromReasoningChannel() throws {
+        let processor = ToolCallProcessor(format: .gemma4, tools: [lineCountToolSpec()])
+        let events = routeGenerationText(
+            """
+            <zyphra_tool_call>
+            <function=line_count>
+            <parameter=text>
+            red
+            green
+            blue
+            </parameter>
+            </function>
+            </zyphra_tool_call>
+            """,
+            channel: .reasoning,
+            through: processor)
+
+        let call = try #require(events.compactMap(\.toolCall).first)
+        #expect(call.function.name == "line_count")
+        #expect(call.function.arguments["text"] == .string("red\ngreen\nblue"))
+        #expect(events.compactMap(\.chunk).joined().isEmpty)
     }
 
     /// Character-by-character streaming — matches what NaiveStreamingDetokenizer

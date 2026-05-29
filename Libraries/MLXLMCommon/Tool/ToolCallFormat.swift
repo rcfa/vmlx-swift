@@ -213,6 +213,20 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         }
     }
 
+    /// Whether this tool-call format should be extracted from the reasoning
+    /// channel. Most families can emit a real tool envelope immediately after
+    /// a reasoning close marker and therefore keep this enabled. LFM2 is an
+    /// exception in live Osaurus rows: it may mention `line_count()` while
+    /// deliberating, before the final native `<|tool_call_start|>...` call.
+    public var parsesToolCallsFromReasoningChannel: Bool {
+        switch self {
+        case .lfm2:
+            return false
+        default:
+            return true
+        }
+    }
+
     /// Infer the tool call format based on model type from config.json.
     ///
     /// This method maps known model types to their corresponding tool call formats,

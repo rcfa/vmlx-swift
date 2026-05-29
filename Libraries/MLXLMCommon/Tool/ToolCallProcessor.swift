@@ -28,6 +28,7 @@ public class ToolCallProcessor {
 
     private let parser: any ToolCallParser
     private let tools: [[String: any Sendable]]?
+    public let parsesToolCallsFromReasoningChannel: Bool
     private var state = State.normal
     private var toolCallBuffer = ""
     private var leadingTextBeforeToolCall = ""
@@ -70,6 +71,7 @@ public class ToolCallProcessor {
     public init(format: ToolCallFormat = .json, tools: [[String: any Sendable]]? = nil) {
         self.parser = format.createParser()
         self.tools = tools
+        self.parsesToolCallsFromReasoningChannel = format.parsesToolCallsFromReasoningChannel
     }
 
     // MARK: - Computed Properties

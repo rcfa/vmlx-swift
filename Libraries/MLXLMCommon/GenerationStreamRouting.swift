@@ -19,6 +19,9 @@ public func routeGenerationText(
             return [.reasoning(text)]
         }
     }
+    if channel == .reasoning, !toolCallProcessor.parsesToolCallsFromReasoningChannel {
+        return text.isEmpty ? [] : [.reasoning(text)]
+    }
 
     var events: [Generation] = []
     let toolCallCountBeforeChunk = toolCallProcessor.toolCalls.count
@@ -49,6 +52,9 @@ public func flushGenerationText(
     through toolCallProcessor: ToolCallProcessor?
 ) -> [Generation] {
     guard let toolCallProcessor else { return [] }
+    if channel == .reasoning, !toolCallProcessor.parsesToolCallsFromReasoningChannel {
+        return []
+    }
 
     var events: [Generation] = []
     if let visible = toolCallProcessor.processEOS() {
