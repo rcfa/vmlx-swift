@@ -778,6 +778,90 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         #expect(rendered.hasSuffix(tail))
     }
 
+    @Test("LFM2 fallback keeps optional tools optional")
+    func lfm2FallbackKeepsOptionalToolsOptional() throws {
+        let rendered = try Template(ChatTemplateFallbacks.lfm2ToolMinimal).renderDSV4([
+            "messages": [
+                ["role": "user", "content": "Count the lines only if a tool is needed."],
+            ],
+            "tools": [lineCountToolSpec()],
+            "bos_token": "<|startoftext|>",
+            "add_generation_prompt": true,
+            "enable_thinking": false,
+        ])
+
+        #expect(rendered.contains("List of tools:"))
+        #expect(rendered.contains("\"name\":\"line_count\""))
+        #expect(rendered.contains("<|tool_call_start|>") == false)
+        #expect(rendered.contains("tool_choice is required") == false)
+        #expect(rendered.contains("MUST") == false)
+        #expect(rendered.hasSuffix("<|im_start|>assistant\n"))
+        #expect(!rendered.contains("<think>"))
+        #expect(!rendered.contains("enable_thinking"))
+    }
+
+    @Test("LFM2 fallback honors required named tool choice")
+    func lfm2FallbackHonorsRequiredNamedToolChoice() throws {
+        let rendered = try Template(ChatTemplateFallbacks.lfm2ToolMinimal).renderDSV4([
+            "messages": [
+                ["role": "user", "content": "Use the line_count tool on this exact text: red\ngreen\nblue"],
+            ],
+            "tools": [lineCountToolSpec()],
+            "bos_token": "<|startoftext|>",
+            "add_generation_prompt": true,
+            "enable_thinking": false,
+            "tool_choice": "required",
+            "tool_choice_name": "line_count",
+        ])
+
+        #expect(rendered.contains("The active API tool_choice is required"))
+        #expect(rendered.contains("<|tool_call_start|>[FUNCTION_NAME(ARGUMENT_NAME='ARGUMENT_VALUE')]<|tool_call_end|>"))
+        #expect(rendered.contains("Use the `line_count` function."))
+        #expect(rendered.contains("Required parameters for `line_count`: text."))
+        #expect(rendered.contains("<|tool_call_start|>[line_count(text='red\ngreen\nblue')]<|tool_call_end|>"))
+        #expect(rendered.contains("preserving newlines"))
+        #expect(!rendered.contains("<think>"))
+        #expect(!rendered.contains("enable_thinking"))
+        #expect(rendered.hasSuffix("<|im_start|>assistant\n"))
+    }
+
+    @Test("LFM2 template shim only engages stamped LFM tool bundles")
+    func lfm2TemplateShimOnlyEngagesStampedToolBundles() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(
+            "vmlx-lfm2-template-shim-test-\(UUID().uuidString)")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let tokenizerConfig = root.appendingPathComponent("tokenizer_config.json")
+        try #"{"bos_token":"<|startoftext|>","eos_token":"<|im_end|>","tokenizer_class":"Qwen2Tokenizer"}"#
+            .write(to: tokenizerConfig, atomically: true, encoding: .utf8)
+        try """
+        {
+          "format": "jang",
+          "format_version": "2.0",
+          "source_model": {"org": "LiquidAI", "name": "LFM2.5-8B-A1B"},
+          "capabilities": {
+            "family": "lfm2_moe",
+            "tool_parser": "lfm2",
+            "think_in_template": false,
+            "supports_tools": true
+          }
+        }
+        """.write(
+            to: root.appendingPathComponent("jang_config.json"),
+            atomically: true,
+            encoding: .utf8)
+
+        let resolved = JangLoader.resolveChatTemplateSidecarSubstitution(for: root)
+        #expect(resolved != root)
+        let rewritten = try String(
+            contentsOf: resolved.appendingPathComponent("tokenizer_config.json"),
+            encoding: .utf8)
+        #expect(rewritten.contains("The active API tool_choice is required"))
+        #expect(rewritten.contains("<|tool_call_start|>"))
+    }
+
     @Test("ZAYA XML parser decodes live HTML line breaks in string parameters")
     func zayaXMLParserDecodesLiveHTMLLineBreaksInStringParameters() throws {
         let output = #"""

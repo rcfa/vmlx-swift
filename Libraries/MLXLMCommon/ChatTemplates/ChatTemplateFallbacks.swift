@@ -1107,6 +1107,180 @@ The current assistant response MUST be a tool call. This applies to the latest u
 {%- endif -%}
 """#
 
+    /// LFM2/LFM2.5 text template with Liquid's native Python-call tool
+    /// syntax:
+    /// `<|tool_call_start|>[tool_name(arg='value')]<|tool_call_end|>`.
+    ///
+    /// Some LFM2.5 JANG bundles ship a native sidecar that lists tools and
+    /// can replay historical assistant tool calls, but does not consume the
+    /// OpenAI-compatible `tool_choice` fields. This fallback keeps the same
+    /// ChatML-ish role markers and LFM tool-call syntax while adding only the
+    /// explicit required/named tool-choice contract. Optional tools remain
+    /// optional, and the assistant tail does not synthesize `<think>`.
+    public static let lfm2ToolMinimal: String = #"""
+{{- bos_token -}}
+{%- set required_tool_choice = false -%}
+{%- set required_tool_name = '' -%}
+{%- if tool_choice is defined and tool_choice == 'required' -%}
+    {%- set required_tool_choice = true -%}
+{%- elif additionalContext is defined and additionalContext['tool_choice'] == 'required' -%}
+    {%- set required_tool_choice = true -%}
+{%- endif -%}
+{%- if tool_choice_name is defined -%}
+    {%- set required_tool_name = tool_choice_name -%}
+{%- elif additionalContext is defined and additionalContext['tool_choice_name'] is defined -%}
+    {%- set required_tool_name = additionalContext['tool_choice_name'] -%}
+{%- endif -%}
+{%- if required_tool_choice and not required_tool_name and tools is iterable and tools | length == 1 -%}
+    {%- set only_required_tool = tools[0]['function'] if tools[0]['function'] is defined else tools[0] -%}
+    {%- if only_required_tool['name'] is defined -%}
+        {%- set required_tool_name = only_required_tool['name'] -%}
+    {%- endif -%}
+{%- endif -%}
+
+{%- macro format_arg_value(arg_value) -%}
+    {%- if arg_value is string -%}
+        {{- "'" + arg_value + "'" -}}
+    {%- elif arg_value is mapping or (arg_value is sequence and arg_value is not string) -%}
+        {{- arg_value | tojson -}}
+    {%- else -%}
+        {{- arg_value | string -}}
+    {%- endif -%}
+{%- endmacro -%}
+
+{%- macro parse_content(content) -%}
+    {%- if content is string -%}
+        {{- content -}}
+    {%- elif content is sequence and content is not mapping -%}
+        {%- for item in content -%}
+            {%- if item is mapping and item['type'] == 'text' -%}
+                {{- item['text'] -}}
+            {%- elif item is mapping and item['type'] == 'image' -%}
+                {{- '<image>' -}}
+            {%- elif item is string -%}
+                {{- item -}}
+            {%- else -%}
+                {{- item | tojson -}}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_tool_calls(tool_calls) -%}
+    {%- set tool_calls_ns = namespace(tool_calls=[]) -%}
+    {%- for tool_call in tool_calls -%}
+        {%- set fn = tool_call['function'] if tool_call['function'] is defined else tool_call -%}
+        {%- set args = fn['arguments'] if fn['arguments'] is defined else {} -%}
+        {%- set args_ns = namespace(arg_strings=[]) -%}
+        {%- if args is mapping -%}
+            {%- for arg_name, arg_value in args | dictsort -%}
+                {%- set args_ns.arg_strings = args_ns.arg_strings + [arg_name + '=' + format_arg_value(arg_value)] -%}
+            {%- endfor -%}
+        {%- endif -%}
+        {%- set tool_calls_ns.tool_calls = tool_calls_ns.tool_calls + [fn['name'] + '(' + (args_ns.arg_strings | join(', ')) + ')'] -%}
+    {%- endfor -%}
+    {{- '<|tool_call_start|>[' + (tool_calls_ns.tool_calls | join(', ')) + ']<|tool_call_end|>' -}}
+{%- endmacro -%}
+
+{%- macro render_required_tool_choice_instruction(latest_user_content='') -%}
+    {{- 'The active API tool_choice is required for this assistant turn. Reply only with one native LFM tool call and no prose before the tool result:\n<|tool_call_start|>[FUNCTION_NAME(ARGUMENT_NAME=' ~ "'" ~ 'ARGUMENT_VALUE' ~ "'" ~ ')]<|tool_call_end|>' -}}
+    {%- if required_tool_name -%}
+        {{- '\nUse the `' ~ required_tool_name ~ '` function.' -}}
+        {%- for tool in tools -%}
+            {%- set selected_tool = tool['function'] if tool['function'] is defined else tool -%}
+            {%- if selected_tool['name'] == required_tool_name and selected_tool['parameters'] is defined and selected_tool['parameters']['required'] is defined -%}
+                {{- '\nRequired parameters for `' ~ required_tool_name ~ '`: ' ~ (selected_tool['parameters']['required'] | join(', ')) ~ '.' -}}
+                {%- for param_name in selected_tool['parameters']['required'] -%}
+                    {%- set exact = namespace(value='') -%}
+                    {%- set latest_user_text = parse_content(latest_user_content) -%}
+                    {%- set exact_markers = [
+                        'on this exact ' ~ param_name ~ ':',
+                        'this exact ' ~ param_name ~ ':',
+                        'exact ' ~ param_name ~ ':',
+                        'on exactly this ' ~ param_name ~ ':',
+                        'exactly this ' ~ param_name ~ ':',
+                        'on this exact text:',
+                        'this exact text:',
+                        'exact text:',
+                        'on exactly this text:',
+                        'exactly this text:',
+                        'use ' ~ required_tool_name ~ ' on this exact text:',
+                        'now use ' ~ required_tool_name ~ ' on this exact text:'
+                    ] -%}
+                    {%- for marker in exact_markers -%}
+                        {%- if not exact.value and latest_user_text is string and marker in latest_user_text -%}
+                            {%- set exact.value = latest_user_text.split(marker)[1] | trim -%}
+                        {%- endif -%}
+                    {%- endfor -%}
+                    {%- if exact.value -%}
+                        {{- '\nRequired call shape for the current request:\n<|tool_call_start|>[' ~ required_tool_name ~ '(' ~ param_name ~ '=' ~ "'" ~ exact.value ~ "'" ~ ')]<|tool_call_end|>' -}}
+                    {%- endif -%}
+                {%- endfor -%}
+                {{- '\nDo not omit required parameters. If the latest user message asks to use exact text, copy that exact text into the string argument, preserving newlines.' -}}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- endif -%}
+{%- endmacro -%}
+
+{%- set ns = namespace(system_prompt='', last_user_index=-1) -%}
+{%- set loop_messages = messages -%}
+{%- if messages and messages[0]['role'] == 'system' -%}
+    {%- if messages[0]['content'] is defined -%}
+        {%- set ns.system_prompt = parse_content(messages[0]['content']) -%}
+    {%- endif -%}
+    {%- set loop_messages = messages[1:] -%}
+{%- endif -%}
+{%- for message in loop_messages -%}
+    {%- if message['role'] == 'user' -%}
+        {%- set ns.last_user_index = loop.index0 -%}
+    {%- endif -%}
+{%- endfor -%}
+{%- if ns.system_prompt or (tools is iterable and tools | length > 0) -%}
+    {{- '<|im_start|>system\n' -}}
+    {%- if ns.system_prompt -%}
+        {{- ns.system_prompt -}}
+    {%- endif -%}
+    {%- if tools is iterable and tools | length > 0 -%}
+        {%- if ns.system_prompt -%}{{- '\n\n' -}}{%- endif -%}
+        {{- 'List of tools: ' ~ (tools | tojson) -}}
+        {%- if required_tool_choice -%}
+            {{- '\n\n' ~ render_required_tool_choice_instruction() -}}
+        {%- endif -%}
+    {%- endif -%}
+    {{- '<|im_end|>\n' -}}
+{%- endif -%}
+
+{%- for message in loop_messages -%}
+    {{- '<|im_start|>' + message['role'] + '\n' -}}
+    {%- if message['role'] == 'assistant' -%}
+        {%- if message['thinking'] is defined -%}
+            {{- '<think>' + message['thinking'] + '</think>' -}}
+        {%- endif -%}
+        {%- if message['content'] is defined -%}
+            {{- parse_content(message['content']) -}}
+        {%- endif -%}
+        {%- if message['tool_calls'] is defined and message['tool_calls'] -%}
+            {{- render_tool_calls(message['tool_calls']) -}}
+        {%- endif -%}
+    {%- elif message['role'] == 'user' -%}
+        {{- parse_content(message['content']) -}}
+        {%- if required_tool_choice and loop.index0 == ns.last_user_index -%}
+            {{- '\n\n' ~ render_required_tool_choice_instruction(message['content']) -}}
+        {%- endif -%}
+    {%- elif message['role'] == 'tool' -%}
+        {{- parse_content(message['content']) -}}
+    {%- else -%}
+        {%- if message['content'] is defined -%}
+            {{- parse_content(message['content']) -}}
+        {%- endif -%}
+    {%- endif -%}
+    {{- '<|im_end|>\n' -}}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+    {{- '<|im_start|>assistant\n' -}}
+{%- endif -%}
+"""#
+
     /// Ordered list of (label, template) fallbacks used when the
     /// model's native template throws. Order matters: `gemma4WithTools`
     /// comes first because (a) it subsumes `gemma4Minimal` when no

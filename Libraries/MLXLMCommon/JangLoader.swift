@@ -832,10 +832,17 @@ public struct JangLoader: Sendable {
         let currentTemplate = configJSON["chat_template"] as? String
         let zayaToolAware = shouldUseZayaToolAwareTemplate(for: directory)
         let zayaVLToolAware = shouldUseZayaVLToolAwareTemplate(for: directory)
+        let lfm2ToolAware = shouldUseLFM2ToolAwareTemplate(for: directory)
         if let currentTemplate,
            zayaToolAware,
            templateAlreadyMatchesZayaToolAware(currentTemplate),
            (!zayaVLToolAware || isVisionChatTemplate(currentTemplate))
+        {
+            return directory
+        }
+        if let currentTemplate,
+           lfm2ToolAware,
+           templateAlreadyMatchesLFM2ToolAware(currentTemplate)
         {
             return directory
         }
@@ -854,19 +861,25 @@ public struct JangLoader: Sendable {
             return template
         }()
 
-        guard zayaToolAware || sidecarTemplate != nil else {
+        guard zayaToolAware || lfm2ToolAware || sidecarTemplate != nil else {
             return directory
         }
         if !zayaToolAware,
+           !lfm2ToolAware,
            let currentTemplate,
            isVisionChatTemplate(currentTemplate)
         {
             return directory
         }
 
-        let effectiveTemplate = zayaToolAware
-            ? ChatTemplateFallbacks.zayaVLVisionToolMinimal
-            : sidecarTemplate!
+        let effectiveTemplate: String
+        if zayaToolAware {
+            effectiveTemplate = ChatTemplateFallbacks.zayaVLVisionToolMinimal
+        } else if lfm2ToolAware {
+            effectiveTemplate = ChatTemplateFallbacks.lfm2ToolMinimal
+        } else {
+            effectiveTemplate = sidecarTemplate!
+        }
         configJSON["chat_template"] = effectiveTemplate
 
         let shimDir = fileManager.temporaryDirectory.appendingPathComponent(
@@ -925,6 +938,12 @@ public struct JangLoader: Sendable {
         template.contains("zyphra_tool_call")
     }
 
+    private static func templateAlreadyMatchesLFM2ToolAware(_ template: String) -> Bool {
+        template.contains("<|tool_call_start|>")
+            && template.contains("<|tool_call_end|>")
+            && template.contains("tool_choice")
+    }
+
     private static func shouldUseZayaToolAwareTemplate(for directory: URL) -> Bool {
         guard let config = try? loadConfig(at: directory) else {
             return false
@@ -955,6 +974,20 @@ public struct JangLoader: Sendable {
             && ["zaya", "zaya_xml", "zyphra", "zyphra_xml"].contains(parser)
             && config.capabilities?.thinkInTemplate == false
             && supportsTools != false
+    }
+
+    private static func shouldUseLFM2ToolAwareTemplate(for directory: URL) -> Bool {
+        guard let config = try? loadConfig(at: directory) else {
+            return false
+        }
+
+        let family = config.capabilities?.family?.lowercased() ?? ""
+        let parser = config.capabilities?.toolParser?.lowercased() ?? ""
+        let supportsTools = config.capabilities?.supportsTools
+        return supportsTools != false
+            && ["lfm2", "lfm2_moe", "lfm2.5", "lfm2_5", "lfm25"].contains(family)
+            && ["lfm2", "lfm2_moe", "lfm2_5", "lfm25"].contains(parser)
+            && config.capabilities?.thinkInTemplate == false
     }
 
     /// Check whether a directory already has the files that the HuggingFace
