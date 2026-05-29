@@ -815,6 +815,7 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         ])
 
         #expect(rendered.contains("The active API tool_choice is required"))
+        #expect(rendered.components(separatedBy: "The active API tool_choice is required").count == 2)
         #expect(!rendered.contains("FUNCTION_NAME"))
         #expect(!rendered.contains("ARGUMENT_NAME"))
         #expect(rendered.contains("Use the `line_count` function."))

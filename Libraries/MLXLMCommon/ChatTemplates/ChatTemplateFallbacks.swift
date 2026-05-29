@@ -1245,9 +1245,6 @@ The current assistant response MUST be a tool call. This applies to the latest u
     {%- if tools is iterable and tools | length > 0 -%}
         {%- if ns.system_prompt -%}{{- '\n\n' -}}{%- endif -%}
         {{- 'List of tools: ' ~ (tools | tojson) -}}
-        {%- if required_tool_choice -%}
-            {{- '\n\n' ~ render_required_tool_choice_instruction() -}}
-        {%- endif -%}
     {%- endif -%}
     {{- '<|im_end|>\n' -}}
 {%- endif -%}
