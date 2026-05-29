@@ -57,27 +57,6 @@ final class ReasoningStampFromModelTypeTests: XCTestCase {
         XCTAssertEqual(lfm25.source, .chatTemplate)
     }
 
-    func testLFM25StampedQwenWithoutThinkingTemplateIsSuppressed() {
-        let capabilities = JangCapabilities(
-            reasoningParser: "qwen3",
-            toolParser: "lfm2",
-            thinkInTemplate: false,
-            supportsTools: true,
-            supportsThinking: true,
-            family: "lfm2_moe",
-            cacheType: "hybrid")
-
-        let resolved = ParserResolution.reasoning(
-            capabilities: capabilities,
-            modelType: "lfm2_moe",
-            chatTemplate: ChatTemplateFallbacks.lfm2ToolMinimal)
-
-        XCTAssertNil(
-            resolved.parser,
-            "LFM2.5 bundles stamped qwen3 but think_in_template=false must not route all output into reasoning")
-        XCTAssertEqual(resolved.source, .modelTypeHeuristic)
-    }
-
     func testPlainFamiliesGetNone() {
         // Every non-reasoning family vmlx supports must emit plain
         // .chunk, not .reasoning. Enumerate explicitly so a

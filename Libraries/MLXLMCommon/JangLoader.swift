@@ -315,15 +315,7 @@ public enum ParserResolution {
         modelType: String?,
         chatTemplate: String? = nil
     ) -> (parser: ReasoningParser?, source: JangCapabilities.ResolutionSource) {
-        let suppressLFMReasoning = capabilities.map {
-            shouldSuppressLFMReasoningStamp(
-                capabilities: $0,
-                modelType: modelType,
-                chatTemplate: chatTemplate)
-        } ?? false
-        if let cap = capabilities,
-           cap.reasoningParser != nil,
-           !suppressLFMReasoning {
+        if let cap = capabilities, cap.reasoningParser != nil {
             // Stamped — honour exactly. `nil` is a valid stamp meaning
             // "this model emits no reasoning".
             return (
@@ -331,9 +323,7 @@ public enum ParserResolution {
                 .jangStamped
             )
         }
-        if !suppressLFMReasoning,
-           declaresLFM25ThinkingTemplate(modelType: modelType, chatTemplate: chatTemplate)
-        {
+        if declaresLFM25ThinkingTemplate(modelType: modelType, chatTemplate: chatTemplate) {
             return (
                 ReasoningParser.fromCapabilityName("qwen3"),
                 .chatTemplate
@@ -375,29 +365,6 @@ public enum ParserResolution {
             && chatTemplate.contains("</think>")
             && chatTemplate.contains("<|tool_call_start|>")
             && chatTemplate.contains("<|tool_call_end|>")
-    }
-
-    private static func shouldSuppressLFMReasoningStamp(
-        capabilities: JangCapabilities,
-        modelType: String?,
-        chatTemplate: String?
-    ) -> Bool {
-        let family = capabilities.family?.lowercased() ?? ""
-        let normalizedModel = (modelType ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .replacingOccurrences(of: "-", with: "_")
-            .replacingOccurrences(of: ".", with: "_")
-        let compactModel = normalizedModel.replacingOccurrences(of: "_", with: "")
-        let isLFM = family.contains("lfm2")
-            || family.contains("lfm25")
-            || compactModel == "lfm2moe"
-            || compactModel.hasPrefix("lfm25")
-        // LFM2.5 conversion metadata is authoritative here: current bundles can
-        // carry a stale qwen3 reasoning stamp while explicitly declaring that
-        // thinking is not part of the active template. Do not let fallback
-        // template comments/history handling containing "<think>" resurrect it.
-        return isLFM && capabilities.thinkInTemplate == false
     }
 
     /// Resolve a `ToolCallFormat` for a model.

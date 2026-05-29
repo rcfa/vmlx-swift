@@ -1184,6 +1184,7 @@ The current assistant response MUST be a tool call. This applies to the latest u
 
 {%- macro render_required_tool_choice_instruction(latest_user_content='') -%}
     {{- 'The active API tool_choice is required for this assistant turn. Reply only with one native LFM tool call and no prose before the tool result.' -}}
+    {{- '\nThe response MUST begin with <|tool_call_start|>[ and end with ]<|tool_call_end|>. Do not output a JSON object, markdown, or explanatory text.' -}}
     {%- if required_tool_name -%}
         {{- '\nUse the `' ~ required_tool_name ~ '` function.' -}}
         {%- for tool in tools -%}
@@ -1213,7 +1214,7 @@ The current assistant response MUST be a tool call. This applies to the latest u
                         {%- endif -%}
                     {%- endfor -%}
                     {%- if exact.value -%}
-                        {{- '\nRequired call shape for the current request:\n<|tool_call_start|>[' ~ required_tool_name ~ '(' ~ param_name ~ '=' ~ "'" ~ exact.value ~ "'" ~ ')]<|tool_call_end|>' -}}
+                        {{- '\nRequired call shape for the current request:\n<|tool_call_start|>[' ~ required_tool_name ~ '(' ~ param_name ~ '=' ~ '"' ~ exact.value ~ '"' ~ ')]<|tool_call_end|>' -}}
                     {%- endif -%}
                 {%- endfor -%}
                 {{- '\nDo not omit required parameters. If the latest user message asks to use exact text, copy that exact text into the string argument, preserving every newline and adding no spaces.' -}}
@@ -1244,7 +1245,8 @@ The current assistant response MUST be a tool call. This applies to the latest u
     {%- endif -%}
     {%- if tools is iterable and tools | length > 0 -%}
         {%- if ns.system_prompt -%}{{- '\n\n' -}}{%- endif -%}
-        {{- 'List of tools: ' ~ (tools | tojson) -}}
+        {{- 'Tool schemas are listed as JSON only to describe available functions. When a tool call is required, follow the current-turn Liquid native call-shape instruction instead of replying with JSON.' -}}
+        {{- '\nList of tools: ' ~ (tools | tojson) -}}
     {%- endif -%}
     {{- '<|im_end|>\n' -}}
 {%- endif -%}
