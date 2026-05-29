@@ -317,6 +317,66 @@ struct ToolTests {
         #expect(toolCall.function.arguments["text"] == .string("red\ngreen\nblue"))
     }
 
+    @Test("LFM2 processor accepts tool-keyed JSON object envelope at EOS")
+    func lfm2ProcessorAcceptsToolKeyedJSONObjectEnvelopeAtEOS() throws {
+        let tools: [ToolSpec] = [
+            [
+                "type": "function",
+                "function": [
+                    "name": "line_count",
+                    "parameters": [
+                        "type": "object",
+                        "properties": [
+                            "text": ["type": "string"] as [String: any Sendable],
+                        ] as [String: any Sendable],
+                        "required": ["text"] as [String],
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable],
+            ] as ToolSpec
+        ]
+        let processor = ToolCallProcessor(format: .lfm2, tools: tools)
+        let visible = processor.processChunk(
+            #"""
+            {
+              "line_count": [
+                {
+                  "text": "red\ngreen\nblue"
+              }
+            ]
+            """#)
+        let eosVisible = processor.processEOS()
+
+        #expect(visible == nil)
+        #expect(eosVisible == nil)
+        #expect(processor.toolCalls.count == 1)
+        let toolCall = try #require(processor.toolCalls.first)
+        #expect(toolCall.function.name == "line_count")
+        #expect(toolCall.function.arguments["text"] == .string("red\ngreen\nblue"))
+    }
+
+    @Test("LFM2 parser ignores unknown tool-keyed JSON envelopes")
+    func lfm2ParserIgnoresUnknownToolKeyedJSONEnvelope() throws {
+        let tools: [ToolSpec] = [
+            [
+                "type": "function",
+                "function": [
+                    "name": "line_count",
+                    "parameters": [
+                        "type": "object",
+                        "properties": [
+                            "text": ["type": "string"] as [String: any Sendable],
+                        ] as [String: any Sendable],
+                        "required": ["text"] as [String],
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable],
+            ] as ToolSpec
+        ]
+        let parser = PythonicToolCallParser()
+        let toolCall = parser.parse(content: #"{"not_a_tool":[{"text":"red"}]}"#, tools: tools)
+
+        #expect(toolCall == nil)
+    }
+
     // MARK: - XML Function Format Tests (Qwen3 Coder)
 
     @Test("Test XML Function Parser - Qwen3 Coder Format")

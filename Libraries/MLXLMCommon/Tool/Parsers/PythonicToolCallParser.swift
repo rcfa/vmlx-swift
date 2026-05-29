@@ -28,6 +28,10 @@ public struct PythonicToolCallParser: ToolCallParser, Sendable {
 
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        if let jsonToolCall = parseToolKeyedJSONEnvelope(text, tools: tools) {
+            return jsonToolCall
+        }
+
         let funcName: String
         let argsString: String
 
@@ -68,6 +72,9 @@ public struct PythonicToolCallParser: ToolCallParser, Sendable {
     /// surfaces the first. Byte-compatible with upstream
     /// ml-explore/mlx-swift-lm so `LFM2` streams behave identically.
     public func parseEOS(_ toolCallBuffer: String, tools: [[String: any Sendable]]?) -> [ToolCall] {
+        if let toolCall = parse(content: toolCallBuffer, tools: tools) {
+            return [toolCall]
+        }
         if let startTag {
             return
                 toolCallBuffer
@@ -198,5 +205,62 @@ public struct PythonicToolCallParser: ToolCallParser, Sendable {
             return required
         }
         return []
+    }
+
+    private func parseToolKeyedJSONEnvelope(
+        _ text: String,
+        tools: [[String: any Sendable]]?
+    ) -> ToolCall? {
+        guard text.hasPrefix("{") else { return nil }
+        guard let object = parseJSONObjectWithOptionalEOFBrace(text) else { return nil }
+        let registeredNames = Set(toolNames(tools: tools))
+        guard !registeredNames.isEmpty else { return nil }
+
+        for name in registeredNames {
+            guard let rawArguments = object[name] else { continue }
+            if let args = firstArgumentObject(from: rawArguments) {
+                return ToolCall(function: .init(name: name, arguments: args.mapValues(asSendable)))
+            }
+        }
+        return nil
+    }
+
+    private func parseJSONObjectWithOptionalEOFBrace(_ text: String) -> [String: Any]? {
+        if let object = parseJSONObject(text) {
+            return object
+        }
+
+        let missingCloseBraceCount = text.reduce(0) { depth, ch in
+            if ch == "{" { return depth + 1 }
+            if ch == "}" { return depth - 1 }
+            return depth
+        }
+        guard missingCloseBraceCount > 0, missingCloseBraceCount <= 2 else {
+            return nil
+        }
+        return parseJSONObject(text + String(repeating: "}", count: missingCloseBraceCount))
+    }
+
+    private func parseJSONObject(_ text: String) -> [String: Any]? {
+        guard let data = text.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private func firstArgumentObject(from rawArguments: Any) -> [String: Any]? {
+        if let object = rawArguments as? [String: Any] {
+            return object
+        }
+        if let array = rawArguments as? [Any] {
+            return array.compactMap { $0 as? [String: Any] }.first
+        }
+        return nil
+    }
+
+    private func toolNames(tools: [[String: any Sendable]]?) -> [String] {
+        guard let tools else { return [] }
+        return tools.compactMap { tool in
+            guard let function = tool["function"] as? [String: any Sendable] else { return nil }
+            return function["name"] as? String
+        }
     }
 }
