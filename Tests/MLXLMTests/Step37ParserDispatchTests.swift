@@ -165,7 +165,7 @@ struct Step37ParserDispatchTests {
             ],
             "tool_choice": "required",
             "tool_choice_name": "line_count",
-            "enable_thinking": false,
+            "enable_thinking": true,
             "add_generation_prompt": true,
         ])
         #expect(rendered.contains("The active API tool_choice is required"))
@@ -173,7 +173,10 @@ struct Step37ParserDispatchTests {
         #expect(rendered.contains("<tool_call>\n<function=FUNCTION_NAME>"))
         #expect(rendered.contains("<function=example_function_name>"))
         #expect(rendered.contains("<parameter=ARGUMENT_NAME>"))
-        #expect(rendered.hasSuffix("<|im_start|>assistant\n<think>\n</think>\n\n"))
+        #expect(
+            rendered.hasSuffix("<|im_start|>assistant\n<think>\n</think>\n\n"),
+            "Explicit required tool_choice must close Step's thinking rail even if thinking is otherwise enabled."
+        )
         #expect(!rendered.contains("enable_thinking"))
         #expect(!rendered.contains("tool_choice_name"))
     }
