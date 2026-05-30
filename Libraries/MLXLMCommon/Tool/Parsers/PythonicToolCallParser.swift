@@ -240,6 +240,21 @@ public struct PythonicToolCallParser: ToolCallParser, Sendable {
             !required.isEmpty
         else { return nil }
 
+        if object.count == 1,
+            let rawArguments = object["arguments"],
+            let args = firstArgumentObject(from: rawArguments)
+        {
+            guard required.allSatisfy({ args[$0] != nil }) else {
+                return nil
+            }
+            if let properties = tool.properties, !properties.isEmpty {
+                guard args.keys.allSatisfy({ properties.contains($0) }) else {
+                    return nil
+                }
+            }
+            return ToolCall(function: .init(name: name, arguments: args.mapValues(asSendable)))
+        }
+
         let registeredNames = Set(toolNames(tools: tools))
         guard object.keys.allSatisfy({ !registeredNames.contains($0) }) else {
             return nil

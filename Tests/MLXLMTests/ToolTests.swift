@@ -379,6 +379,31 @@ struct ToolTests {
         #expect(toolCall.function.arguments["text"] == .string("red\ngreen\nblue"))
     }
 
+    @Test("LFM2 parser accepts single-tool JSON arguments envelope")
+    func lfm2ParserAcceptsSingleToolJSONArgumentsEnvelope() throws {
+        let tools: [ToolSpec] = [
+            [
+                "type": "function",
+                "function": [
+                    "name": "line_count",
+                    "parameters": [
+                        "type": "object",
+                        "properties": [
+                            "text": ["type": "string"] as [String: any Sendable],
+                        ] as [String: any Sendable],
+                        "required": ["text"] as [String],
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable],
+            ] as ToolSpec
+        ]
+        let parser = PythonicToolCallParser()
+        let toolCall = try #require(
+            parser.parse(content: #"{"arguments":{"text":"one\ntwo"}}"#, tools: tools))
+
+        #expect(toolCall.function.name == "line_count")
+        #expect(toolCall.function.arguments["text"] == .string("one\ntwo"))
+    }
+
     @Test("LFM2 parser rejects single-tool JSON object missing required args")
     func lfm2ParserRejectsSingleToolJSONObjectMissingRequiredArgs() throws {
         let tools: [ToolSpec] = [
