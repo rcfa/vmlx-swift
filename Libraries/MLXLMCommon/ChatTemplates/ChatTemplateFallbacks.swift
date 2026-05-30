@@ -1182,14 +1182,28 @@ The current assistant response MUST be a tool call. This applies to the latest u
     {{- '<|tool_call_start|>[' + (tool_calls_ns.tool_calls | join(', ')) + ']<|tool_call_end|>' -}}
 {%- endmacro -%}
 
+{%- macro render_tool_summary() -%}
+    {{- 'Available functions:' -}}
+    {%- for tool in tools -%}
+        {%- set fn = tool['function'] if tool['function'] is defined else tool -%}
+        {{- '\n- ' ~ fn['name'] -}}
+        {%- if fn['description'] is defined and fn['description'] -%}
+            {{- ': ' ~ (fn['description'] | trim) -}}
+        {%- endif -%}
+        {%- if fn['parameters'] is defined and fn['parameters']['required'] is defined -%}
+            {{- '\n  required arguments: ' ~ (fn['parameters']['required'] | join(', ')) -}}
+        {%- endif -%}
+    {%- endfor -%}
+{%- endmacro -%}
+
 {%- macro render_required_tool_choice_instruction(latest_user_content='') -%}
-    {{- 'The active API tool_choice is required for this assistant turn.' -}}
+    {{- 'The API requires a tool call for the next assistant turn.' -}}
     {%- if required_tool_name -%}
-        {{- '\nUse the `' ~ required_tool_name ~ '` function.' -}}
+        {{- '\nFunction name: ' ~ required_tool_name -}}
         {%- for tool in tools -%}
             {%- set selected_tool = tool['function'] if tool['function'] is defined else tool -%}
             {%- if selected_tool['name'] == required_tool_name and selected_tool['parameters'] is defined and selected_tool['parameters']['required'] is defined -%}
-                {{- '\nRequired parameters for `' ~ required_tool_name ~ '`: ' ~ (selected_tool['parameters']['required'] | join(', ')) ~ '.' -}}
+                {{- '\nRequired arguments: ' ~ (selected_tool['parameters']['required'] | join(', ')) -}}
                 {%- for param_name in selected_tool['parameters']['required'] -%}
                     {%- set exact = namespace(value='') -%}
                     {%- set latest_user_text = parse_content(latest_user_content) -%}
@@ -1225,13 +1239,13 @@ The current assistant response MUST be a tool call. This applies to the latest u
                         {%- endif -%}
                     {%- endfor -%}
                     {%- if exact.value -%}
-                        {{- '\nRequired assistant message for this current request:\n<|tool_call_start|>[' ~ required_tool_name ~ '(' ~ param_name ~ '=' ~ (exact.value | tojson) ~ ')]<|tool_call_end|>' -}}
-                        {{- '\nOutput exactly the native bracketed tool call above. Preserve the `' ~ param_name ~ '` value byte-for-byte, including newlines and spacing. Do not append a trailing newline or any other character after the copied value. Do not output an empty `' ~ required_tool_name ~ '()`. Do not omit `' ~ param_name ~ '`. Do not invent placeholders, summaries, ellipsis, or prior-turn text.' -}}
+                        {{- '\nRespond with exactly this one assistant message and nothing else:\n<|tool_call_start|>[' ~ required_tool_name ~ '(' ~ param_name ~ '=' ~ (exact.value | tojson) ~ ')]<|tool_call_end|>' -}}
+                        {{- '\nCopy the `' ~ param_name ~ '` value exactly from the current user request, including newlines and spacing. Do not add a trailing newline after the copied value. Do not output an empty `' ~ required_tool_name ~ '()`. Do not omit `' ~ param_name ~ '`. Do not invent placeholders, summaries, ellipsis, or prior-turn text.' -}}
                     {%- else -%}
-                        {{- '\nReply only with one native LFM bracketed call list using schema parameter names and values copied from the latest user request.' -}}
+                        {{- '\nReply only with one native LFM bracketed call list using argument names and values copied from the latest user request.' -}}
                     {%- endif -%}
                 {%- endfor -%}
-                {{- '\nNo prose, no markdown, no JSON object, no reasoning text. Use keyword arguments exactly as shown; do not use positional arguments.' -}}
+                {{- '\nDo not write reasoning, XML-style tool tags, JSON, markdown, or prose. Use keyword arguments exactly as shown; do not use positional arguments.' -}}
             {%- endif -%}
         {%- endfor -%}
     {%- else -%}
@@ -1259,8 +1273,10 @@ The current assistant response MUST be a tool call. This applies to the latest u
     {%- endif -%}
     {%- if tools is iterable and tools | length > 0 -%}
         {%- if ns.system_prompt -%}{{- '\n\n' -}}{%- endif -%}
-        {{- 'Tool schemas are listed as JSON only to describe available functions. When a tool call is required, follow the current-turn Liquid native call-shape instruction instead of replying with JSON.' -}}
-        {{- '\nList of tools: ' ~ (tools | tojson) -}}
+        {{- render_tool_summary() -}}
+        {%- if required_tool_choice -%}
+            {{- '\nWhen a tool call is required, use only the Liquid native call syntax from the current-turn instruction.' -}}
+        {%- endif -%}
     {%- endif -%}
     {{- '<|im_end|>\n' -}}
 {%- endif -%}
