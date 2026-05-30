@@ -57,7 +57,7 @@ final class ReasoningStampFromModelTypeTests: XCTestCase {
         XCTAssertEqual(lfm25.source, .chatTemplate)
     }
 
-    func testLFM25JangStampWithoutThinkingTemplateDoesNotForceQwenReasoning() {
+    func testLFM25JangStampWithoutThinkingTemplateUsesContentModeThinkParser() throws {
         let capabilities = JangCapabilities(
             reasoningParser: "qwen3",
             toolParser: "lfm2",
@@ -80,8 +80,14 @@ final class ReasoningStampFromModelTypeTests: XCTestCase {
             {%- endif -%}
             {{- "<|tool_call_start|>[line_count(text='a')]<|tool_call_end|>" -}}
             """)
-        XCTAssertNil(resolved.parser)
-        XCTAssertEqual(resolved.source, .modelTypeHeuristic)
+        XCTAssertNotNil(resolved.parser)
+        XCTAssertEqual(resolved.source, .chatTemplate)
+
+        var parser = try XCTUnwrap(resolved.parser)
+        let segments = parser.feed("<think>internal plan</think>Visible answer.")
+            + parser.flush()
+        XCTAssertEqual(collect(segments).reasoning, "internal plan")
+        XCTAssertEqual(collect(segments).content, "Visible answer.")
     }
 
     func testPlainFamiliesGetNone() {
@@ -104,6 +110,20 @@ final class ReasoningStampFromModelTypeTests: XCTestCase {
                 reasoningStampFromModelType(modelType), "none",
                 "model_type `\(modelType)` must NOT get a think-parser stamp")
         }
+    }
+
+    private func collect(_ segments: [ReasoningSegment]) -> (reasoning: String, content: String) {
+        var reasoning = ""
+        var content = ""
+        for segment in segments {
+            switch segment {
+            case .reasoning(let text):
+                reasoning += text
+            case .content(let text):
+                content += text
+            }
+        }
+        return (reasoning, content)
     }
 
     func testEmptyAndNilModelTypeReturnNone() {

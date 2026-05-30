@@ -316,6 +316,12 @@ public enum ParserResolution {
         chatTemplate: String? = nil
     ) -> (parser: ReasoningParser?, source: JangCapabilities.ResolutionSource) {
         if shouldIgnoreReasoningStamp(capabilities: capabilities, modelType: modelType) {
+            if declaresLFM25ThinkingTemplate(modelType: modelType, chatTemplate: chatTemplate) {
+                return (
+                    ReasoningParser(startInReasoning: false),
+                    .chatTemplate
+                )
+            }
             let stamp = reasoningStampFromModelType(modelType)
             return (
                 stamp == "none" ? nil : ReasoningParser.fromCapabilityName(stamp),
