@@ -832,6 +832,7 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         #expect(rendered.contains(#"<|tool_call_start|>[line_count(text='red\ngreen\nblue')]<|tool_call_end|>"#))
         #expect(rendered.contains("This value contains exactly 2 line break(s) and 0 blank lines."))
         #expect(rendered.contains(#"each line break is represented by the two characters \n"#))
+        #expect(rendered.contains(#"the exact `text` value encoded with \n escapes is: red\ngreen\nblue"#))
         #expect(rendered.contains("Do not double any line break."))
         #expect(!rendered.contains("argument value"))
         #expect(!rendered.contains("..."))
@@ -899,6 +900,7 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         #expect(afterFinalUser.contains("Copy the `text` value exactly from the current user request."))
         #expect(afterFinalUser.contains("This value contains exactly 1 line break(s) and 0 blank lines."))
         #expect(afterFinalUser.contains(#"each line break is represented by the two characters \n"#))
+        #expect(afterFinalUser.contains(#"the exact `text` value encoded with \n escapes is: one\ntwo"#))
         #expect(afterFinalUser.contains("Do not double any line break."))
         #expect(afterFinalUser.contains("Do not add a blank line, leading space, trailing newline, or any other character to the copied value."))
         #expect(afterFinalUser.contains("Do not invent placeholders, summaries, ellipsis, or prior-turn text."))
@@ -947,7 +949,8 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
             encoding: .utf8)
         #expect(rewritten.contains("The API requires a tool call for the next assistant turn."))
         #expect(rewritten.contains("Respond with exactly this one assistant message and nothing else"))
-        #expect(rewritten.contains("Do not output"))
+        #expect(rewritten.contains("the exact `"))
+        #expect(!rewritten.contains("Do not output JSON"))
     }
 
     @Test("LFM2 tool fallback is tried before native bundled tool JSON template")
