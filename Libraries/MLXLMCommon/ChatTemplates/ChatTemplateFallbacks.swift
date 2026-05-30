@@ -1248,11 +1248,11 @@ The current assistant response MUST be a tool call. This applies to the latest u
                         {%- endif -%}
                     {%- endfor -%}
                     {%- if exact.value -%}
-                        {%- set exact_escaped = exact.value | replace("\\", "\\\\") | replace("\n", "\\n") | replace("\t", "\\t") | replace('"', '\\"') -%}
+                        {%- set exact_escaped = exact.value | replace("\\", "\\\\") | replace("\n", "\\n") | replace("\t", "\\t") | replace("'", "\\'") -%}
                         {%- set newline_count = (exact.value.split('\n') | length) - 1 -%}
-                        {{- '\nCopy the `' ~ param_name ~ '` value exactly from the current user request. This value contains exactly ' ~ newline_count ~ ' line break(s) and 0 blank lines. In the JSON call, each line break is represented by the two characters \\n; the parser decodes those back into real line breaks. Do not double any line break. Do not add a blank line, leading space, trailing newline, or any other character to the copied value. Do not omit `' ~ param_name ~ '`. Do not invent placeholders, summaries, ellipsis, or prior-turn text.' -}}
-                        {{- '\nFor the current tool call, the exact `' ~ param_name ~ '` value encoded with JSON \\n escapes is: ' ~ exact_escaped -}}
-                        {{- '\nRespond with exactly this one assistant message and nothing else:\n<|tool_call_start|>{"name":"' ~ required_tool_name ~ '","arguments":{"' ~ param_name ~ '":"' ~ exact_escaped ~ '"}}<|tool_call_end|>' -}}
+                        {{- '\nCopy the `' ~ param_name ~ '` value exactly from the current user request. This value contains exactly ' ~ newline_count ~ ' line break(s) and 0 blank lines. In the native LFM call, each line break is represented by the two characters \\n; the parser decodes those back into real line breaks. Do not double any line break. Do not add a blank line, leading space, trailing newline, or any other character to the copied value. Do not omit `' ~ param_name ~ '`. Do not invent placeholders, summaries, ellipsis, or prior-turn text.' -}}
+                        {{- '\nFor the current tool call, the exact `' ~ param_name ~ '` value encoded with \\n escapes is: ' ~ exact_escaped -}}
+                        {{- '\nRespond with exactly this one assistant message and nothing else:\n<|tool_call_start|>[' ~ required_tool_name ~ '(' ~ param_name ~ "='" ~ exact_escaped ~ "'" ~ ')]<|tool_call_end|>' -}}
                     {%- else -%}
                         {{- '\nReply only with one native LFM bracketed call list using argument names and values copied from the latest user request.' -}}
                     {%- endif -%}
@@ -1287,7 +1287,7 @@ The current assistant response MUST be a tool call. This applies to the latest u
         {%- if ns.system_prompt -%}{{- '\n\n' -}}{%- endif -%}
         {{- render_tool_summary() -}}
         {%- if required_tool_choice -%}
-            {{- '\nWhen a tool call is required, use only the exact tagged JSON call from the current-turn instruction.' -}}
+            {{- '\nWhen a tool call is required, use only the exact native LFM tagged call from the current-turn instruction.' -}}
         {%- endif -%}
     {%- endif -%}
     {{- '<|im_end|>\n' -}}
