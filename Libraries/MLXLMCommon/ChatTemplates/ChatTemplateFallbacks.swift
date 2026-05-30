@@ -1166,6 +1166,15 @@ The current assistant response MUST be a tool call. This applies to the latest u
     {%- endif -%}
 {%- endmacro -%}
 
+{%- macro parse_content_json_linebreaks(content) -%}
+    {%- set text = parse_content(content) -%}
+    {%- if text is string -%}
+        {{- text | replace("\\", "\\\\") | replace("\n", "\\n") | replace("\t", "\\t") -}}
+    {%- else -%}
+        {{- text -}}
+    {%- endif -%}
+{%- endmacro -%}
+
 {%- macro render_tool_calls(tool_calls) -%}
     {%- set tool_calls_ns = namespace(tool_calls=[]) -%}
     {%- for tool_call in tool_calls -%}
@@ -1300,7 +1309,11 @@ The current assistant response MUST be a tool call. This applies to the latest u
             {{- render_tool_calls(message['tool_calls']) -}}
         {%- endif -%}
     {%- elif message['role'] == 'user' -%}
-        {{- parse_content(message['content']) -}}
+        {%- if is_required_latest_user -%}
+            {{- parse_content_json_linebreaks(message['content']) -}}
+        {%- else -%}
+            {{- parse_content(message['content']) -}}
+        {%- endif -%}
     {%- elif message['role'] == 'tool' -%}
         {{- 'Tool result for previous assistant tool call: ' ~ parse_content(message['content']) -}}
     {%- else -%}

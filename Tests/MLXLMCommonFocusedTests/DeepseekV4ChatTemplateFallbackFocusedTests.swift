@@ -829,6 +829,8 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         #expect(rendered.contains("Required arguments: text"))
         #expect(!rendered.contains("<real string value>"))
         #expect(rendered.contains("Respond with exactly this one assistant message and nothing else:"))
+        #expect(rendered.contains(#"Use the line_count tool on this exact text: red\ngreen\nblue"#))
+        #expect(!rendered.contains("Use the line_count tool on this exact text: red\ngreen\nblue"))
         #expect(rendered.contains(#"<|tool_call_start|>{"name":"line_count","arguments":{"text":"red\ngreen\nblue"}}<|tool_call_end|>"#))
         #expect(rendered.contains("This value contains exactly 2 line break(s) and 0 blank lines."))
         #expect(rendered.contains(#"In the JSON call, each line break is represented by the two characters \n"#))
@@ -882,7 +884,7 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
             "tool_choice_name": "line_count",
         ])
 
-        let finalUser = "Now use line_count on this exact text: one\ntwo"
+        let finalUser = #"Now use line_count on this exact text: one\ntwo"#
         let finalUserRange = rendered.range(of: finalUser)
         #expect(finalUserRange != nil)
         let afterFinalUser = rendered[finalUserRange!.upperBound...]
