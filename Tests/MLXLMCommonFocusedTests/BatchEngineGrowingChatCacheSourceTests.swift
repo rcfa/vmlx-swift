@@ -142,8 +142,12 @@ struct BatchEngineGrowingChatCacheSourceTests {
         #expect(batch.contains("cacheRequiresDiskBackedCoordinatorRestore(slot.cache)"))
         #expect(nativeMTP.contains("cacheRequiresDiskBackedCoordinatorRestore(self.cache)"))
         #expect(helpers.contains("func cacheHasStandaloneRotatingWindowState"))
-        #expect(evaluate.contains("skipped disk-backed path-dependent cache fetch for active tool request"))
-        #expect(batch.contains("skipped disk-backed path-dependent cache fetch for active tool request"))
+        #expect(evaluate.contains("reset path-dependent cache and skipped disk-backed fetch for active tool request"))
+        #expect(evaluate.contains("self.cache = self.model.newCache(parameters: effectiveParameters)"))
+        #expect(evaluate.contains("inputForPrepare = input"))
+        #expect(batch.contains("reset path-dependent cache and skipped disk-backed fetch for active tool request"))
+        #expect(batch.contains("slot.cache = context.model.newCache(parameters: slot.parameters)"))
+        #expect(batch.contains("inputForPrepare = slot.originalInput"))
 
         for source in [evaluate, batch, nativeMTP] {
             #expect(source.contains("shouldSkipHistoryBoundaryRederiveAfterTrimMiss("))

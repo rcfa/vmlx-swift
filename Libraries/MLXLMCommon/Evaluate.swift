@@ -1275,8 +1275,10 @@ public struct TokenIterator: TokenIteratorProtocol {
                 || input.cacheScopeSalt?.contains("tool=required") == true),
                cacheRequiresDiskBackedCoordinatorRestore(self.cache)
             {
+                self.cache = self.model.newCache(parameters: effectiveParameters)
+                inputForPrepare = input
                 Self.logger.info(
-                    "TokenIterator: skipped disk-backed path-dependent cache fetch for active tool request"
+                    "TokenIterator: reset path-dependent cache and skipped disk-backed fetch for active tool request"
                 )
             } else {
             let result = coordinator.fetch(

@@ -1291,8 +1291,10 @@ public actor BatchEngine {
                 || slot.originalInput.cacheScopeSalt?.contains("tool=required") == true),
                cacheRequiresDiskBackedCoordinatorRestore(slot.cache)
             {
+                slot.cache = context.model.newCache(parameters: slot.parameters)
+                inputForPrepare = slot.originalInput
                 Self.logger.info(
-                    "Slot \(slot.id.description, privacy: .public): skipped disk-backed path-dependent cache fetch for active tool request"
+                    "Slot \(slot.id.description, privacy: .public): reset path-dependent cache and skipped disk-backed fetch for active tool request"
                 )
                 activeSlots[slotIndex] = slot
                 return stepPrefillAfterCacheLookup(
