@@ -893,6 +893,9 @@ public actor BatchEngine {
         }
         Task {
             for await generation in sourceStream {
+                if case .info(let info) = generation, info.turboQuantCompressions > 0 {
+                    turboQuantCompressionCount += info.turboQuantCompressions
+                }
                 continuation.yield(generation)
             }
             self.finishSoloFastPath(id: fastPathID)
