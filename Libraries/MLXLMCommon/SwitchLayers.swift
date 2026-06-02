@@ -324,9 +324,9 @@ open class SwitchLinear: Module, Quantizable {
     @ModuleInfo(key: "weight") public var weight: MLXArray
     @ModuleInfo(key: "bias") public var bias: MLXArray?
 
-    let inputDims: Int
-    let outputDims: Int
-    let numExperts: Int
+    public let inputDims: Int
+    public let outputDims: Int
+    public let numExperts: Int
 
     public init(inputDims: Int, outputDims: Int, numExperts: Int, bias: Bool = true) {
         self.inputDims = inputDims
@@ -381,9 +381,9 @@ open class SwitchLinear: Module, Quantizable {
     }
 }
 
-public class QuantizedSwitchLinear: SwitchLinear, Quantized {
-    @ParameterInfo(key: "scales") var scales: MLXArray
-    @ParameterInfo(key: "biases") var biases: MLXArray?
+open class QuantizedSwitchLinear: SwitchLinear, Quantized {
+    @ParameterInfo(key: "scales") public var scales: MLXArray
+    @ParameterInfo(key: "biases") public var biases: MLXArray?
 
     public let groupSize: Int
     public let bits: Int
@@ -442,7 +442,7 @@ public class QuantizedSwitchLinear: SwitchLinear, Quantized {
         self.freeze()
     }
 
-    override public func callAsFunction(
+    open override func callAsFunction(
         _ x: MLXArray, _ indices: MLXArray, sortedIndices: Bool = false
     ) -> MLXArray {
         var result = MLX.gatherQuantizedMM(

@@ -183,7 +183,7 @@ struct TPRankWorker {
                     "results": batchResult.results,
                     "engine": batchResult.engine,
                     "kv_mode": describe(kvMode),
-                    "token_authority": group.isMultiRank ? "rank0_send_recv_per_slot" : "local",
+                    "token_authority": group.isMultiRank ? "rank0_all_sum_token_broadcast_per_slot" : "local",
                     "cache_coordinator": enableCacheCoordinator,
                     "l2_disk_cache": enableDiskCache,
                     "cache_dir": cacheDir,
@@ -255,7 +255,7 @@ struct TPRankWorker {
                     "generated_tokens": generated,
                     "decoded": decoded,
                     "kv_mode": describe(kvMode),
-                    "token_authority": group.isMultiRank ? "rank0_send_recv" : "local",
+                    "token_authority": group.isMultiRank ? "rank0_all_sum_token_broadcast" : "local",
                     "cache_coordinator": enableCacheCoordinator,
                     "l2_disk_cache": enableDiskCache,
                     "cache_dir": cacheDir,
@@ -322,20 +322,17 @@ private struct RankZeroTokenSampler: LogitSampler {
         }
 
         if group.rank == 0 {
-            let token = base.sample(logits: logits)
-            var dependencies: [MLXArray] = [token]
-            for dst in 1 ..< group.size {
-                dependencies.append(Collectives.send(token, to: dst, group: group))
-            }
-            MLX.eval(dependencies)
-            return token
+            let token = base.sample(logits: logits).asType(.int32)
+            let broadcast = Collectives.allSum(token, group: group)
+            MLX.eval(broadcast)
+            return broadcast
         }
 
         // Force the local forward/cache-update graph to materialize even
         // though this rank does not own sampling.
         MLX.eval(logits)
-        let like = MLXArray([Int32(0)])
-        let token = Collectives.recvLike(like, from: 0, group: group)
+        let zero = MLXArray([Int32(0)])
+        let token = Collectives.allSum(zero, group: group)
         MLX.eval(token)
         return token
     }

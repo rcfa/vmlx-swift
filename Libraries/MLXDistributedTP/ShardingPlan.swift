@@ -113,14 +113,27 @@ public struct ShardingPlan: Sendable, Equatable {
         var rewrites: [(String, Module)] = []
         for (path, m) in flat {
             guard let directive = bestDirectiveFor(path: path) else { continue }
-            if let linear = m as? Linear,
-               let replacement = Self.makeReplacement(for: linear, directive: directive, group: group)
+            if let quantizedLinear = m as? QuantizedLinear,
+               let replacement = Self.makeReplacement(
+                for: quantizedLinear, directive: directive, group: group, path: path)
+            {
+                rewrites.append((path, replacement))
+                replaced.insert(path)
+            } else if let linear = m as? Linear,
+               let replacement = Self.makeReplacement(
+                for: linear, directive: directive, group: group, path: path)
+            {
+                rewrites.append((path, replacement))
+                replaced.insert(path)
+            } else if let quantizedSwitchLinear = m as? QuantizedSwitchLinear,
+                      let replacement = Self.makeReplacement(
+                        for: quantizedSwitchLinear, directive: directive, group: group, path: path)
             {
                 rewrites.append((path, replacement))
                 replaced.insert(path)
             } else if let switchLinear = m as? SwitchLinear,
                       let replacement = Self.makeReplacement(
-                        for: switchLinear, directive: directive, group: group)
+                        for: switchLinear, directive: directive, group: group, path: path)
             {
                 rewrites.append((path, replacement))
                 replaced.insert(path)
@@ -157,17 +170,66 @@ public struct ShardingPlan: Sendable, Equatable {
     /// Construct the replacement TP variant from a dense `Linear` per
     /// the directive. Returns nil for `.replicated` (caller skips).
     private static func makeReplacement(
-        for linear: Linear,
+        for linear: QuantizedLinear,
         directive: LinearShardingDirective,
-        group: Group
+        group: Group,
+        path: String
     ) -> Module? {
         switch directive {
         case .allToSharded(let segments):
-            return AllToShardedLinear.from(
+            let replacement = AllToShardedQuantizedLinear.from(
                 linear, group: group, segments: segments)
+            replacement.debugName = path
+            return replacement
         case .shardedToAll(let segments):
-            return ShardedToAllLinear.from(
+            let replacement = ShardedToAllQuantizedLinear.from(
                 linear, group: group, segments: segments)
+            replacement.debugName = path
+            return replacement
+        case .replicated:
+            return nil
+        }
+    }
+
+    private static func makeReplacement(
+        for linear: Linear,
+        directive: LinearShardingDirective,
+        group: Group,
+        path: String
+    ) -> Module? {
+        switch directive {
+        case .allToSharded(let segments):
+            let replacement = AllToShardedLinear.from(
+                linear, group: group, segments: segments)
+            replacement.debugName = path
+            return replacement
+        case .shardedToAll(let segments):
+            let replacement = ShardedToAllLinear.from(
+                linear, group: group, segments: segments)
+            replacement.debugName = path
+            return replacement
+        case .replicated:
+            return nil
+        }
+    }
+
+    private static func makeReplacement(
+        for linear: QuantizedSwitchLinear,
+        directive: LinearShardingDirective,
+        group: Group,
+        path: String
+    ) -> Module? {
+        switch directive {
+        case .allToSharded(let segments):
+            let replacement = AllToShardedQuantizedSwitchLinear.from(
+                linear, group: group, segments: segments)
+            replacement.debugName = path
+            return replacement
+        case .shardedToAll(let segments):
+            let replacement = ShardedToAllQuantizedSwitchLinear.from(
+                linear, group: group, segments: segments)
+            replacement.debugName = path
+            return replacement
         case .replicated:
             return nil
         }
@@ -176,13 +238,18 @@ public struct ShardingPlan: Sendable, Equatable {
     private static func makeReplacement(
         for linear: SwitchLinear,
         directive: LinearShardingDirective,
-        group: Group
+        group: Group,
+        path: String
     ) -> Module? {
         switch directive {
         case .allToSharded(let segments):
-            return AllToShardedSwitchLinear.from(linear, group: group, segments: segments)
+            let replacement = AllToShardedSwitchLinear.from(linear, group: group, segments: segments)
+            replacement.debugName = path
+            return replacement
         case .shardedToAll(let segments):
-            return ShardedToAllSwitchLinear.from(linear, group: group, segments: segments)
+            let replacement = ShardedToAllSwitchLinear.from(linear, group: group, segments: segments)
+            replacement.debugName = path
+            return replacement
         case .replicated:
             return nil
         }
