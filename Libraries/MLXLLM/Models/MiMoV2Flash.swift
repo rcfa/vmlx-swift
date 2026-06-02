@@ -658,10 +658,16 @@ final class MiMoV2AudioLayer: Module, UnaryLayer {
 
 final class MiMoV2AudioTransformer: Module, UnaryLayer {
     @ModuleInfo(key: "layers") var layers: [MiMoV2AudioLayer]
+    @ModuleInfo(key: "norm") var norm: RMSNorm?
 
     init(_ config: MiMoV2AudioConfiguration) {
         _layers.wrappedValue = (0 ..< config.inputLocalLayers).map { _ in
             MiMoV2AudioLayer(config)
+        }
+        if config.addPostNorm {
+            _norm.wrappedValue = RMSNorm(dimensions: config.inputLocalDim, eps: 1e-6)
+        } else {
+            _norm.wrappedValue = nil
         }
     }
 
@@ -670,7 +676,7 @@ final class MiMoV2AudioTransformer: Module, UnaryLayer {
         for layer in layers {
             states = layer(states)
         }
-        return states
+        return norm?(states) ?? states
     }
 }
 

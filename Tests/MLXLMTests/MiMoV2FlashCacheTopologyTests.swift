@@ -208,6 +208,7 @@ struct MiMoV2FlashCacheTopologyTests {
         #expect(parameters["audio_encoder.input_local_transformer.layers.0.self_attn.q_proj.bias"]?.shape == [16])
         #expect(parameters["audio_encoder.input_local_transformer.layers.0.self_attn.o_proj.weight"]?.shape == [16, 16])
         #expect(parameters["audio_encoder.input_local_transformer.layers.0.mlp.gate_proj.weight"]?.shape == [32, 16])
+        #expect(parameters["audio_encoder.input_local_transformer.norm.weight"]?.shape == [16])
         #expect(parameters["audio_encoder.projection.mlp.0.weight"]?.shape == [128, 32])
         #expect(parameters["audio_encoder.projection.mlp.2.weight"]?.shape == [32, 128])
         #expect(parameters["speech_embeddings.0.weight"]?.shape == [1280, 16])
