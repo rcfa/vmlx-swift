@@ -256,15 +256,13 @@ let cmlx = Target.target(
         "mlx/mlx/backend/metal/kernels",
         "mlx/mlx/backend/metal/nojit_kernels.cpp",
 
-        // do not build distributed support (yet)
+        // Build the CPU ring and Darwin/JACCL distributed backends for TP smoke.
+        // Keep MPI/NCCL on their stub paths.
         "mlx/mlx/distributed/mpi/mpi.cpp",
-        "mlx/mlx/distributed/ring/ring.cpp",
+        "mlx/mlx/distributed/ring/no_ring.cpp",
         "mlx/mlx/distributed/nccl/nccl.cpp",
         "mlx/mlx/distributed/nccl/nccl_stub",
-        "mlx/mlx/distributed/jaccl/jaccl.cpp",
-        "mlx/mlx/distributed/jaccl/mesh.cpp",
-        "mlx/mlx/distributed/jaccl/ring.cpp",
-        "mlx/mlx/distributed/jaccl/utils.cpp",
+        "mlx/mlx/distributed/jaccl/no_jaccl.cpp",
     ],
     cSettings: [
         .headerSearchPath("mlx"),
@@ -543,6 +541,7 @@ let package = Package(
                 "MLXDistributedCore",
                 "MLXDistributedJACCL",
                 "CmlxDistributedShim",
+                "Cmlx",
                 "MLX",
                 "MLXNN",
                 "MLXLMCommon",
