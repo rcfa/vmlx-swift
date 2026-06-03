@@ -165,12 +165,21 @@ public struct GemmaFunctionParser: ToolCallParser, Sendable {
 
     private func decodeEscapedStringValue(_ value: String) -> String {
         guard value.hasPrefix("\""),
-            value.hasSuffix("\""),
-            let data = value.data(using: .utf8),
-            let decoded = try? JSONDecoder().decode(String.self, from: data)
+            value.hasSuffix("\"")
         else {
             return value
         }
-        return decoded
+        if let data = value.data(using: .utf8),
+            let decoded = try? JSONDecoder().decode(String.self, from: data)
+        {
+            return decoded
+        }
+        var inner = String(value.dropFirst().dropLast())
+        inner = inner.replacingOccurrences(of: #"\""#, with: #"""#)
+        inner = inner.replacingOccurrences(of: #"\\n"#, with: "\n")
+        inner = inner.replacingOccurrences(of: #"\\t"#, with: "\t")
+        inner = inner.replacingOccurrences(of: #"\\r"#, with: "\r")
+        inner = inner.replacingOccurrences(of: #"\\\\"#, with: #"\"#)
+        return inner
     }
 }

@@ -26,6 +26,8 @@ struct Gemma4TemplateFallbackSourceTests {
             !source.contains("if isGemma {\n                                throw error\n                            }"),
             "Gemma native Jinja runtime errors must not bypass built-in Gemma fallbacks."
         )
+        #expect(source.contains("let gemmaRequiredToolChoice"))
+        #expect(source.contains("chat-template required tools -> Gemma4WithTools fallback engaged"))
         #expect(source.contains(#""Gemma4WithTools", MLXLMCommon.ChatTemplateFallbacks.gemma4WithTools"#))
         #expect(source.contains(#""Gemma4Minimal",   MLXLMCommon.ChatTemplateFallbacks.gemma4Minimal"#))
     }

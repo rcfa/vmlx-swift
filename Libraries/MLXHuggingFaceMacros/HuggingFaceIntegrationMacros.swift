@@ -189,6 +189,27 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                 tools: chatTemplateTools,
                                     additionalContext: additionalContext)
                         }
+                        let gemmaRequiredToolChoice =
+                            !(tools?.isEmpty ?? true)
+                            && upstream.bosToken == "<bos>"
+                            && (additionalContext?["tool_choice"] as? String) == "required"
+                            && (env["VMLX_CHAT_TEMPLATE_FALLBACK_DISABLE"] ?? "0") != "1"
+                        if gemmaRequiredToolChoice {
+                            if (env["VMLX_CHAT_TEMPLATE_FALLBACK_LOG"] ?? "0") == "1" {
+                                FileHandle.standardError.write(
+                                    "[vmlx] chat-template required tools -> Gemma4WithTools fallback engaged\\n"
+                                        .data(using: .utf8)!)
+                            }
+                            return try upstream.applyChatTemplate(
+                                messages: messages,
+                                chatTemplate: VMLXTokenizers.ChatTemplateArgument.literal(
+                                    MLXLMCommon.ChatTemplateFallbacks.gemma4WithTools),
+                                addGenerationPrompt: true,
+                                truncation: false,
+                                maxLength: nil,
+                                tools: chatTemplateTools,
+                                additionalContext: additionalContext)
+                        }
                         let step37Bos =
                             "<" + String(UnicodeScalar(0xFF5C)!)
                             + "begin" + String(UnicodeScalar(0x2581)!) + "of"
@@ -540,6 +561,27 @@ public struct TokenizerAdaptorMacro: ExpressionMacro {
                                 maxLength: nil,
                                 tools: chatTemplateTools,
                                     additionalContext: additionalContext)
+                        }
+                        let gemmaRequiredToolChoice =
+                            !(tools?.isEmpty ?? true)
+                            && upstream.bosToken == "<bos>"
+                            && (additionalContext?["tool_choice"] as? String) == "required"
+                            && (env["VMLX_CHAT_TEMPLATE_FALLBACK_DISABLE"] ?? "0") != "1"
+                        if gemmaRequiredToolChoice {
+                            if (env["VMLX_CHAT_TEMPLATE_FALLBACK_LOG"] ?? "0") == "1" {
+                                FileHandle.standardError.write(
+                                    "[vmlx] chat-template required tools -> Gemma4WithTools fallback engaged\\n"
+                                        .data(using: .utf8)!)
+                            }
+                            return try upstream.applyChatTemplate(
+                                messages: messages,
+                                chatTemplate: VMLXTokenizers.ChatTemplateArgument.literal(
+                                    MLXLMCommon.ChatTemplateFallbacks.gemma4WithTools),
+                                addGenerationPrompt: addGenerationPrompt,
+                                truncation: false,
+                                maxLength: nil,
+                                tools: chatTemplateTools,
+                                additionalContext: additionalContext)
                         }
                         let step37Bos =
                             "<" + String(UnicodeScalar(0xFF5C)!)
