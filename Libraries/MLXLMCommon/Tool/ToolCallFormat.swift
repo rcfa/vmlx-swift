@@ -564,7 +564,7 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         // style envelopes via `GemmaFunctionParser`.
         case "gemma":
             return .gemma
-        case "gemma4":
+        case "gemma4", "gemma4_unified", "gemma4_unified_text":
             return .gemma4
         // Mistral 4 — `[TOOL_CALLS] … [ARGS] …` JSON delimiters.
         case "mistral", "mistral4":

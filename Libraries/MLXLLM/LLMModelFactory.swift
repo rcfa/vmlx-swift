@@ -34,6 +34,7 @@ public enum LLMTypeRegistry {
             "gemma3n": create(Gemma3nTextConfiguration.self, Gemma3nTextModel.init),
             "gemma4": create(Gemma4TextConfiguration.self, Gemma4TextModel.init),
             "gemma4_text": create(Gemma4TextConfiguration.self, Gemma4TextModel.init),
+            "gemma4_unified_text": create(Gemma4TextConfiguration.self, Gemma4TextModel.init),
             "qwen2": create(Qwen2Configuration.self, Qwen2Model.init),
             "qwen3": create(Qwen3Configuration.self, Qwen3Model.init),
             "qwen3_moe": create(Qwen3MoEConfiguration.self, Qwen3MoEModel.init),
@@ -1157,7 +1158,8 @@ private struct LLMUserInputProcessor: UserInputProcessor {
         let normalized = modelType
             .lowercased()
             .replacingOccurrences(of: "-", with: "_")
-        guard normalized == "gemma4" || normalized == "gemma4_text" else {
+        let compact = normalized.replacingOccurrences(of: "_", with: "")
+        guard compact.hasPrefix("gemma4") else {
             return false
         }
         if (additionalContext?["tool_choice"] as? String) == "required" {

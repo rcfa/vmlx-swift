@@ -47,33 +47,33 @@ struct Gemma4AudioGuardTests {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
-    /// Pins the audio guard at the top of `Gemma4.prepare`.
+    /// Pins the audio/video guard at the top of `Gemma4.prepare`.
     /// The guard MUST throw a `VLMError.processing` that mentions
-    /// `LMInput.audio` (so the caller can grep for the failure cause)
-    /// and explains why audio is rejected (so they don't loop on
+    /// `LMInput.audio`/`LMInput.video` (so the caller can grep for the failure cause)
+    /// and explains why audio/video is rejected (so they don't loop on
     /// retry).
-    @Test("Gemma4.prepare contains the LMInput.audio guard")
+    @Test("Gemma4.prepare contains the LMInput audio/video guard")
     func audioGuardIsPresent() throws {
         let source = try Self.gemma4Source()
 
         // The guard fires before any forward op.
-        #expect(source.contains("if input.audio != nil {"),
-            "Gemma4.prepare must check `input.audio != nil` before proceeding.")
+        #expect(source.contains("if input.audio != nil || input.video != nil {"),
+            "Gemma4.prepare must check `input.audio` and `input.video` before proceeding.")
 
         // The throw is a VLMError.processing for graceful caller handling.
         #expect(source.contains("throw VLMError.processing("),
-            "Audio guard must surface as VLMError.processing, not fatalError or silent fallthrough.")
+            "Audio/video guard must surface as VLMError.processing, not fatalError or silent fallthrough.")
 
-        // The error message names the field that's rejected so the
+        // The error message names the fields that are rejected so the
         // caller sees a specific diagnostic.
-        #expect(source.contains("LMInput.audio must be nil"),
-            "Audio guard message must name `LMInput.audio` so the call site sees what to fix.")
+        #expect(source.contains("LMInput.audio and LMInput.video must be nil"),
+            "Audio/video guard message must name `LMInput.audio` and `LMInput.video` so the call site sees what to fix.")
 
-        // The message explains WHY (audio_tower weights are sanitized
-        // away) so the caller doesn't loop on retry.
+        // The message explains WHY (the audio/video lanes are not proven)
+        // so the caller doesn't loop on retry.
         #expect(
-            source.contains("audio_tower.*") || source.contains("audio_tower.\\*"),
-            "Audio guard rationale should reference `audio_tower.*` so a future maintainer sees the connection to sanitize.")
+            source.contains("Audio/video-bearing Gemma4 bundles have no proven vMLX audio/video tower path yet"),
+            "Audio/video guard rationale should state that the lane is not implemented/proven.")
     }
 
     /// Pins the image-token-id resolution path in `Gemma4Processor.prepare`.

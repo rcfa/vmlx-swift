@@ -70,6 +70,7 @@ private func visionRmsNormNoScale(_ x: MLXArray, eps: Float = 1e-6) -> MLXArray 
 // MARK: - Configurations
 
 public struct Gemma4VisionConfig: Codable, Sendable {
+    let modelType: String
     let hiddenSize: Int
     let intermediateSize: Int
     let numHiddenLayers: Int
@@ -84,9 +85,18 @@ public struct Gemma4VisionConfig: Codable, Sendable {
     let standardize: Bool
     let useClippedLinears: Bool
     let ropeTheta: Float
+    let modelPatchSize: Int
+    let outputProjectionDimensions: Int
+
+    var usesUnifiedVisionEmbedder: Bool {
+        modelType == "gemma4_unified_vision"
+    }
 
     enum CodingKeys: String, CodingKey {
+        case modelType = "model_type"
         case hiddenSize = "hidden_size"
+        case mmEmbedDim = "mm_embed_dim"
+        case outputProjDims = "output_proj_dims"
         case intermediateSize = "intermediate_size"
         case numHiddenLayers = "num_hidden_layers"
         case numAttentionHeads = "num_attention_heads"
@@ -94,8 +104,11 @@ public struct Gemma4VisionConfig: Codable, Sendable {
         case headDim = "head_dim"
         case rmsNormEps = "rms_norm_eps"
         case patchSize = "patch_size"
+        case modelPatchSize = "model_patch_size"
         case positionEmbeddingSize = "position_embedding_size"
+        case mmPosembSize = "mm_posemb_size"
         case defaultOutputLength = "default_output_length"
+        case numSoftTokens = "num_soft_tokens"
         case poolingKernelSize = "pooling_kernel_size"
         case standardize
         case useClippedLinears = "use_clipped_linears"
@@ -107,7 +120,12 @@ public struct Gemma4VisionConfig: Codable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        hiddenSize = try c.decodeIfPresent(Int.self, forKey: .hiddenSize) ?? 768
+        modelType = try c.decodeIfPresent(String.self, forKey: .modelType) ?? "gemma4_vision"
+        hiddenSize =
+            try c.decodeIfPresent(Int.self, forKey: .hiddenSize)
+            ?? c.decodeIfPresent(Int.self, forKey: .mmEmbedDim)
+            ?? c.decodeIfPresent(Int.self, forKey: .outputProjDims)
+            ?? 768
         intermediateSize = try c.decodeIfPresent(Int.self, forKey: .intermediateSize) ?? 3072
         numHiddenLayers = try c.decodeIfPresent(Int.self, forKey: .numHiddenLayers) ?? 16
         numAttentionHeads = try c.decodeIfPresent(Int.self, forKey: .numAttentionHeads) ?? 12
@@ -115,11 +133,24 @@ public struct Gemma4VisionConfig: Codable, Sendable {
         headDim = try c.decodeIfPresent(Int.self, forKey: .headDim) ?? 64
         rmsNormEps = try c.decodeIfPresent(Float.self, forKey: .rmsNormEps) ?? 1e-6
         patchSize = try c.decodeIfPresent(Int.self, forKey: .patchSize) ?? 16
-        positionEmbeddingSize = try c.decodeIfPresent(Int.self, forKey: .positionEmbeddingSize) ?? 10240
-        defaultOutputLength = try c.decodeIfPresent(Int.self, forKey: .defaultOutputLength) ?? 280
+        modelPatchSize =
+            try c.decodeIfPresent(Int.self, forKey: .modelPatchSize)
+            ?? ((try c.decodeIfPresent(Int.self, forKey: .poolingKernelSize) ?? 3)
+                * (try c.decodeIfPresent(Int.self, forKey: .patchSize) ?? 16))
+        positionEmbeddingSize =
+            try c.decodeIfPresent(Int.self, forKey: .positionEmbeddingSize)
+            ?? c.decodeIfPresent(Int.self, forKey: .mmPosembSize)
+            ?? 10240
+        defaultOutputLength =
+            try c.decodeIfPresent(Int.self, forKey: .defaultOutputLength)
+            ?? c.decodeIfPresent(Int.self, forKey: .numSoftTokens)
+            ?? 280
         poolingKernelSize = try c.decodeIfPresent(Int.self, forKey: .poolingKernelSize) ?? 3
         standardize = try c.decodeIfPresent(Bool.self, forKey: .standardize) ?? false
         useClippedLinears = try c.decodeIfPresent(Bool.self, forKey: .useClippedLinears) ?? false
+        outputProjectionDimensions =
+            try c.decodeIfPresent(Int.self, forKey: .outputProjDims)
+            ?? hiddenSize
 
         if let rc = try? decoder.container(keyedBy: TopKeys.self),
            let rp = try? rc.decodeIfPresent([String: StringOrNumber].self, forKey: .ropeParameters),
@@ -129,6 +160,25 @@ public struct Gemma4VisionConfig: Codable, Sendable {
         } else {
             ropeTheta = 100.0
         }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(modelType, forKey: .modelType)
+        try c.encode(hiddenSize, forKey: .hiddenSize)
+        try c.encode(intermediateSize, forKey: .intermediateSize)
+        try c.encode(numHiddenLayers, forKey: .numHiddenLayers)
+        try c.encode(numAttentionHeads, forKey: .numAttentionHeads)
+        try c.encode(numKeyValueHeads, forKey: .numKeyValueHeads)
+        try c.encode(headDim, forKey: .headDim)
+        try c.encode(rmsNormEps, forKey: .rmsNormEps)
+        try c.encode(patchSize, forKey: .patchSize)
+        try c.encode(modelPatchSize, forKey: .modelPatchSize)
+        try c.encode(positionEmbeddingSize, forKey: .positionEmbeddingSize)
+        try c.encode(defaultOutputLength, forKey: .defaultOutputLength)
+        try c.encode(poolingKernelSize, forKey: .poolingKernelSize)
+        try c.encode(standardize, forKey: .standardize)
+        try c.encode(useClippedLinears, forKey: .useClippedLinears)
     }
 }
 
@@ -256,6 +306,18 @@ public struct Gemma4Configuration: Codable, Sendable {
         case imageTokenId = "image_token_id"
         case visionSoftTokensPerImage = "vision_soft_tokens_per_image"
         case quantization
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        textConfig = try c.decode(G4TextConfig.self, forKey: .textConfig)
+        visionConfig = try c.decode(Gemma4VisionConfig.self, forKey: .visionConfig)
+        modelType = try c.decodeIfPresent(String.self, forKey: .modelType) ?? "gemma4"
+        imageTokenId = try c.decodeIfPresent(Int.self, forKey: .imageTokenId) ?? 258880
+        visionSoftTokensPerImage =
+            try c.decodeIfPresent(Int.self, forKey: .visionSoftTokensPerImage)
+            ?? visionConfig.defaultOutputLength
+        quantization = try c.decodeIfPresent(BaseConfiguration.Quantization.self, forKey: .quantization)
     }
 }
 
@@ -510,6 +572,66 @@ private class VisionTower: Module {
         h = pooled
         if cfg.standardize, let sb = stdBias, let ss = stdScale { h = (h - sb) * ss }
         return h
+    }
+}
+
+private class UnifiedVisionEmbedder: Module {
+    let cfg: Gemma4VisionConfig
+    @ModuleInfo(key: "patch_dense") var patchDense: Linear
+    @ModuleInfo(key: "patch_ln1") var patchNorm1: LayerNorm
+    @ModuleInfo(key: "patch_ln2") var patchNorm2: LayerNorm
+    @ModuleInfo(key: "pos_embedding") var posEmbedding: MLXArray
+    @ModuleInfo(key: "pos_norm") var posNorm: LayerNorm
+
+    init(_ cfg: Gemma4VisionConfig) {
+        self.cfg = cfg
+        let patchDims = 3 * cfg.modelPatchSize * cfg.modelPatchSize
+        _patchDense.wrappedValue = Linear(patchDims, cfg.outputProjectionDimensions, bias: true)
+        _patchNorm1.wrappedValue = LayerNorm(dimensions: patchDims, eps: cfg.rmsNormEps)
+        _patchNorm2.wrappedValue = LayerNorm(dimensions: cfg.outputProjectionDimensions, eps: cfg.rmsNormEps)
+        _posEmbedding.wrappedValue = MLXArray.ones([cfg.positionEmbeddingSize, 2, cfg.outputProjectionDimensions])
+        _posNorm.wrappedValue = LayerNorm(dimensions: cfg.outputProjectionDimensions, eps: cfg.rmsNormEps)
+        super.init()
+    }
+
+    func callAsFunction(_ pixels: MLXArray) -> MLXArray {
+        let (B, C, H, W) = (pixels.dim(0), pixels.dim(1), pixels.dim(2), pixels.dim(3))
+        let p = cfg.modelPatchSize
+        let pH = H / p
+        let pW = W / p
+        let nReal = min(pH * pW, cfg.defaultOutputLength)
+        let nPad = max(0, cfg.defaultOutputLength - nReal)
+
+        var patches = pixels.reshaped(B, C, pH, p, pW, p)
+            .transposed(0, 2, 4, 3, 5, 1)
+            .reshaped(B, pH * pW, C * p * p)
+        patches = patches[0..., ..<nReal, 0...]
+        var hidden = patchDense(patchNorm1(patches).asType(patchDense.weight.dtype))
+        hidden = patchNorm2(hidden)
+
+        var positions: [Int32] = []
+        positions.reserveCapacity(nReal * 2)
+        var count = 0
+        outer: for y in 0 ..< pH {
+            for x in 0 ..< pW {
+                positions.append(Int32(x))
+                positions.append(Int32(y))
+                count += 1
+                if count >= nReal { break outer }
+            }
+        }
+        let pos = MLXArray(positions).reshaped(nReal, 2)
+        let xPos = pos[0..., 0]
+        let yPos = pos[0..., 1]
+        var posHidden = posEmbedding[xPos, 0] + posEmbedding[yPos, 1]
+        posHidden = posNorm(posHidden).expandedDimensions(axis: 0)
+        hidden = hidden + posHidden.asType(hidden.dtype)
+
+        if nPad > 0 {
+            let pad = MLXArray.zeros([B, nPad, cfg.outputProjectionDimensions]).asType(hidden.dtype)
+            hidden = concatenated([hidden, pad], axis: 1)
+        }
+        return hidden
     }
 }
 
@@ -873,7 +995,8 @@ private func maskedScatter(input: MLXArray, mask: MLXArray, source: MLXArray) th
 // MARK: - Gemma4 VLM
 
 public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
-    @ModuleInfo(key: "vision_tower") private var visionTower: VisionTower
+    @ModuleInfo(key: "vision_tower") private var visionTower: VisionTower?
+    @ModuleInfo(key: "vision_embedder") private var unifiedVisionEmbedder: UnifiedVisionEmbedder?
     @ModuleInfo(key: "language_model") private var languageModel: G4LanguageModel
     @ModuleInfo(key: "embed_vision") private var embedVision: MultimodalEmbedder
 
@@ -891,26 +1014,29 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
 
     public init(_ config: Gemma4Configuration) {
         self.config = config
-        _visionTower.wrappedValue = VisionTower(config.visionConfig)
+        if config.visionConfig.usesUnifiedVisionEmbedder {
+            _unifiedVisionEmbedder.wrappedValue = UnifiedVisionEmbedder(config.visionConfig)
+        } else {
+            _visionTower.wrappedValue = VisionTower(config.visionConfig)
+        }
         _languageModel.wrappedValue = G4LanguageModel(config.textConfig)
-        _embedVision.wrappedValue = MultimodalEmbedder(embDim: config.visionConfig.hiddenSize, textDim: config.textConfig.hiddenSize)
+        _embedVision.wrappedValue = MultimodalEmbedder(embDim: config.visionConfig.outputProjectionDimensions, textDim: config.textConfig.hiddenSize)
     }
 
     public func prepare(_ input: LMInput, cache: [any KVCache], windowSize: Int?) throws -> PrepareResult {
-        // Audio guard: Gemma4 VLM does not implement audio.
-        // The `sanitize` path drops `audio_tower.*` and `embed_audio.*`
-        // weights silently (see `Gemma4.sanitize` below), and there is no
-        // audio module wired in `init`. If a caller passes
-        // `LMInput.audio` it would be IGNORED, which means the model
-        // would generate over a prefix that ASSUMES audio embeddings at
-        // certain positions but never received them — a silent
-        // corruption mode that's hard to debug at the call site.
-        // Surface a clean error here instead.
-        if input.audio != nil {
+        // Media guard for the 2026 Gemma4 unified release. The text runtime is
+        // wired, but audio/video preprocessing is not implemented, and the
+        // early-fusion `vision_embedder.*` image path is not production-proven.
+        // Do not silently generate over missing or wrong media embeddings.
+        if input.audio != nil || input.video != nil {
             throw VLMError.processing(
-                "Gemma4 VLM does not implement audio inputs; LMInput.audio must be nil. " +
-                "Audio-bearing Gemma4 bundles drop `audio_tower.*` and `embed_audio.*` weights " +
-                "during sanitize and have no audio module to consume the waveform.")
+                "Gemma4 VLM does not implement audio/video inputs; LMInput.audio and LMInput.video must be nil. " +
+                "Audio/video-bearing Gemma4 bundles have no proven vMLX audio/video tower path yet.")
+        }
+        if input.image != nil && unifiedVisionEmbedder != nil {
+            throw VLMError.processing(
+                "Gemma4 unified image inputs are not production-supported yet; the released gemma4_unified early-fusion vision_embedder path is not live-proven in vMLX. " +
+                "Use text-only for this bundle until the unified media encoder is implemented and proven.")
         }
         var emb = languageModel.model.emb(input.text.tokens)
         emb = emb * MLXArray(sqrt(Float(config.textConfig.hiddenSize)), dtype: emb.dtype)
@@ -927,10 +1053,18 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
                 if let frames = input.image?.frames, i < frames.count {
                     let h = frames[i].h; let w = frames[i].w
                     let singleImage = pixels[i, 0..., ..<h, ..<w].expandedDimensions(axis: 0)
-                    featuresList.append(embedVision(visionTower(singleImage)))
+                    if let unifiedVisionEmbedder {
+                        featuresList.append(embedVision(unifiedVisionEmbedder(singleImage)))
+                    } else if let visionTower {
+                        featuresList.append(embedVision(visionTower(singleImage)))
+                    }
                 } else {
                     let singleImage = pixels[i].expandedDimensions(axis: 0)
-                    featuresList.append(embedVision(visionTower(singleImage)))
+                    if let unifiedVisionEmbedder {
+                        featuresList.append(embedVision(unifiedVisionEmbedder(singleImage)))
+                    } else if let visionTower {
+                        featuresList.append(embedVision(visionTower(singleImage)))
+                    }
                 }
             }
             let imgFeatures = (B == 1 ? featuresList[0] : concatenated(featuresList)).asType(emb.dtype)
@@ -963,6 +1097,8 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
             if nk.hasPrefix("model.") { nk = String(nk.dropFirst("model.".count)) }
             // Skip audio — Gemma4 VLM doesn't implement audio, these weights have no module
             if nk.hasPrefix("audio_tower.") || nk.hasPrefix("embed_audio.") { continue }
+            if nk.hasPrefix("vision_tower.") && config.visionConfig.usesUnifiedVisionEmbedder { continue }
+            if nk.hasPrefix("vision_embedder.") && !config.visionConfig.usesUnifiedVisionEmbedder { continue }
             // Skip clipped linear params — training artifacts, not used in inference (we use plain Linear)
             if nk.contains("input_min") || nk.contains("input_max") || nk.contains("output_min") || nk.contains("output_max") { continue }
             if nk.contains("rotary_emb") { continue }
@@ -1005,16 +1141,38 @@ public struct Gemma4ProcessorConfiguration: Codable, Sendable {
         case poolingKernelSize = "pooling_kernel_size"
         case imageSeqLength = "image_seq_length"
         case audioSeqLength = "audio_seq_length"
+        case imageProcessor = "image_processor"
+        case videoProcessor = "video_processor"
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         processorClass = try c.decodeIfPresent(String.self, forKey: .processorClass) ?? "Gemma4Processor"
-        patchSize = try c.decodeIfPresent(Int.self, forKey: .patchSize) ?? 16
-        maxSoftTokens = try c.decodeIfPresent(Int.self, forKey: .maxSoftTokens) ?? 280
-        poolingKernelSize = try c.decodeIfPresent(Int.self, forKey: .poolingKernelSize) ?? 3
+        let image = try? c.nestedContainer(keyedBy: CodingKeys.self, forKey: .imageProcessor)
+        patchSize =
+            try c.decodeIfPresent(Int.self, forKey: .patchSize)
+            ?? image?.decodeIfPresent(Int.self, forKey: .patchSize)
+            ?? 16
+        maxSoftTokens =
+            try c.decodeIfPresent(Int.self, forKey: .maxSoftTokens)
+            ?? image?.decodeIfPresent(Int.self, forKey: .maxSoftTokens)
+            ?? 280
+        poolingKernelSize =
+            try c.decodeIfPresent(Int.self, forKey: .poolingKernelSize)
+            ?? image?.decodeIfPresent(Int.self, forKey: .poolingKernelSize)
+            ?? 3
         imageSeqLength = try c.decodeIfPresent(Int.self, forKey: .imageSeqLength) ?? 280
         audioSeqLength = try c.decodeIfPresent(Int.self, forKey: .audioSeqLength) ?? 750
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(processorClass, forKey: .processorClass)
+        try c.encode(patchSize, forKey: .patchSize)
+        try c.encode(maxSoftTokens, forKey: .maxSoftTokens)
+        try c.encode(poolingKernelSize, forKey: .poolingKernelSize)
+        try c.encode(imageSeqLength, forKey: .imageSeqLength)
+        try c.encode(audioSeqLength, forKey: .audioSeqLength)
     }
 }
 
@@ -1027,6 +1185,15 @@ public struct Gemma4Processor: UserInputProcessor {
     }
 
     public func prepare(input: UserInput) async throws -> LMInput {
+        if !input.videos.isEmpty || !input.audios.isEmpty {
+            throw VLMError.processing(
+                "Gemma4 processor currently supports image inputs only; audio/video lanes are explicit unsupported until implemented and proven.")
+        }
+        if config.processorClass == "Gemma4UnifiedProcessor", !input.images.isEmpty {
+            throw VLMError.processing(
+                "Gemma4 unified image inputs are not production-supported yet; the released gemma4_unified early-fusion vision_embedder path is not live-proven in vMLX. " +
+                "Use text-only for this bundle until the unified media encoder is implemented and proven.")
+        }
         var messages = Qwen2VLMessageGenerator().generate(from: input)
         if Self.requiresToolChoice(input.additionalContext) {
             messages = Self.compactCompletedToolHistoryForRequiredChoice(messages)
@@ -1094,7 +1261,8 @@ public struct Gemma4Processor: UserInputProcessor {
         return LMInput(
             text: .init(tokens: pa, mask: ones(like: pa).asType(.int8), tokenIds: tokens),
             image: processedImage,
-            cacheScopeSalt: cacheScopeSalt(from: input.additionalContext))
+            cacheScopeSalt: cacheScopeSalt(from: input.additionalContext),
+            toolSchemas: input.tools)
     }
 
     private static func requiresToolChoice(_ context: [String: any Sendable]?) -> Bool {

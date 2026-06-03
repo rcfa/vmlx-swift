@@ -178,6 +178,135 @@ private func maskedScatter(input: MLXArray, mask: MLXArray, source: MLXArray) ->
     #expect(config.maxSoftTokens == 280)
 }
 
+@Test func gemma4Unified12BConfigDecode() throws {
+    let data = Data(#"""
+    {
+      "model_type": "gemma4_unified",
+      "image_token_id": 258880,
+      "audio_token_id": 258881,
+      "video_token_id": 258884,
+      "text_config": {
+        "attention_bias": false,
+        "attention_k_eq_v": true,
+        "enable_moe_block": false,
+        "final_logit_softcapping": 30.0,
+        "global_head_dim": 512,
+        "head_dim": 256,
+        "hidden_size": 3840,
+        "hidden_size_per_layer_input": 0,
+        "intermediate_size": 15360,
+        "layer_types": [
+          "sliding_attention", "sliding_attention", "sliding_attention",
+          "sliding_attention", "sliding_attention", "full_attention",
+          "sliding_attention", "sliding_attention", "sliding_attention",
+          "sliding_attention", "sliding_attention", "full_attention",
+          "sliding_attention", "sliding_attention", "sliding_attention",
+          "sliding_attention", "sliding_attention", "full_attention",
+          "sliding_attention", "sliding_attention", "sliding_attention",
+          "sliding_attention", "sliding_attention", "full_attention",
+          "sliding_attention", "sliding_attention", "sliding_attention",
+          "sliding_attention", "sliding_attention", "full_attention",
+          "sliding_attention", "sliding_attention", "sliding_attention",
+          "sliding_attention", "sliding_attention", "full_attention",
+          "sliding_attention", "sliding_attention", "sliding_attention",
+          "sliding_attention", "sliding_attention", "full_attention",
+          "sliding_attention", "sliding_attention", "sliding_attention",
+          "sliding_attention", "sliding_attention", "full_attention"
+        ],
+        "model_type": "gemma4_unified_text",
+        "moe_intermediate_size": null,
+        "num_attention_heads": 16,
+        "num_experts": null,
+        "num_global_key_value_heads": 1,
+        "num_hidden_layers": 48,
+        "num_key_value_heads": 8,
+        "num_kv_shared_layers": 0,
+        "rms_norm_eps": 1e-6,
+        "rope_parameters": {
+          "full_attention": {
+            "partial_rotary_factor": 0.25,
+            "rope_theta": 1000000.0,
+            "rope_type": "proportional"
+          },
+          "sliding_attention": {
+            "rope_theta": 10000.0,
+            "rope_type": "default"
+          }
+        },
+        "sliding_window": 1024,
+        "tie_word_embeddings": true,
+        "top_k_experts": null,
+        "use_double_wide_mlp": false,
+        "vocab_size": 262144,
+        "vocab_size_per_layer_input": 262144
+      },
+      "vision_config": {
+        "mm_embed_dim": 3840,
+        "mm_posemb_size": 1120,
+        "model_patch_size": 48,
+        "model_type": "gemma4_unified_vision",
+        "num_soft_tokens": 280,
+        "output_proj_dims": 3840,
+        "patch_size": 16,
+        "pooling_kernel_size": 3,
+        "rms_norm_eps": 1e-6
+      }
+    }
+    """#.utf8)
+
+    let config = try JSONDecoder().decode(Gemma4Configuration.self, from: data)
+
+    #expect(config.modelType == "gemma4_unified")
+    #expect(config.imageTokenId == 258880)
+    #expect(config.visionSoftTokensPerImage == 280)
+    #expect(config.textConfig.numHiddenLayers == 48)
+    #expect(config.textConfig.enableMoeBlock == false)
+    #expect(config.textConfig.numExperts == 0)
+    #expect(config.textConfig.numKeyValueHeads == 8)
+    #expect(config.textConfig.numGlobalKeyValueHeads == 1)
+    #expect(config.textConfig.globalHeadDim == 512)
+    #expect(config.textConfig.slidingWindow == 1024)
+    #expect(config.textConfig.layerTypes.filter { $0 == "full_attention" }.count == 8)
+    #expect(config.textConfig.layerTypes.filter { $0 == "sliding_attention" }.count == 40)
+    #expect(config.visionConfig.usesUnifiedVisionEmbedder)
+    #expect(config.visionConfig.hiddenSize == 3840)
+    #expect(config.visionConfig.outputProjectionDimensions == 3840)
+    #expect(config.visionConfig.modelPatchSize == 48)
+    #expect(config.visionConfig.positionEmbeddingSize == 1120)
+    #expect(config.visionConfig.defaultOutputLength == 280)
+}
+
+@Test func gemma4UnifiedProcessorConfigDecode() throws {
+    let data = Data(#"""
+    {
+      "processor_class": "Gemma4UnifiedProcessor",
+      "image_processor": {
+        "image_processor_type": "Gemma4UnifiedImageProcessor",
+        "max_soft_tokens": 280,
+        "patch_size": 16,
+        "pooling_kernel_size": 3
+      },
+      "image_seq_length": 280,
+      "audio_seq_length": 750,
+      "video_processor": {
+        "video_processor_type": "Gemma4UnifiedVideoProcessor",
+        "max_soft_tokens": 70,
+        "patch_size": 16,
+        "pooling_kernel_size": 3
+      }
+    }
+    """#.utf8)
+
+    let config = try JSONDecoder().decode(Gemma4ProcessorConfiguration.self, from: data)
+
+    #expect(config.processorClass == "Gemma4UnifiedProcessor")
+    #expect(config.patchSize == 16)
+    #expect(config.poolingKernelSize == 3)
+    #expect(config.maxSoftTokens == 280)
+    #expect(config.imageSeqLength == 280)
+    #expect(config.audioSeqLength == 750)
+}
+
 @Test func imageSeqLengthMatchesVisionOutput() throws {
     let configPath = NSString(string: "~/.cache/huggingface/hub/models--mlx-community--gemma-4-e2b-it-4bit/snapshots/76b6a5af250fa029339a757deeb93716baa8ead0/config.json").expandingTildeInPath
     let procPath = NSString(string: "~/.cache/huggingface/hub/models--mlx-community--gemma-4-e2b-it-4bit/snapshots/76b6a5af250fa029339a757deeb93716baa8ead0/processor_config.json").expandingTildeInPath

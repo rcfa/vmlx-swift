@@ -501,6 +501,16 @@ struct HarmonyParserFocusedTests {
         #expect(function.body.contains("Tool schema was supplied, but the generation produced no structured .toolCall event."))
     }
 
+    @Test("Gemma4 VLM processor preserves tools into LMInput schemas")
+    func gemma4VLMProcessorPreservesToolsIntoLMInputSchemas() throws {
+        let source = try String(
+            contentsOfFile: "Libraries/MLXVLM/Models/Gemma4.swift",
+            encoding: .utf8)
+
+        #expect(source.contains("tools: input.tools"))
+        #expect(source.contains("toolSchemas: input.tools"))
+    }
+
     @Test("Harmony live reasoning probe honors generation defaults")
     func harmonyLiveReasoningProbeHonorsGenerationDefaults() throws {
         let bench = try String(contentsOfFile: "RunBench/Bench.swift", encoding: .utf8)
@@ -1665,19 +1675,21 @@ struct Gemma4VLMFocusedSourceContractsTests {
         #expect(overload.contains("upstream.bosToken == \"<s>\""))
         #expect(overload.contains("upstream.convertTokenToId(\"<|im_end|>\") != nil"))
         #expect(!overload.contains("upstream.convertTokenToId(\"[AVAILABLE_TOOLS]\") != nil"))
-        #expect(!overload.contains("upstream.convertTokenToId(\"<tool_call>\") != nil"))
         #expect(!overload.contains("upstream.convertTokenToId(\"<tool_response>\") != nil"))
         #expect(overload.contains("addGenerationPrompt: addGenerationPrompt"))
     }
 
-    @Test("Gemma4 prepare rejects unsupported audio explicitly")
+    @Test("Gemma4 prepare rejects unsupported unified media explicitly")
     func audioGuardIsPresent() throws {
         let source = try gemma4VLMSource()
 
-        #expect(source.contains("if input.audio != nil {"))
+        #expect(source.contains("if input.audio != nil || input.video != nil {"))
         #expect(source.contains("throw VLMError.processing("))
-        #expect(source.contains("LMInput.audio must be nil"))
-        #expect(source.contains("audio_tower.*") || source.contains("audio_tower.\\*"))
+        #expect(source.contains("LMInput.audio and LMInput.video must be nil"))
+        #expect(source.contains("audio/video inputs"))
+        #expect(source.contains("if input.image != nil && unifiedVisionEmbedder != nil {"))
+        #expect(source.contains("Gemma4 unified image inputs are not production-supported yet"))
+        #expect(source.contains("vision_embedder path is not live-proven"))
     }
 
     @Test("Gemma4 processor resolves image token without encode special-token drift")
@@ -1687,6 +1699,20 @@ struct Gemma4VLMFocusedSourceContractsTests {
         #expect(source.contains("tokenizer.convertTokenToId(\"<|image|>\")"))
         #expect(!source.contains("tokenizer.encode(text: \"<|image|>\").last"))
         #expect(source.contains("?? 258880"))
+    }
+
+    @Test("Gemma4 unified registry and embedder paths are wired")
+    func gemma4UnifiedRegistryAndEmbedderPathsAreWired() throws {
+        let vlmFactory = try focusedRepositoryFile("Libraries/MLXVLM/VLMModelFactory.swift")
+        let llmFactory = try focusedRepositoryFile("Libraries/MLXLLM/LLMModelFactory.swift")
+        let source = try gemma4VLMSource()
+
+        #expect(vlmFactory.contains(#""gemma4_unified": create(Gemma4Configuration.self, Gemma4.init)"#))
+        #expect(vlmFactory.contains(#""Gemma4UnifiedProcessor": create("#))
+        #expect(llmFactory.contains(#""gemma4_unified_text": create(Gemma4TextConfiguration.self, Gemma4TextModel.init)"#))
+        #expect(source.contains("@ModuleInfo(key: \"vision_embedder\")"))
+        #expect(source.contains("UnifiedVisionEmbedder"))
+        #expect(source.contains("usesUnifiedVisionEmbedder"))
     }
 
     private func gemma4VLMSource() throws -> String {

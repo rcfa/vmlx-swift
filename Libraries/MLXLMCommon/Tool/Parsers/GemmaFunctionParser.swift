@@ -148,6 +148,13 @@ public struct GemmaFunctionParser: ToolCallParser, Sendable {
 
     private func decodeRawValue(_ value: String) -> any Sendable {
         guard !value.isEmpty else { return "" }
+        if value.hasPrefix("\""),
+            value.hasSuffix("\""),
+            let data = value.data(using: .utf8),
+            let decoded = try? JSONDecoder().decode(String.self, from: data)
+        {
+            return decoded
+        }
         if let data = value.data(using: .utf8),
             let json = deserializeJSON(data)
         {

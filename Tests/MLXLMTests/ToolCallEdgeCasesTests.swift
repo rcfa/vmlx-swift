@@ -416,6 +416,32 @@ struct ToolCallEdgeCasesTests {
         #expect(processor.toolCalls.first?.function.arguments[" location"] == nil)
     }
 
+    @Test("Gemma-4 parser accepts live 12B quoted native string argument")
+    func testGemma4ParserAcceptsLive12BQuotedNativeStringArgument() throws {
+        let parser = ToolCallFormat.gemma4.createParser()
+        let call = try #require(parser.parse(
+            content: #"<|tool_call>call:get_weather{location: "Tokyo"}<tool_call|>"#,
+            tools: nil
+        ))
+
+        #expect(call.function.name == "get_weather")
+        #expect(call.function.arguments["location"] == .string("Tokyo"))
+    }
+
+    @Test("Gemma-4 processor routes live 12B quoted native tool-call without visible leak")
+    func testGemma4ProcessorRoutesLive12BQuotedNativeToolCallWithoutLeak() {
+        let processor = ToolCallProcessor(format: .gemma4)
+        let visible = feedCharByChar(
+            #"<|tool_call>call:get_weather{location: "Tokyo"}<tool_call|>"#,
+            into: processor
+        )
+
+        #expect(visible.isEmpty)
+        #expect(processor.toolCalls.count == 1)
+        #expect(processor.toolCalls.first?.function.name == "get_weather")
+        #expect(processor.toolCalls.first?.function.arguments["location"] == .string("Tokyo"))
+    }
+
     @Test("Gemma-4 parser preserves native escaped-string arrays as JSON arrays")
     func testGemma4ToolCallEscapedStringArrayArgument() {
         let parser = ToolCallFormat.gemma4.createParser()

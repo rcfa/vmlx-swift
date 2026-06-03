@@ -137,6 +137,7 @@ public enum VLMTypeRegistry {
         "lfm2-vl": create(LFM2VLConfiguration.self, LFM2VL.init),
         "glm_ocr": create(GlmOcrConfiguration.self, GlmOcr.init),
         "gemma4": create(Gemma4Configuration.self, Gemma4.init),
+        "gemma4_unified": create(Gemma4Configuration.self, Gemma4.init),
         "nemotron_h_omni": create(NemotronHOmniConfiguration.self, NemotronHOmni.init),
         "NemotronH_Nano_Omni_Reasoning_V3":
             create(NemotronHOmniConfiguration.self, NemotronHOmni.init),
@@ -222,6 +223,8 @@ public enum VLMProcessorTypeRegistry {
         "Glm46VProcessor": create(
             GlmOcrProcessorConfiguration.self, GlmOcrProcessor.init),
         "Gemma4Processor": create(
+            Gemma4ProcessorConfiguration.self, Gemma4Processor.init),
+        "Gemma4UnifiedProcessor": create(
             Gemma4ProcessorConfiguration.self, Gemma4Processor.init),
         "NemotronHOmniProcessor": create(
             NemotronHOmniProcessorConfiguration.self, NemotronHOmniProcessor.init),

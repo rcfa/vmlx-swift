@@ -74,7 +74,7 @@ struct ReasoningStampFamilyMatrixTests {
     }
 
     // harmony families: `<|channel>thought\n…<channel|>` (Gemma 4 style).
-    @Test(arguments: ["gemma4", "gemma4_text", "gemma4_moe"])
+    @Test(arguments: ["gemma4", "gemma4_text", "gemma4_moe", "gemma4_unified", "gemma4_unified_text"])
     func harmonyFamilies(_ modelType: String) {
         #expect(reasoningStampFromModelType(modelType) == "harmony")
         #expect(reasoningStampFromModelType(modelType.uppercased()) == "harmony")
@@ -141,6 +141,8 @@ struct ToolFormatFamilyMatrixTests {
         ("gemma", .gemma),
         ("gemma4", .gemma4),
         ("gemma4_text", .gemma4),
+        ("gemma4_unified", .gemma4),
+        ("gemma4_unified_text", .gemma4),
         ("minimax", .minimaxM2),
         ("minimax_m2", .minimaxM2),
         ("minimax_m3", .minimaxM2),
