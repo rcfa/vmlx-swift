@@ -130,7 +130,7 @@ public enum ChatTemplateFallbacks {
 {%- endif -%}
 {%- macro render_required_tool_choice_instruction(latest_user_content='') -%}
     {%- if required_tool_choice -%}
-        {{- '\nThe current assistant response MUST be a function call. Reply only with one native Gemma function call and no prose before the tool result:\n<|tool_call>call:FUNCTION_NAME{ARGUMENT_NAME:<|"|>ARGUMENT_VALUE<|"|>}<tool_call|>\nPlace string argument contents directly between <|"|> and <|"|>. Do not wrap the argument value in quote characters, and do not add or remove whitespace or spaces after newlines.' -}}
+        {{- '\nThe current assistant response MUST be a function call. Reply only with one native Gemma function call and no prose before the tool result:\n<|tool_call>call:FUNCTION_NAME{ARGUMENT_NAME:<|"|>ARGUMENT_VALUE<|"|>}<tool_call|>\nPlace string argument contents directly between <|"|> and <|"|>. Do not wrap the argument value in quote characters. For multiline string values, represent each line break with the two characters \\n; the parser decodes those back into real line breaks. Do not add or remove whitespace or spaces after newlines.' -}}
         {%- if required_tool_name -%}
             {{- '\nUse the `' ~ required_tool_name ~ '` function.' -}}
             {%- for tool in tools -%}
@@ -163,7 +163,8 @@ public enum ChatTemplateFallbacks {
                             {%- endif -%}
                         {%- endfor -%}
                         {%- if exact.value -%}
-                            {{- '\nRequired call shape for the current request:\n<|tool_call>call:' ~ required_tool_name ~ '{' ~ param_name ~ ':<|"|>' ~ exact.value ~ '<|"|>}<tool_call|>' -}}
+                            {%- set exact_escaped = exact.value | replace("\\", "\\\\") | replace("\n", "\\n") | replace("\t", "\\t") -%}
+                            {{- '\nRequired call shape for the current request:\n<|tool_call>call:' ~ required_tool_name ~ '{' ~ param_name ~ ':<|"|>' ~ exact_escaped ~ '<|"|>}<tool_call|>' -}}
                         {%- endif -%}
                     {%- endfor -%}
                 {%- endif -%}

@@ -167,32 +167,30 @@ public struct GemmaFunctionParser: ToolCallParser, Sendable {
     }
 
     private func decodeEscapedStringValue(_ value: String) -> String {
-        guard value.hasPrefix("\""),
-            value.hasSuffix("\"")
-        else {
-            return value
-        }
-        if let data = value.data(using: .utf8),
-            let decoded = try? JSONDecoder().decode(String.self, from: data)
+        if value.hasPrefix("\""),
+           value.hasSuffix("\"")
         {
-            return decoded
+            if let data = value.data(using: .utf8),
+                let decoded = try? JSONDecoder().decode(String.self, from: data)
+            {
+                return decoded
+            }
+            return decodeQuotedStringLiteral(value)
         }
-        var inner = String(value.dropFirst().dropLast())
+        return decodeBackslashEscapedString(value)
+    }
+
+    private func decodeBackslashEscapedString(_ value: String) -> String {
+        var inner = value
         inner = inner.replacingOccurrences(of: #"\""#, with: #"""#)
-        inner = inner.replacingOccurrences(of: #"\\n"#, with: "\n")
-        inner = inner.replacingOccurrences(of: #"\\t"#, with: "\t")
-        inner = inner.replacingOccurrences(of: #"\\r"#, with: "\r")
-        inner = inner.replacingOccurrences(of: #"\\\\"#, with: #"\"#)
+        inner = inner.replacingOccurrences(of: #"\n"#, with: "\n")
+        inner = inner.replacingOccurrences(of: #"\t"#, with: "\t")
+        inner = inner.replacingOccurrences(of: #"\r"#, with: "\r")
+        inner = inner.replacingOccurrences(of: #"\\"#, with: #"\"#)
         return inner
     }
 
     private func decodeQuotedStringLiteral(_ value: String) -> String {
-        var inner = String(value.dropFirst().dropLast())
-        inner = inner.replacingOccurrences(of: #"\""#, with: #"""#)
-        inner = inner.replacingOccurrences(of: #"\\n"#, with: "\n")
-        inner = inner.replacingOccurrences(of: #"\\t"#, with: "\t")
-        inner = inner.replacingOccurrences(of: #"\\r"#, with: "\r")
-        inner = inner.replacingOccurrences(of: #"\\\\"#, with: #"\"#)
-        return inner
+        decodeBackslashEscapedString(String(value.dropFirst().dropLast()))
     }
 }
