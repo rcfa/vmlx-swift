@@ -1731,6 +1731,7 @@ struct Gemma4VLMFocusedSourceContractsTests {
 
         #expect(vlmFactory.contains(#""gemma4_unified": create(Gemma4Configuration.self, Gemma4.init)"#))
         #expect(vlmFactory.contains(#""Gemma4UnifiedProcessor": create("#))
+        #expect(llmFactory.contains(#""gemma4_unified": create(Gemma4TextConfiguration.self, Gemma4TextModel.init)"#))
         #expect(llmFactory.contains(#""gemma4_unified_text": create(Gemma4TextConfiguration.self, Gemma4TextModel.init)"#))
         #expect(source.contains("@ModuleInfo(key: \"vision_embedder\")"))
         #expect(source.contains("UnifiedVisionEmbedder"))
