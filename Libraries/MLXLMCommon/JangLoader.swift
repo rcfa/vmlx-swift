@@ -1632,7 +1632,7 @@ public struct JangLoader: Sendable {
                 || basePath.hasSuffix(".linear_attn.in_proj_b")
                 || basePath.hasSuffix(".linear_attn.out_proj")
             {
-                return roles["mamba_proj"] ?? roles["linear_attn"]
+                return roles["mamba_proj"] ?? roles["mamba_projection"] ?? roles["linear_attn"]
             }
             if basePath.contains(".shared_experts.")
                 || basePath.contains(".shared_expert.")

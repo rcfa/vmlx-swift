@@ -827,6 +827,7 @@ struct MTPRuntimeFocusedTests {
                 "attention": 8,
                 "shared_expert": 8,
                 "mamba_proj": 8,
+                "mamba_projection": 8,
                 "routed_expert": 4,
                 "embed_tokens": 8,
                 "lm_head": 8,
@@ -837,6 +838,7 @@ struct MTPRuntimeFocusedTests {
         #expect(config.mxtqBits["attention"] == 8)
         #expect(config.mxtqBits["shared_expert"] == 8)
         #expect(config.mxtqBits["mamba_proj"] == 8)
+        #expect(config.mxtqBits["mamba_projection"] == 8)
         #expect(config.mxtqBits["routed_expert"] == 4)
         #expect(config.mxtqBits["embed_tokens"] == 8)
         #expect(config.mxtqBits["lm_head"] == 8)
@@ -1448,7 +1450,7 @@ struct MTPRuntimeFocusedTests {
             jangConfig: JangConfig(
                 quantization: JangQuantization(blockSize: 64),
                 mxtqBits: [
-                    "mamba_proj": 8,
+                    "mamba_projection": 8,
                     "routed_expert": 4,
                 ]),
             declaredDefaultQuantization: BaseConfiguration.Quantization(

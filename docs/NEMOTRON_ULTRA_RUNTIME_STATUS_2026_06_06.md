@@ -318,6 +318,11 @@ Fixed/proven:
   selective bf16-on-mmap path is diagnostic-only behind
   `VMLINUX_JANGTQ_BF16_MMAP=1` / `MLX_JANGTQ_BF16_MMAP=1` until a live row
   proves it does not violate the footprint gate.
+- Role-level `mxtq_bits` now accepts both Nemotron Ultra Mamba projection
+  spellings: `mamba_proj` and `mamba_projection`. Focused coverage proves the
+  longer spelling still applies the 8-bit affine override to
+  `backbone.layers.*.mixer.{in,out}_proj` instead of falling through to a
+  stale global quantization default.
 
 Still not complete:
 
@@ -349,6 +354,31 @@ Still not complete:
 - The selective non-TQ bf16 loader policy is source/test-proven only in this
   update. A fresh live graph-stats row is still required before claiming it
   reduces Nemotron Ultra `AsType` count or token/s.
+
+## Follow-Up Trace - 2026-06-06 08:40 PDT
+
+Added a source-level Ultra metadata guard for a real alias gap:
+
+- `jang_config.json["mxtq_bits"]` may stamp Mamba projection roles as either
+  `mamba_proj` or `mamba_projection`.
+- The shape walker previously recognized only `mamba_proj` for
+  `backbone.layers.*.mixer.in_proj` / `out_proj`.
+- The loader now accepts both aliases without changing sampler, parser,
+  generation defaults, router precision, or quantized matmul math.
+
+Focused verification:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  xcrun swift test \
+  --filter 'MTPRuntimeFocusedTests/(jangConfigParsesRoleLevelMXTQMetadata|shapeWalkHonorsRoleLevelMXTQMetadata)' \
+  --jobs 1 --no-parallel
+```
+
+Artifact:
+`/tmp/vmlx-nemotron-mamba-projection-alias-focused-20260606-083927.log`
+
+Result: passed, 2 tests.
 
 ## Follow-Up Trace - 2026-06-06 08:45 PDT
 
