@@ -330,8 +330,12 @@ Still not complete:
   the model emitted reasoning but no visible answer within the token budget.
 - Live async SSM rederive was not triggered in these cache rows:
   `reDerives=0`. The proven path is disk-backed SSM companion restore/hit.
-- The current rows are vMLX harness rows. Full Osaurus chat and tool-call proof
-  still need a separate live app/API pass.
+- The vMLX rows above are harness rows. A separate Osaurus no-sign app/API pass
+  was also run against the same model id and current vMLX pin:
+  `/tmp/osaurus-bbd5d5ce-nemotron-ultra-tool-cache-warm-20260606-071921`.
+  That warm relaunch row passed required-tool parsing, tool-history replay, no
+  reasoning/tool marker leak, disk L2 hits, and SSM companion-state hits on the
+  low-footprint mmap app path.
 - The selective non-TQ bf16 loader policy is source/test-proven only in this
   update. A fresh live graph-stats row is still required before claiming it
   reduces Nemotron Ultra `AsType` count or token/s.
