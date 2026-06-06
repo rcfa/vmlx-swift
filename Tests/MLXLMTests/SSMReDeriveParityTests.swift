@@ -119,6 +119,55 @@ final class SSMReDeriveParityTests: XCTestCase {
         XCTAssertEqual(coordinator.ssmStateCache.reDerives, 1)
     }
 
+    func testExactSnapshotSSMStatesAvoidReDeriveWhenNoIntermediateBoundaryIsNeeded() throws {
+        let model = TinyHybridSSMModel()
+        let tokens = [3, 4, 5, 6, 7]
+        let coordinator = CacheCoordinator(config: CacheCoordinatorConfig(
+            usePagedCache: true,
+            enableDiskCache: false,
+            pagedBlockSize: 8,
+            modelKey: "tiny-hybrid|exact-snapshot"))
+        coordinator.setHybrid(true)
+
+        let cache = model.newCache(parameters: nil)
+        try runWarmPass(model: model, cache: cache, tokens: tokens, prefillStepSize: 2)
+        let snapshot = cache.map { $0.copy() }
+
+        let states = try XCTUnwrap(
+            exactBoundarySSMStatesFromSnapshotIfSufficient(
+                coordinator: coordinator,
+                snapshot: snapshot,
+                tokenCount: tokens.count))
+        let warm = extractSSMStates(from: cache)
+
+        assertStatesEqual(states, warm)
+        XCTAssertEqual(
+            coordinator.ssmStateCache.reDerives,
+            0,
+            "Exact snapshot extraction must not count as a fresh SSM re-derive")
+    }
+
+    func testExactSnapshotSSMStatesDeclineWhenPagedIntermediateBoundaryIsNeeded() throws {
+        let model = TinyHybridSSMModel()
+        let tokens = [3, 4, 5, 6, 7]
+        let coordinator = CacheCoordinator(config: CacheCoordinatorConfig(
+            usePagedCache: true,
+            enableDiskCache: false,
+            pagedBlockSize: 4,
+            modelKey: "tiny-hybrid|needs-block-boundary"))
+        coordinator.setHybrid(true)
+
+        let cache = model.newCache(parameters: nil)
+        try runWarmPass(model: model, cache: cache, tokens: tokens, prefillStepSize: 2)
+
+        XCTAssertNil(
+            exactBoundarySSMStatesFromSnapshotIfSufficient(
+                coordinator: coordinator,
+                snapshot: cache.map { $0.copy() },
+                tokenCount: tokens.count),
+            "Paged hybrid prompts longer than one block still need re-derive to capture intermediate SSM boundaries")
+    }
+
     private func warmPassStates(
         model: TinyHybridSSMModel,
         tokens: [Int],

@@ -413,17 +413,25 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
                 let perLayerData = requiresDiskBackedRestore
                     ? []
                     : extractLayerData(from: cacheSnapshot)
-                let ssmCapture: [MLXArray]? = coordinator.isHybrid &&
-                    coordinator.config.enableSSMReDerive &&
-                    !requiresDiskBackedRestore &&
-                    !originalInput.hasMediaContent
-                    ? reDeriveAndStoreSSMStatesForPromptBoundaries(
+                let ssmCapture: [MLXArray]? = {
+                    guard coordinator.isHybrid else { return nil }
+                    guard coordinator.config.enableSSMReDerive,
+                        !requiresDiskBackedRestore,
+                        !originalInput.hasMediaContent
+                    else {
+                        return extractSSMStates(from: cacheSnapshot)
+                    }
+                    return exactBoundarySSMStatesFromSnapshotIfSufficient(
                         coordinator: coordinator,
-                        model: model,
-                        promptTokenIds: tokens,
-                        mediaSalt: mediaSalt,
-                        prefillStepSize: cacheInitParameters.prefillStepSize)
-                    : (coordinator.isHybrid ? extractSSMStates(from: cacheSnapshot) : nil)
+                        snapshot: cacheSnapshot,
+                        tokenCount: tokens.count)
+                        ?? reDeriveAndStoreSSMStatesForPromptBoundaries(
+                            coordinator: coordinator,
+                            model: model,
+                            promptTokenIds: tokens,
+                            mediaSalt: mediaSalt,
+                            prefillStepSize: cacheInitParameters.prefillStepSize)
+                }()
                 let diskStoreCache = makeDiskStoreCache(
                     fromPromptBoundary: cacheSnapshot,
                     parameters: cacheInitParameters)

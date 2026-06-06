@@ -1764,16 +1764,24 @@ public struct TokenIterator: TokenIteratorProtocol {
             let perLayerData = requiresDiskBackedRestore
                 ? []
                 : extractLayerData(from: snapshot)
-            let ssmCapture: [MLXArray]? = coordinator.isHybrid &&
-                coordinator.config.enableSSMReDerive &&
-                !requiresDiskBackedRestore &&
-                !originalInput.hasMediaContent
-                ? reDeriveAndStoreSSMStatesForPromptBoundaries(
+            let ssmCapture: [MLXArray]? = {
+                guard coordinator.isHybrid else { return nil }
+                guard coordinator.config.enableSSMReDerive,
+                    !requiresDiskBackedRestore,
+                    !originalInput.hasMediaContent
+                else {
+                    return extractSSMStates(from: snapshot)
+                }
+                return exactBoundarySSMStatesFromSnapshotIfSufficient(
                     coordinator: coordinator,
-                    model: model,
-                    promptTokenIds: tokens,
-                    mediaSalt: mediaSalt)
-                : (coordinator.isHybrid ? extractSSMStates(from: snapshot) : nil)
+                    snapshot: snapshot,
+                    tokenCount: tokens.count)
+                    ?? reDeriveAndStoreSSMStatesForPromptBoundaries(
+                        coordinator: coordinator,
+                        model: model,
+                        promptTokenIds: tokens,
+                        mediaSalt: mediaSalt)
+            }()
             let diskStoreCache = makeDiskStoreCache(
                 fromPromptBoundary: snapshot,
                 kvBits: diskKVBits,
