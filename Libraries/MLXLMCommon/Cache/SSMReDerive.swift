@@ -288,6 +288,31 @@ public func captureCleanSSMStateInline(
     log("ok/captured stateCount=\(states.count)")
 }
 
+/// Return exact-boundary SSM states from an already-captured prompt/cache
+/// snapshot when that snapshot is sufficient for the coordinator's current
+/// prefix-cache policy.
+///
+/// This is intentionally narrower than ``captureCleanSSMStateInline``:
+/// callers use it after they already hold an exact boundary snapshot. If the
+/// paged KV tier may later restore shorter full-block prefixes, hybrid models
+/// still need companion SSM states at those intermediate block boundaries, so
+/// the caller must fall back to ``reDeriveAndStoreSSMStatesForPromptBoundaries``.
+public func exactBoundarySSMStatesFromSnapshotIfSufficient(
+    coordinator: CacheCoordinator,
+    snapshot: [KVCache],
+    tokenCount: Int
+) -> [MLXArray]? {
+    guard coordinator.isHybrid, tokenCount > 0 else { return nil }
+
+    if coordinator.pagedCache != nil, !coordinator.isPagedIncompatible {
+        let blockSize = max(1, coordinator.config.pagedBlockSize)
+        guard tokenCount <= blockSize else { return nil }
+    }
+
+    let states = extractSSMStates(from: snapshot)
+    return states.isEmpty ? nil : states
+}
+
 public func reDeriveSSMStates(
     model: any LanguageModel,
     tokens: [Int],

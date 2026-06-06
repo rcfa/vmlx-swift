@@ -2197,12 +2197,16 @@ public actor BatchEngine {
                         !requiresDiskBackedRestore &&
                         !slot.originalInput.hasMediaContent
                     {
-                        return reDeriveAndStoreSSMStatesForPromptBoundaries(
+                        return exactBoundarySSMStatesFromSnapshotIfSufficient(
                             coordinator: coordinator,
-                            model: context.model,
-                            promptTokenIds: tokens,
-                            mediaSalt: slot.mediaSalt,
-                            prefillStepSize: slot.parameters.prefillStepSize)
+                            snapshot: snapshot,
+                            tokenCount: tokens.count)
+                            ?? reDeriveAndStoreSSMStatesForPromptBoundaries(
+                                coordinator: coordinator,
+                                model: context.model,
+                                promptTokenIds: tokens,
+                                mediaSalt: slot.mediaSalt,
+                                prefillStepSize: slot.parameters.prefillStepSize)
                     }
                     return extractSSMStates(from: snapshot)
                 }()
