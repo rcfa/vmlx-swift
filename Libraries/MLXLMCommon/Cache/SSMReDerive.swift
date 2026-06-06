@@ -247,9 +247,13 @@ private func hybridBlockDiskBoundary(
 ///     loss). With §439 in place, capture-during-prefill = re-derive
 ///     in the limit.
 ///
-/// Used by Evaluate.swift's prefill loop: when `genPromptLen > 0` AND
-/// the model is hybrid AND the feature flag is on, the loop calls this
-/// at the `prompt.count - genPromptLen` boundary inline.
+/// This is currently a parity hook, not the production store path.
+/// `Evaluate.swift`, `BatchEngine.swift`, and `NativeMTPTokenIterator.swift`
+/// store hybrid companion state through synchronous prompt-boundary re-derive
+/// or direct prompt-snapshot extraction. Do not describe Ultra or other hybrid
+/// rows as inline-capture or detached-async ready until a live integration row
+/// proves this hook is called by the prefill path and preserves output/cache
+/// parity.
 public func captureCleanSSMStateInline(
     coordinator: CacheCoordinator,
     liveCache: [KVCache],

@@ -482,6 +482,16 @@ struct MLXPressLowRamPolicySourceTests {
         #expect(readiness.contains("cold-warm-deviation-proof"))
         #expect(readiness.contains("synchronous-prompt-boundary-rederive"))
         #expect(!readiness.contains("async-rederive-warm-pass"))
+        let batchEngineTests = try String(
+            contentsOfFile: "Tests/MLXLMTests/BatchEngineTurboQuantTests.swift",
+            encoding: .utf8)
+        let ssmReDerive = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/Cache/SSMReDerive.swift",
+            encoding: .utf8)
+        #expect(!batchEngineTests.contains("pending `SSMReDeriver` port"))
+        #expect(batchEngineTests.contains("Detached async SSM re-derive — intentionally not a production path"))
+        #expect(ssmReDerive.contains("This is currently a parity hook, not the production store path."))
+        #expect(ssmReDerive.contains("Do not describe Ultra or other hybrid\n/// rows as inline-capture or detached-async ready"))
         #expect(readiness.contains("attentionSummary"))
         #expect(readiness.contains("positionSummary"))
         #expect(readiness.contains("cacheStorageSummary"))
