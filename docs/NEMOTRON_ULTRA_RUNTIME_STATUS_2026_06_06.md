@@ -349,3 +349,31 @@ Still not complete:
 - The selective non-TQ bf16 loader policy is source/test-proven only in this
   update. A fresh live graph-stats row is still required before claiming it
   reduces Nemotron Ultra `AsType` count or token/s.
+
+## Follow-Up Trace - 2026-06-06 08:45 PDT
+
+Reviewed the Swift runtime against the Python JANG loader patch in
+`jang_tools/load_jangtq.py`.
+
+Rejected shortcuts:
+
+- Do not remove or demote the fp32 MoE router sigmoid cast. The source contract
+  and `NemotronGroupExpertSelectFP32SigmoidTests` intentionally pin
+  `sigmoid(gates.asType(.float32))` because bf16 router sigmoid can change
+  expert selection.
+- Do not change `JANGTQKernels.hadamardRotate` to return half from the current
+  wrapper. Swift `gatherTQ` / `fusedGateUpSwiGLU` currently accept fp32 rotated
+  inputs, and `JANGTQKernelsTests` pins the fp32 shape/dtype contract. Python's
+  MPP/NAX half-rotated path is a different kernel family; copying only the
+  dtype cast into the current Swift gather path would be an unproven kernel
+  change.
+- Do not re-enable Nemotron Ultra active streaming by default. The clean-main
+  source keeps it explicit-only because prior live rows were slower than the
+  ordinary JANGTQ path.
+
+Current root-cause target remains the same:
+
+- The mmap row is coherent and cache-correct, but the DOT histogram still shows
+  `5711` graph nodes and `1152` `AsType` nodes. The next useful runtime work is
+  a real Mamba/projection or JANGTQ kernel-family cleanup that preserves the
+  fp32 router-selection floor and the existing JANGTQ math contract.
