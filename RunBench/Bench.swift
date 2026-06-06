@@ -2331,6 +2331,9 @@ func runBatchEngineDiskRestore(modelPath: String, maxNew: Int) async throws {
 /// Turn 2 starts with turn 1's prompt plus the generated assistant answer,
 /// so a prompt-boundary-only store is guaranteed to miss. A pass proves the
 /// engine stored a post-answer boundary that the next growing prompt can hit.
+///
+/// Set `BENCH_GROWING_MMAP=1` to use the same low-footprint mmap load path
+/// as the perf harness. The default remains the original resident load path.
 func runGrowingChatCacheReuse(modelPath: String, maxNew: Int) async throws {
     let modelDir = URL(fileURLWithPath: modelPath)
     let modelName = modelDir.lastPathComponent
@@ -2349,6 +2352,7 @@ func runGrowingChatCacheReuse(modelPath: String, maxNew: Int) async throws {
     print("\n=== BENCH_GROWING_CHAT_CACHE — \(modelName) ===")
     print("Cache dir: \(cacheDir.path)")
     let nativeMTPDepth = env["BENCH_GROWING_NATIVE_MTP_DEPTH"].flatMap(Int.init)
+    let useMmap = env["BENCH_GROWING_MMAP"] == "1"
     let loadStart = CFAbsoluteTimeGetCurrent()
     let context: ModelContext
     if nativeMTPDepth != nil {
@@ -2362,6 +2366,12 @@ func runGrowingChatCacheReuse(modelPath: String, maxNew: Int) async throws {
                 useMmapSafetensors: true,
                 nativeMTP: true))
         context = loaded.0
+    } else if useMmap {
+        let loaded = try await MLXLMCommon.loadModel(
+            from: modelDir,
+            using: #huggingFaceTokenizerLoader(),
+            loadConfiguration: LoadConfiguration(useMmapSafetensors: true))
+        context = loaded.0
     } else {
         context = try await MLXLMCommon.loadModel(
             from: modelDir, using: #huggingFaceTokenizerLoader())
@@ -2369,6 +2379,7 @@ func runGrowingChatCacheReuse(modelPath: String, maxNew: Int) async throws {
     print(String(format: "Load: %.2fs  Model: %@",
         CFAbsoluteTimeGetCurrent() - loadStart,
         String(describing: type(of: context.model))))
+    print("Load mode: \(useMmap || nativeMTPDepth != nil ? "mmap" : "resident")")
     print("Tool format: \(context.configuration.toolCallFormat.map { "\($0)" } ?? "json")")
     print("Reasoning stamp: \(context.configuration.reasoningParserName ?? "nil")")
     print("Native MTP depth: \(nativeMTPDepth.map(String.init) ?? "off")")

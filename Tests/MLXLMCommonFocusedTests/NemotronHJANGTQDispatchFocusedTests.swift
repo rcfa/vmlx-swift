@@ -126,6 +126,9 @@ final class NemotronHJANGTQDispatchFocusedTests: XCTestCase {
         let streamingSource = try String(
             contentsOfFile: "Libraries/MLXLMCommon/JANGTQStreamingExperts.swift",
             encoding: .utf8)
+        let benchSource = try String(
+            contentsOfFile: "RunBench/Bench.swift",
+            encoding: .utf8)
 
         XCTAssertTrue(modelSource.contains("JANGTQ_DISABLE_NEMOTRON_ACTIVATION_BF16"))
         XCTAssertTrue(modelSource.contains("JANGTQ_DISABLE_NEMOTRON_WEIGHTED_MOE_FASTPATH"))
@@ -141,6 +144,8 @@ final class NemotronHJANGTQDispatchFocusedTests: XCTestCase {
         XCTAssertTrue(streamingSource.contains("public func reduced(_ x: MLXArray, indices: MLXArray, scores: MLXArray) -> MLXArray"))
         XCTAssertTrue(streamingSource.contains("relu_reduce.call_chunk"))
         XCTAssertTrue(streamingSource.contains("relu_reduce.score_sum_build"))
+        XCTAssertTrue(benchSource.contains("BENCH_GROWING_MMAP"))
+        XCTAssertTrue(benchSource.contains("LoadConfiguration(useMmapSafetensors: true)"))
     }
 
     func testStackedNemotronWeightedDecodeDoesNotUseRejectedScoredDownProjectionKernel() throws {
