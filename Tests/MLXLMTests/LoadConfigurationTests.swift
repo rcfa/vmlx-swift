@@ -203,6 +203,20 @@ struct LoadConfigurationTests {
         #expect(cfg.useMmapSafetensors == false)
     }
 
+    @Test("JANGTQ load keeps tq tensors raw and protects mmap residency")
+    func jangtqLoadDoesNotSkipWholeModelBFloat16Conversion() throws {
+        let source = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/Load.swift",
+            encoding: .utf8)
+
+        #expect(source.contains("let mmapSafetensorsActive = envFlag(\"MLX_SAFETENSORS_MMAP\")"))
+        #expect(source.contains("let allowJANGTQMmapBFloat16 = envFlag(\"VMLINUX_JANGTQ_BF16_MMAP\")"))
+        #expect(source.contains("if !isJANGTQNative || !mmapSafetensorsActive || allowJANGTQMmapBFloat16"))
+        #expect(source.contains("shouldSkip: isJANGTQNative ? isJANGTQParameterKey"))
+        #expect(source.contains("key.hasSuffix(\".tq_packed\") || key.hasSuffix(\".tq_norms\")"))
+        #expect(!source.contains("if !isJANGTQNative {\n        convertToBFloat16(model: model)\n    }"))
+    }
+
     // MARK: - MemoryStatus
 
     @Test("MemoryStatus.snapshot reports plausible values")

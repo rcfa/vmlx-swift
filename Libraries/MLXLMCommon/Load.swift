@@ -657,17 +657,28 @@ public func loadWeights(
     weights.removeAll(keepingCapacity: false)
     MLX.Memory.clearCache()
 
-    // Convert all float16/float32 parameters to bfloat16 to prevent AsType cascades.
+    // Convert float16/float32 parameters to bfloat16 to prevent AsType cascades.
     // float16 causes AsType when mixed with internal float32 ops (softmax, RMSNorm).
     // bfloat16 shares float32's exponent range, so promotion is cheaper/eliminated.
     //
-    // JANGTQ bypass: Python baseline runs with fp16 TurboQuant norms, and the
-    // JANGTQ Metal kernels infer their signature from the norm dtype. Casting
-    // those norms to bf16 breaks the gate/up/down projections (verified on
-    // MiniMax M2.7 JANGTQ_2L). JANGTQ dispatches are already fp32 internally,
-    // so there's no fp16↔fp32 ping-pong to collapse. Skip the cast entirely.
-    if !isJANGTQNative {
-        convertToBFloat16(model: model)
+    // JANGTQ caveat: TurboQuant Metal kernels infer their signature from
+    // `tq_norms`, and casting those norms to bf16 breaks routed projections
+    // (verified on MiniMax M2.7 JANGTQ_2L). Keep the JANGTQ tensors raw.
+    //
+    // For non-mmap JANGTQ loads, still convert non-TQ Mamba/attention/router
+    // weights so resident decode avoids preventable fp16 AsType cascades. For
+    // mmap/JangPress loads, default to preserving file-backed tensor residency:
+    // converting a mapped tensor materializes a new array and can blow the low
+    // footprint gate. The mmap conversion path is left as an explicit diagnostic
+    // knob so it can be benchmarked without changing production memory policy.
+    let mmapSafetensorsActive = envFlag("MLX_SAFETENSORS_MMAP")
+        || envFlag("VMLINUX_MMAP_SAFETENSORS")
+    let allowJANGTQMmapBFloat16 = envFlag("VMLINUX_JANGTQ_BF16_MMAP")
+        || envFlag("MLX_JANGTQ_BF16_MMAP")
+    if !isJANGTQNative || !mmapSafetensorsActive || allowJANGTQMmapBFloat16 {
+        convertToBFloat16(
+            model: model,
+            shouldSkip: isJANGTQNative ? isJANGTQParameterKey : { _ in false })
     }
 
     eval(model)
@@ -688,10 +699,27 @@ public func loadWeights(
 /// both fp16 and bf16 copies alive until the final eval and can push peak
 /// memory past 100 GB. Chunking bounds the transient extra allocation while
 /// preserving the dtype contract.
-private func convertToBFloat16(model: Module) {
+private func isJANGTQParameterKey(_ key: String) -> Bool {
+    key.hasSuffix(".tq_packed") || key.hasSuffix(".tq_norms")
+}
+
+private func envFlag(_ key: String) -> Bool {
+    guard let raw = ProcessInfo.processInfo.environment[key]?.lowercased() else {
+        return false
+    }
+    return raw == "1" || raw == "true" || raw == "yes" || raw == "on"
+}
+
+private func convertToBFloat16(
+    model: Module,
+    shouldSkip: (String) -> Bool = { _ in false }
+) {
     let convertibleParams: [(key: String, convertedBytes: Int)] = {
         let flat = model.parameters().flattened()
         return flat.compactMap { key, array in
+            guard !shouldSkip(key) else {
+                return nil
+            }
             guard array.dtype == .float16 || array.dtype == .float32 else {
                 return nil
             }

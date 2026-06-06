@@ -306,6 +306,12 @@ Fixed/proven:
   growing chat, including SSM companion-state hits and salt isolation.
 - The attempted scored-kernel optimization was proven slower and removed from
   the default path.
+- Loader dtype policy now preserves JANGTQ `tq_packed` / `tq_norms` raw while
+  allowing non-mmap JANGTQ loads to reuse the normal non-TQ bf16 conversion
+  path. Mmap/JangPress loads keep file-backed tensor residency by default; the
+  selective bf16-on-mmap path is diagnostic-only behind
+  `VMLINUX_JANGTQ_BF16_MMAP=1` / `MLX_JANGTQ_BF16_MMAP=1` until a live row
+  proves it does not violate the footprint gate.
 
 Still not complete:
 
@@ -326,3 +332,6 @@ Still not complete:
   `reDerives=0`. The proven path is disk-backed SSM companion restore/hit.
 - The current rows are vMLX harness rows. Full Osaurus chat and tool-call proof
   still need a separate live app/API pass.
+- The selective non-TQ bf16 loader policy is source/test-proven only in this
+  update. A fresh live graph-stats row is still required before claiming it
+  reduces Nemotron Ultra `AsType` count or token/s.
