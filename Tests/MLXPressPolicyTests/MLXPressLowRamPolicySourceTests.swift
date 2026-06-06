@@ -518,4 +518,21 @@ struct MLXPressLowRamPolicySourceTests {
         #expect(bundleFacts.contains("zaya-cca-kv-plus-conv_state-prev_hs"))
         #expect(readiness.contains("real media-cache proof for detected vision/audio config"))
     }
+
+    @Test("Nemotron Ultra status does not overstate saved JPREG JangPress proof")
+    func nemotronUltraStatusKeepsJPREGProofHonest() throws {
+        let status = try String(
+            contentsOfFile: "docs/NEMOTRON_ULTRA_RUNTIME_STATUS_2026_06_06.md",
+            encoding: .utf8)
+
+        #expect(status.contains("JangPress: enabled=false"))
+        #expect(status.contains("RouterAdvice: enabled=false"))
+        #expect(status.contains("mmap tracked Metal buffers: `94.4 GB`"))
+        #expect(
+            status.contains(
+                """
+                The saved JPREG row is a low-footprint mmap row, not an enabled JangPress
+                  advisory row.
+                """))
+    }
 }

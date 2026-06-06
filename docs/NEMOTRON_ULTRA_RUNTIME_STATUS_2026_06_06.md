@@ -233,12 +233,17 @@ The histogram matches the 48-Mamba / 12-attention topology. The remaining mmap
 speed gap is dominated by Mamba and routed-MoE graph shape, not by
 generation-config, chat-template, tool parser, or reasoning parser behavior.
 
-Low-footprint JPREG row from the same worktree:
+Low-footprint mmap JPREG row from the same worktree:
 
 Artifact: `/tmp/vmlx-nemotron-scored-weighted-jpreg-20260606-033442.log`
 
 Result:
 
+- The saved JPREG row is a low-footprint mmap row, not an enabled JangPress
+  advisory row.
+- `JangPress: enabled=false`
+- `RouterAdvice: enabled=false`
+- mmap tracked Metal buffers: `94.4 GB`
 - post-load footprint `0.3 GB`
 - post-quiesce footprint `4.2 GB`
 - `avgApiDecode=3.8 tok/s`
@@ -291,7 +296,7 @@ Release-safe wording:
 - Current Swift resident decode reaches the documented `8 tok/s` class on
   Nemotron Ultra JANGTQ_1L: `8.1 tok/s`, bundle generation defaults, coherent
   visible output, no loop, and no parser marker leak.
-- Do not describe the low-footprint mmap/JangPress path as `8-10 tok/s`.
+- Do not describe the low-footprint mmap path as `8-10 tok/s`.
   Current mmap rows are coherent and cache-correct, but they are still in the
   `3.8-4.5 tok/s` class.
 
@@ -301,7 +306,8 @@ Fixed/proven:
 - Current Swift resident decode confirms the documented `8 tok/s` class:
   `8.1 tok/s` with bundle generation defaults.
 - Current Swift low-footprint mmap decode is coherent and stays around
-  `1.35 GB` footprint.
+  `1.35 GB` footprint in the perf rows. The saved JPREG row stays low-footprint
+  too, but its own artifact proves JangPress advisory state was disabled.
 - Hybrid SSM disk-backed prefix cache hits are proven for exact replay and
   growing chat, including SSM companion-state hits and salt isolation.
 - The attempted scored-kernel optimization was proven slower and removed from
@@ -317,6 +323,9 @@ Still not complete:
 
 - The release-friendly low-footprint mmap path is `3.8-3.9 tok/s`, not
   `8-10 tok/s`.
+- The saved JPREG artifact is not proof that enabled JangPress router/expert
+  advice is speed-neutral or production-ready; it reports
+  `JangPress: enabled=false` and `RouterAdvice: enabled=false`.
 - A clean-main graph-stats probe still shows `5711` decode graph nodes and
   `1152` AsType nodes on the mmap path; closing the speed gap needs a real
   graph/kernel or resident-compute/reclaim improvement, not a template,
