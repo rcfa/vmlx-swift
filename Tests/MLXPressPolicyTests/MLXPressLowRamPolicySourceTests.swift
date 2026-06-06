@@ -543,6 +543,18 @@ struct MLXPressLowRamPolicySourceTests {
                 """))
     }
 
+    @Test("README keeps Nemotron Ultra resident speed separate from mmap speed")
+    func readmeKeepsNemotronUltraReleaseBoundaryHonest() throws {
+        let readme = try String(contentsOfFile: "README.md", encoding: .utf8)
+
+        #expect(readme.contains("resident Swift decode | 8.1 tok/s"))
+        #expect(readme.contains("low-footprint mmap decode | 3.8-4.5 tok/s"))
+        #expect(readme.contains("The current Swift runtime proof is intentionally split by runtime path"))
+        #expect(readme.contains("It uses about 100 GB physical footprint"))
+        #expect(readme.contains("but it does not yet reach the 8-10\ntok/s target"))
+        #expect(readme.contains("hybrid SSM disk-backed prefix-cache restore"))
+    }
+
     @Test("Nemotron-H JANGTQ docs do not regress to obsolete wrapper-blocked status")
     func nemotronHJANGTQDocsTrackCurrentWrapperStatus() throws {
         let modelSource = try String(
