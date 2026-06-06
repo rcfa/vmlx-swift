@@ -1,7 +1,15 @@
 # JANGPress — Production Readiness Status
 
-**Iter 20 (2026-05-02): JangPress is production-ready for all six MoE
-families currently in JANG.**
+**Iter 20 (2026-05-02): JangPress RSS reclaim was production-ready for
+the then-tested MoE families.**
+
+**Current correction (2026-06-06):** the Nemotron-H JANGTQ and Omni engine
+blockers in the original iter-20 notes are stale. Current vMLX has the
+`NemotronHJANGTQContext` wrapper, `NemotronHJANGTQSwitchMLP` weighted decode,
+Nemotron-H Omni wiring, and current Nemotron Ultra live rows. See
+`docs/NEMOTRON_ULTRA_RUNTIME_STATUS_2026_06_06.md` for the release-safe split:
+resident Swift reaches the `8 tok/s` class, while the low-footprint mmap path
+is still partial and must not be described as `8-10 tok/s`.
 
 ## What is JangPress?
 
@@ -20,8 +28,8 @@ the active expert set fully resident. Built on file-backed `mmap` +
 | DSV4-Flash | `deepseek_v4` | 79 GB JANGTQ | E (per-expert ffn) | ✅ coherent | 50.7 GB / 68.7% |
 | Holo3-A3B | `qwen3_5_moe` | 11 GB JANGTQ | G (switch_mlp+tq_packed) + VL prefix | ✅ coherent | 5.4 GB / 70.0% |
 | MiniMax-M2.7 | `minimax_m2` | 36 GB JANGTQ | H (block_sparse_moe) | 🟡 garbage (Engine bundle bug) | 22.9 GB / 71.0% |
-| Nemotron-Cascade-2 | `nemotron_h` | 17 GB JANG_4M | M (backbone+mixer affine) | ⛔ Engine wrapper missing | 10.4 GB / 73.9% |
-| Nemotron-Omni | `nemotron_h_omni` | 12-21 GB | J/L (backbone+mixer JANGTQ + MXFP4) | ⛔ Engine VL keys unhandled | 5.2 GB / 73.9% |
+| Nemotron-Cascade-2 | `nemotron_h` | 17 GB JANG_4M | M (backbone+mixer affine) | Historical RSS row; current Nemotron-H wrapper is wired | 10.4 GB / 73.9% |
+| Nemotron-Omni | `nemotron_h_omni` | 12-21 GB | J/L (backbone+mixer JANGTQ + MXFP4) | Historical RSS row; current Omni wiring is not this blocker | 5.2 GB / 73.9% |
 | Qwen3.6-A3B | `qwen3_5_moe` | 11 GB JANG_2L | D (affine stacked) + deep-VL prefix | ⛔ Engine wrapper SIGTRAPs | 5.4 GB / 70.0% |
 | Laguna-XS.2 | `laguna` | 9.4 GB JANGTQ | C (jangtq stacked) | ⛔ Engine wrapper missing | 5.2 GB / 71.8% |
 
@@ -115,10 +123,12 @@ code changes.
   **Not affected by JangPress on/off — control mode reproduces.**
 - **Laguna unsupported** — `model_type=laguna` Swift wrapper
   ~1500 LOC pending in vmlx-swift-lm.
-- **Nemotron-H JANGTQ wrapper missing** — §437 components present,
-  Model+sanitize wrapper deferred.
-- **Nemotron Omni multimodal keys** — vision_model / sound_encoder
-  / mlp1 / sound_projection not handled by NemotronH Model.
+- **Nemotron-H JANGTQ wrapper status superseded** — the wrapper and sanitize
+  path are now wired through `NemotronHJANGTQContext`,
+  `NemotronHJANGTQSwitchMLP`, and `NemotronHModel.sanitize`.
+- **Nemotron Omni multimodal status superseded** — the old
+  `vision_model`/`sound_encoder` unhandled-key note predates current
+  `NemotronHOmni` wiring.
 - **Qwen3.6 qwen3_5_moe Swift wrapper SIGTRAPs** — load fails,
   ~1500 LOC pending.
 

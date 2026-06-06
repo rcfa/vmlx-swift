@@ -173,8 +173,8 @@ struct MLXPressLowRamPolicySourceTests {
         #expect(evaluate.contains("CompilableKVCache(from: layer, maxLength: maxCacheLength)"))
         #expect(evaluate.contains("CompilableTurboQuantKVCache(from: layer as! TurboQuantKVCache)"))
         #expect(evaluate.contains("self.cache = promoted"))
-        #expect(cli.contains(#""enable_thinking": enableThinking"#))
-        #expect(cli.contains(#""thinking": enableThinking"#))
+        #expect(cli.contains(#"context["enable_thinking"] = enableThinking"#))
+        #expect(cli.contains(#"context["thinking"] = enableThinking"#))
         #expect(cli.contains("--metrics-jsonl"))
         #expect(cli.contains("MetricsJSONLWriter"))
         #expect(!cli.contains("gateAwareMemoryLimit"))
@@ -374,7 +374,12 @@ struct MLXPressLowRamPolicySourceTests {
         #expect(
             streamingExperts.contains(#"profileName: "down.eval""#))
         #expect(
-            streamingExperts.contains("indexValues: Array(allIndexValues[valueStart ..< valueEnd])")
+            streamingExperts.contains(
+                """
+                let indexValues = allIndexValues.map {
+                                Array($0[valueStart ..< valueEnd])
+                            }
+                """)
         )
         #expect(
             streamingExperts.contains(
@@ -534,5 +539,48 @@ struct MLXPressLowRamPolicySourceTests {
                 The saved JPREG row is a low-footprint mmap row, not an enabled JangPress
                   advisory row.
                 """))
+    }
+
+    @Test("Nemotron-H JANGTQ docs do not regress to obsolete wrapper-blocked status")
+    func nemotronHJANGTQDocsTrackCurrentWrapperStatus() throws {
+        let modelSource = try String(
+            contentsOfFile: "Libraries/MLXLLM/Models/NemotronH.swift",
+            encoding: .utf8)
+        let jangtqSource = try String(
+            contentsOfFile: "Libraries/MLXLLM/Models/NemotronHJANGTQ.swift",
+            encoding: .utf8)
+        let omniSource = try String(
+            contentsOfFile: "Libraries/MLXVLM/Models/NemotronHOmni/NemotronHOmni.swift",
+            encoding: .utf8)
+        let production = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/Cache/JANGPRESS-PRODUCTION.md",
+            encoding: .utf8)
+        let perModel = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/Cache/JANGPRESS-PER-MODEL-RESULTS.md",
+            encoding: .utf8)
+        let deepTrace = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/Cache/JANGPRESS-DEEP-TRACE.md",
+            encoding: .utf8)
+        let status = try String(
+            contentsOfFile: "Libraries/MLXLMCommon/Cache/JANGPRESS-STATUS.md",
+            encoding: .utf8)
+
+        #expect(modelSource.contains("NemotronHJANGTQContext"))
+        #expect(modelSource.contains("NemotronHJANGTQSwitchMLP("))
+        #expect(modelSource.contains("weightedDecode(expertInput, inds, scores: scores)"))
+        #expect(jangtqSource.contains("final class NemotronHJANGTQSwitchMLP"))
+        #expect(jangtqSource.contains("func weightedDecode(_ x: MLXArray, _ indices: MLXArray, scores: MLXArray) -> MLXArray?"))
+        #expect(omniSource.contains("public let jangtqContext: NemotronHJANGTQContext?"))
+
+        for doc in [production, perModel, deepTrace, status] {
+            #expect(!doc.contains("Nemotron-H JANGTQ wrapper missing"))
+            #expect(!doc.contains("NemotronHJANGTQModel wrapper isn't wired"))
+            #expect(!doc.contains("NemotronHJANGTQModel Swift wrapper"))
+            #expect(!doc.contains("Nemotron is RSS-only path"))
+            #expect(!doc.contains("Omni multimodal keys"))
+        }
+        #expect(production.contains("Current correction (2026-06-06)"))
+        #expect(perModel.contains("Status superseded (2026-06-06)"))
+        #expect(deepTrace.contains("2026-06-06 update"))
     }
 }

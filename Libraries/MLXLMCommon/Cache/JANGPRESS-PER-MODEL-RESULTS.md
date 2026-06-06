@@ -256,16 +256,17 @@ MoE per layer, 23 MoE layers out of 52 total (others are Mamba2 / Attn).
 - Pattern M: `backbone.layers.<L>.mixer.switch_mlp.<gate|up|down>_proj.weight` (Cascade-2 affine)
 - All anchored on `backbone.layers` + `mixer` (not `model.layers` + `mlp`).
 
-**Status: Swift Engine BLOCKED — `NemotronHJANGTQModel` wrapper not wired.**
+**Status superseded (2026-06-06): Swift Nemotron-H JANGTQ wrapper is wired.**
 
 ```
-Error 438 "Nemotron-H JANGTQ bundle detected (weight_format=mxtq) but
-the NemotronHJANGTQModel wrapper isn't wired yet. Components are in
-place (§437 NemotronHJANGTQSwitchMLP); the Model+sanitize wrapper
-lands in a follow-up iter."
+This older RSS-only section predates the current `NemotronHJANGTQContext`
+factory path, `NemotronHJANGTQSwitchMLP` weighted decode implementation, and
+`NemotronHModel.sanitize` remapping for per-expert JANGTQ tensors.
 ```
 
-Omni MXFP4 also fails — multimodal: `unhandledKeys: ["mlp1", "sound_encoder", "sound_projection", "vision_model"]`.
+The old Omni MXFP4 unhandled-key note is also superseded by the current
+`NemotronHOmni` model wiring. Keep the RSS reclaim numbers below as historical
+JangPress tile evidence only, not as current engine-blocker evidence.
 
 ### RSS reclaim (standalone JANGPressRSSBench, separate process)
 
@@ -306,13 +307,12 @@ tile granularity → 70× difference in cold-fault latency.
 
 ### What needs fixing
 
-- **NemotronHJANGTQModel Swift wrapper** — components exist (§437
-  switch_mlp helper) but Model+sanitize wrapper isn't wired. Engine
-  load fails with code 438. Until wired, Nemotron is RSS-only path
-  (no decode-time tok/s measurement possible in Swift).
-- **Omni multimodal keys** — vision_model / sound_encoder /
-  sound_projection / mlp1 not handled by NemotronH Model in Swift.
-  Audio + vision towers need explicit support.
+- **Current Nemotron-H JANGTQ speed status** — wrapper wiring is no longer the
+  blocker. The current open work is MoE/Mamba speed: resident Swift is in the
+  `8 tok/s` class, while low-footprint mmap/JangPress is still partial and not
+  an `8-10 tok/s` release claim.
+- **Current Omni multimodal status** — the historical unhandled-key blocker is
+  superseded; current media rows must still be proven per model and cache axis.
 - **Cascade-2 first-token 186 ms cold** — this is the per-layer
   switch_mlp stack faulting in. If we're going to make stacked
   tiles common, maybe split each stack into per-expert sub-tiles

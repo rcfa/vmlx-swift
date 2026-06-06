@@ -628,23 +628,20 @@ memory `project_swift_qwen36_dense_gaps`: `LagunaModel +
 LagunaConfiguration` types exist in vmlx-swift-lm but the dispatcher
 entry isn't reachable. ~1500 LOC of Swift port remaining.
 
-### Nemotron-H JANGTQ wrapper missing
+### Nemotron-H JANGTQ wrapper status superseded
 
-```
-Error 438: Nemotron-H JANGTQ bundle detected (weight_format=mxtq) but
-the NemotronHJANGTQModel wrapper isn't wired yet. Components are in
-place (§437 NemotronHJANGTQSwitchMLP); the Model+sanitize wrapper
-lands in a follow-up iter.
-```
+2026-06-06 update: this old blocker is no longer current. vMLX now routes
+Nemotron-H JANGTQ through `NemotronHJANGTQContext`,
+`NemotronHJANGTQSwitchMLP`, weighted decode, and `NemotronHModel.sanitize`.
+The remaining Nemotron Ultra work is speed/cache proof, not an unsupported
+model-wrapper failure.
 
-### Nemotron Omni multimodal keys unhandled
+### Nemotron Omni multimodal status superseded
 
-```
-unhandledKeys: ["mlp1", "sound_encoder", "sound_projection", "vision_model"]
-```
-
-Audio + vision towers in the multimodal Omni bundle aren't in the
-Swift NemotronH model class.
+2026-06-06 update: this old unhandled-key note predates current
+`NemotronHOmni` wiring. Current media support still requires model-specific
+live image/audio/video cache rows before release claims, but the old
+`vision_model`/`sound_encoder` wrapper-missing diagnosis is stale.
 
 ### Qwen3.6 qwen3_5_moe Swift wrapper SIGTRAP
 

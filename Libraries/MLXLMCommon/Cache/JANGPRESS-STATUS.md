@@ -69,8 +69,8 @@ Tested per-bundle on M4 Max with the JANGPressCompare bench:
 | DSV4-Flash JANGTQ | 79 GB | 72 GB (91%) | 50.7 GB (68.7%) | 12.71 | 12.53 | -1.4% |
 | Holo3-35B-A3B JANGTQ | 11 GB | 7.5 GB (68%) | 5.4 GB (70.0%) | 78.8 | 80.1 | +1.6% |
 | MiniMax-M2.7-Small JANGTQ | 36 GB | 32 GB (89%) | 22.9 GB (71.0%) | 46.7 | 43.7 | -6.3% |
-| Nemotron Cascade-2 JANG_4M | 17 GB | 14 GB (82%) | 10.4 GB (73.9%) | n/a (Engine BLOCKED) | n/a | — |
-| Nemotron Omni JANGTQ2 | 12 GB | 7 GB (58%) | 5.2 GB (73.9%) | n/a (Engine BLOCKED) | n/a | — |
+| Nemotron Cascade-2 JANG_4M | 17 GB | 14 GB (82%) | 10.4 GB (73.9%) | Historical RSS row; current Nemotron-H wrapper wired | n/a | — |
+| Nemotron Omni JANGTQ2 | 12 GB | 7 GB (58%) | 5.2 GB (73.9%) | Historical RSS row; current Omni wrapper wired | n/a | — |
 | Qwen3.6-A3B JANG_2L | 11 GB | 7.5 GB (68%) | 5.4 GB (70.0%) | n/a (Engine BLOCKED) | n/a | — |
 | Laguna-XS.2 JANGTQ | 9.4 GB | 7.3 GB (78%) | 5.2 GB (71.8%) | n/a (Engine BLOCKED) | n/a | — |
 
@@ -95,7 +95,8 @@ Tested per-bundle on M4 Max with the JANGPressCompare bench:
 **Engine-port gaps blocking decode tests** (NOT JangPress issues):
 - DSV4 outputs `?` (per-tensor `.tq_bits` strip not in sanitize)
 - Laguna entire model not ported
-- Nemotron-H JANGTQ wrapper missing (§437 components in place)
+- Historical Nemotron-H JANGTQ wrapper-missing note is superseded by current
+  `NemotronHJANGTQContext` / `NemotronHJANGTQSwitchMLP` wiring.
 - Qwen3.6 qwen3_5_moe wrapper SIGTRAPs on load
 - Chunk-buffer eats output content (parser bug in thinking-aware path)
 
