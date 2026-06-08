@@ -37,6 +37,9 @@ public struct PythonicToolCallParser: ToolCallParser, Sendable {
         if let jsonToolCall = parseSingleToolArgumentsJSON(text, tools: tools) {
             return jsonToolCall
         }
+        if let jsonToolCall = parseBracketedNameAndArgumentsArray(text, tools: tools) {
+            return jsonToolCall
+        }
 
         let funcName: String
         let argsString: String
@@ -297,6 +300,29 @@ public struct PythonicToolCallParser: ToolCallParser, Sendable {
             type != "function" && type != "tool_call"
         {
             return nil
+        }
+        return ToolCall(function: .init(name: name, arguments: args.mapValues(asSendable)))
+    }
+
+    private func parseBracketedNameAndArgumentsArray(
+        _ text: String,
+        tools: [[String: any Sendable]]?
+    ) -> ToolCall? {
+        guard text.hasPrefix("[") else { return nil }
+        guard let data = text.data(using: .utf8),
+            let array = try? JSONSerialization.jsonObject(with: data) as? [Any],
+            array.count == 2,
+            let name = array[0] as? String,
+            toolNames(tools: tools).contains(name),
+            let args = array[1] as? [String: Any]
+        else { return nil }
+
+        let spec = toolSpec(named: name, tools: tools)
+        if let required = spec.required, !required.isEmpty {
+            guard required.allSatisfy({ args[$0] != nil }) else { return nil }
+        }
+        if let properties = spec.properties, !properties.isEmpty {
+            guard args.keys.allSatisfy({ properties.contains($0) }) else { return nil }
         }
         return ToolCall(function: .init(name: name, arguments: args.mapValues(asSendable)))
     }

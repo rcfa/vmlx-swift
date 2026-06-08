@@ -152,7 +152,7 @@ public struct DeepseekV4ChatEncoder: Sendable {
             if let tailIndex = finalRendered.lastIndex(where: {
                 $0.role == .user || $0.role == .developer
             }), tailIndex >= contextLen {
-                finalRendered.insert(reminder, at: finalRendered.index(after: tailIndex))
+                finalRendered.insert(reminder, at: tailIndex)
             } else {
                 finalRendered.append(reminder)
             }

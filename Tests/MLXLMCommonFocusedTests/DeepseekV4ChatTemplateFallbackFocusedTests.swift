@@ -934,6 +934,28 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         #expect(!rendered.contains("..."))
     }
 
+    @Test("LFM2 fallback grounds exact required tool value with preserving-newlines wording")
+    func lfm2FallbackGroundsExactRequiredToolValueWithPreservingNewlinesWording() throws {
+        let rendered = try Template(ChatTemplateFallbacks.lfm2ToolMinimal).renderDSV4([
+            "messages": [
+                ["role": "user", "content": "Use the line_count tool on exactly this text, preserving newlines:\nalpha\nbeta\ngamma"],
+            ],
+            "tools": [lineCountToolSpec()],
+            "bos_token": "<|startoftext|>",
+            "add_generation_prompt": true,
+            "enable_thinking": false,
+            "tool_choice": "required",
+        ])
+
+        #expect(rendered.contains("Function name: line_count"))
+        #expect(rendered.contains("Copy the `text` value exactly from the current user request."))
+        #expect(rendered.contains(#"the exact `text` value encoded with \n escapes is: alpha\nbeta\ngamma"#))
+        #expect(rendered.contains(#"<|tool_call_start|>[line_count(text='alpha\nbeta\ngamma')]<|tool_call_end|>"#))
+        #expect(!rendered.contains("alice"))
+        #expect(!rendered.contains("VALUE_FOR_text"))
+        #expect(rendered.hasSuffix("<|im_start|>assistant\n"))
+    }
+
     @Test("LFM2 fallback repeats exact required tool value after history")
     func lfm2FallbackRepeatsExactRequiredToolValueAfterHistory() throws {
         let rendered = try Template(ChatTemplateFallbacks.lfm2ToolMinimal).renderDSV4([
