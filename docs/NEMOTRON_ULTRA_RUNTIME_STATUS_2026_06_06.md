@@ -846,3 +846,51 @@ Rejected a first-projection `gatherTQTopKRelu2` kernel fusion experiment.
 Result: the fused ReLU² gather was removed from source after measurement. The
 likely cost is inside the new kernel variant itself rather than the two MLX
 activation dispatches, so this is not a release path.
+
+## Follow-Up Trace - 2026-06-07 22:44 PDT
+
+Kept a default-off Mamba subcomponent profiler for the next Nemotron speed
+trace. This does not change normal runtime behavior; it only adds synchronized
+timing when `VMLINUX_NEMOTRON_LAYER_PROFILE=1` or
+`VMLINUX_NEMOTRON_LAYER_PROFILE=1` is set.
+
+Focused verification:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  xcrun swift test \
+  --filter NemotronHJANGTQDispatchFocusedTests/testUltraRuntimeFastPathControlsAreSourceWired \
+  --jobs 1 --no-parallel
+```
+
+Result: passed, 1 selected test.
+
+Live diagnostic row:
+
+- `/tmp/vmlx-nemotron-mamba-subprofile-20260607-224427.log`
+- Model:
+  `/Users/eric/models/NVIDIA-Nemotron-3-Ultra-550B-A55B-JANGTQ_1L`
+- Bundle defaults were used:
+  `samplingSource=bundle-defaults temp=1.00 topP=0.95 topK=0 rep=nil`
+- Output was coherent for the short row:
+  `"The ocean waves are"`
+- `stop=length`, `unclosedReasoning=NO`, `loop=NO`, `leaks=none`
+- Profiling overhead made this a diagnostic-only row:
+  `genTokens=4 genSec=0.802 tokps=5.0`
+
+Steady decode profile after the first profiled token:
+
+- `moe.mixer`: about `115-120 ms/token`, with `moe.switch_mlp` about
+  `53-56 ms/token` and `moe.shared` about `26-28 ms/token`.
+- `mamba.mixer`: about `98-99 ms/token`, with `mamba.in_proj` about
+  `35-36 ms/token`, `mamba.out_proj` about `22 ms/token`,
+  `mamba.norm` about `21-22 ms/token`, and `mamba.ssm_update` about
+  `15-16 ms/token`.
+- `attention.mixer`: about `9-10 ms/token`.
+
+Verdict: the remaining Nemotron Ultra decode ceiling is not a sampler,
+template, parser, generation-config, or cache-hit issue in this row. The
+measured cost is still model-forward work split across MoE/SwitchMLP and Mamba
+projection/SSM/norm. The accepted release state remains the measured
+`cee099d` baseline plus the hybrid SSM companion-cache fix; this profiler is
+only there to make the next speed patch measurable.
