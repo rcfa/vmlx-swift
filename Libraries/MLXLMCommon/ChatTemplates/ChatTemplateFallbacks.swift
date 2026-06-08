@@ -670,6 +670,15 @@ value_1
       {{- tool | tojson -}}{{- "\n" -}}
     {%- endfor -%}
     {{- "</available_tools>\n" -}}
+    {{- "\nFor each function call, reply only with an XML object in this format:\n" -}}
+    {{- "<tool_call>function-name\n<arg_key>argument-key</arg_key>\n<arg_value>value-of-argument-key</arg_value>\n</tool_call>\n" -}}
+    {%- if tool_choice is defined and tool_choice == "required" -%}
+      {{- "\nThe current assistant response MUST be a function call. Do not answer in prose before the tool result." -}}
+      {%- if tool_choice_name is defined and tool_choice_name -%}
+        {{- " Use the `" ~ tool_choice_name ~ "` function." -}}
+      {%- endif -%}
+      {{- " Include every required argument exactly as requested by the current user turn.\n" -}}
+    {%- endif -%}
   {%- endif -%}
   {{- "\n</system>\n" -}}
 {%- endif -%}
