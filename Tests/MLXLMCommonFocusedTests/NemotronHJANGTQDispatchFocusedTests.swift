@@ -149,8 +149,10 @@ final class NemotronHJANGTQDispatchFocusedTests: XCTestCase {
         XCTAssertTrue(modelSource.contains("residual.asType(x.dtype)"))
         XCTAssertTrue(modelSource.contains("out.asType(lmHead.weight.dtype)"))
         XCTAssertTrue(jangtqSource.contains("func weightedDecode(_ x: MLXArray, _ indices: MLXArray, scores: MLXArray) -> MLXArray?"))
-        XCTAssertTrue(jangtqSource.contains("let y = callAsFunction(x, indices)\n        return (y * scores[.ellipsis, .newAxis]).sum(axis: -2)"))
-        XCTAssertFalse(jangtqSource.contains("JANGTQKernels.gatherTQTopKScored("))
+        XCTAssertTrue(jangtqSource.contains("JANGTQKernels.gatherTQTopKScored("))
+        XCTAssertTrue(jangtqSource.contains("return reduced.reshaped(outShape).asType(x.dtype)"))
+        XCTAssertTrue(jangtqSource.contains("return callAsFunction(x, indices)"))
+        XCTAssertFalse(jangtqSource.contains("let y = callAsFunction(x, indices)\n        return (y * scores[.ellipsis, .newAxis]).sum(axis: -2)"))
         XCTAssertFalse(jangtqSource.contains("JANGTQ_ENABLE_NEMOTRON_SWITCHMLP_COMPILE"))
         XCTAssertTrue(jangtqSource.contains("extension StreamingTurboQuantSwitchReLUSquaredMLP: NemotronHSwitchMLPLayer"))
         XCTAssertTrue(jangtqSource.contains("reduced(x, indices: indices, scores: scores)"))
@@ -161,14 +163,14 @@ final class NemotronHJANGTQDispatchFocusedTests: XCTestCase {
         XCTAssertTrue(benchSource.contains("LoadConfiguration(useMmapSafetensors: true)"))
     }
 
-    func testStackedNemotronWeightedDecodeDoesNotUseRejectedScoredDownProjectionKernel() throws {
+    func testStackedNemotronWeightedDecodeUsesScoredDownProjectionKernel() throws {
         let kernelSource = try String(
             contentsOfFile: "Libraries/MLXLMCommon/JANGTQKernels.swift",
             encoding: .utf8)
 
-        XCTAssertFalse(kernelSource.contains("kGatherTQScoredSource"))
-        XCTAssertFalse(kernelSource.contains("jangtq_gather_tq_scored_matmul"))
-        XCTAssertFalse(kernelSource.contains("public static func gatherTQTopKScored("))
+        XCTAssertTrue(kernelSource.contains("kGatherTQScoredSource"))
+        XCTAssertTrue(kernelSource.contains("jangtq_gather_tq_scored_matmul"))
+        XCTAssertTrue(kernelSource.contains("public static func gatherTQTopKScored("))
     }
 
     func testNemotronMambaDecodeDepthwiseConvFastPathMatchesGenericConv1d() throws {
