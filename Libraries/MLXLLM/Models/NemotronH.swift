@@ -86,7 +86,8 @@ private func nemotronHEnvFlag(_ name: String) -> Bool {
 }
 
 private let nemotronHActivationBF16RetentionFlag =
-    !nemotronHEnvFlag("JANGTQ_DISABLE_NEMOTRON_ACTIVATION_BF16")
+    nemotronHEnvFlag("VMLINUX_ENABLE_NEMOTRON_ACTIVATION_BF16")
+    && !nemotronHEnvFlag("JANGTQ_DISABLE_NEMOTRON_ACTIVATION_BF16")
 private let nemotronHWeightedMoEFastPathFlag =
     nemotronHEnvFlag("JANGTQ_ENABLE_NEMOTRON_WEIGHTED_MOE_FASTPATH")
     && !nemotronHEnvFlag("JANGTQ_DISABLE_NEMOTRON_WEIGHTED_MOE_FASTPATH")
