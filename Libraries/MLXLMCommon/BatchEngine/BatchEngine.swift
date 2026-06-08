@@ -812,8 +812,13 @@ public actor BatchEngine {
     private func shouldSkipDiskBackedToolPromptSeedBoundary(for slot: BatchSlot) -> Bool {
         guard slot.disablesGeneratedCacheBoundary else { return false }
         let modelName = context.configuration.name.lowercased()
-        return modelName.contains("lfm2.5")
-            && modelName.contains("mxfp8")
+        if modelName.contains("lfm2.5") && modelName.contains("mxfp8") {
+            return true
+        }
+        if modelName.contains("gemma-4") && modelName.contains("mxfp4") {
+            return true
+        }
+        return false
     }
 
     private func startSoloFastPath(

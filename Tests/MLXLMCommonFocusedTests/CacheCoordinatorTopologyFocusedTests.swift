@@ -587,8 +587,8 @@ struct CacheCoordinatorTopologyFocusedTests {
                 parameters: GenerateParameters()))
     }
 
-    @Test("LFM2.5 MXFP8 required-tool rows skip disk-backed prompt seed boundary")
-    func lfm25MXFP8RequiredToolRowsSkipDiskBackedPromptSeedBoundary() throws {
+    @Test("Known unsafe required-tool rows skip disk-backed prompt seed boundary")
+    func knownUnsafeRequiredToolRowsSkipDiskBackedPromptSeedBoundary() throws {
         let source = try String(
             contentsOfFile: "Libraries/MLXLMCommon/BatchEngine/BatchEngine.swift",
             encoding: .utf8)
@@ -597,6 +597,8 @@ struct CacheCoordinatorTopologyFocusedTests {
         #expect(source.contains("slot.disablesGeneratedCacheBoundary"))
         #expect(source.contains(#"modelName.contains("lfm2.5")"#))
         #expect(source.contains(#"modelName.contains("mxfp8")"#))
+        #expect(source.contains(#"modelName.contains("gemma-4")"#))
+        #expect(source.contains(#"modelName.contains("mxfp4")"#))
         #expect(source.contains("!shouldSkipDiskBackedToolPromptSeedBoundary(for: slot)"))
         #expect(source.contains("Skipped disk-backed tool prompt seed boundary"))
     }
