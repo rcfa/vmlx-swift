@@ -132,6 +132,7 @@ final class NemotronHJANGTQDispatchFocusedTests: XCTestCase {
             encoding: .utf8)
 
         XCTAssertTrue(modelSource.contains("JANGTQ_DISABLE_NEMOTRON_ACTIVATION_BF16"))
+        XCTAssertTrue(modelSource.contains("JANGTQ_ENABLE_NEMOTRON_WEIGHTED_MOE_FASTPATH"))
         XCTAssertTrue(modelSource.contains("JANGTQ_DISABLE_NEMOTRON_WEIGHTED_MOE_FASTPATH"))
         XCTAssertTrue(modelSource.contains("VMLX_NEMOTRON_LAYER_PROFILE"))
         XCTAssertTrue(modelSource.contains("VMLINUX_NEMOTRON_LAYER_PROFILE"))
@@ -141,6 +142,7 @@ final class NemotronHJANGTQDispatchFocusedTests: XCTestCase {
         XCTAssertTrue(modelSource.contains("private let nemotronHLayerProfileFlag"))
         XCTAssertTrue(modelSource.contains("private let nemotronHMambaConvFastPathDisabledFlag"))
         XCTAssertTrue(modelSource.contains("private func nemotronHActivationBF16RetentionEnabled() -> Bool {\n    nemotronHActivationBF16RetentionFlag\n}"))
+        XCTAssertTrue(modelSource.contains("nemotronHEnvFlag(\"JANGTQ_ENABLE_NEMOTRON_WEIGHTED_MOE_FASTPATH\")\n    && !nemotronHEnvFlag(\"JANGTQ_DISABLE_NEMOTRON_WEIGHTED_MOE_FASTPATH\")"))
         XCTAssertTrue(modelSource.contains("private func nemotronHWeightedMoEFastPathEnabled() -> Bool {\n    nemotronHWeightedMoEFastPathFlag\n}"))
         XCTAssertTrue(modelSource.contains("private func nemotronHLayerProfileEnabled() -> Bool {\n    nemotronHLayerProfileFlag\n}"))
         XCTAssertTrue(modelSource.contains("weightedDecode(expertInput, inds, scores: scores)"))
