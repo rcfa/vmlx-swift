@@ -801,3 +801,31 @@ Result:
 
 Current verdict is unchanged: this closes a cache-wrapper correctness gap, but
 does not claim a new heavy live model row or a new low-footprint speed result.
+
+## Follow-Up Trace - 2026-06-07 22:25 PDT
+
+Rejected a Swift `MLX.compile` micrograph experiment for Nemotron JANGTQ
+`SwitchMLP`.
+
+- Hypothesis: Python's compiled `fc1 -> relu² -> fc2` SwitchMLP closure might
+  explain the remaining Swift/Python decode gap.
+- Swift implementation tested: opt-in `JANGTQ_ENABLE_NEMOTRON_SWITCHMLP_COMPILE`
+  path that compiled the same Hadamard -> `gatherTQTopK` -> ReLU² -> Hadamard
+  -> `gatherTQ` graph for decode-shape `totalTokens == 1`.
+- Smoke log:
+  `/tmp/vmlx-nemotron-switchmlp-compile-smoke-20260607-222317.log`
+  produced coherent text at `7.4 tok/s`, but the row was only 8 tokens and
+  included compile/startup effects.
+- Sustained log:
+  `/tmp/vmlx-nemotron-switchmlp-compile-128tok-20260607-222513.log`
+  produced coherent 128-token output with bundle defaults, no loop/leak, and
+  low footprint, but measured only `6.4 tok/s` with `tail_tokps_est=6.6`.
+- Baseline `cee099d` sustained row remains faster:
+  `/tmp/vmlx-nemotron-cee099d-sustained-128tok-20260607-221127.log`
+  measured `6.7 tok/s` with `tail_tokps_est=6.9`.
+
+Result: do not add a compiled SwitchMLP flag or make this path default. The
+experiment was removed from source after measurement. The remaining speed gap is
+still in model-forward dispatch cost, with the next useful target likely a real
+ReLU²-specific TQ kernel fusion or more granular Mamba subcomponent proof, not
+Swift `MLX.compile` around the existing kernel calls.
