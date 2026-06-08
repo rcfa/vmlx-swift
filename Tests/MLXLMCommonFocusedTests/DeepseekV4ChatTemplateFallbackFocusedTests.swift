@@ -956,6 +956,38 @@ struct DeepseekV4ChatTemplateFallbackFocusedTests {
         #expect(rendered.hasSuffix("<|im_start|>assistant\n"))
     }
 
+    @Test("Gemma4 fallback grounds preserving-newlines required tool value")
+    func gemma4FallbackGroundsPreservingNewlinesRequiredToolValue() throws {
+        let context: [String: any Sendable] = [
+            "messages": [
+                [
+                    "role": "user",
+                    "content": "Use the line_count tool on exactly this text, preserving newlines:\nalpha\nbeta\ngamma",
+                ],
+            ],
+            "tools": [lineCountToolSpec()],
+            "bos_token": "<bos>",
+            "add_generation_prompt": true,
+            "tool_choice": "required",
+            "tool_choice_name": "line_count",
+        ]
+
+        for templateSource in [
+            ChatTemplateFallbacks.gemma4WithTools,
+            try String(
+                contentsOf: URL(fileURLWithPath: "Libraries/MLXLMCommon/ChatTemplates/Gemma4WithTools.jinja"),
+                encoding: .utf8),
+        ] {
+            let rendered = try Template(templateSource).renderDSV4(context)
+
+            #expect(rendered.contains("Required call shape for the current request:"))
+            #expect(rendered.contains(#"<|tool_call>call:line_count{text:<|"|>alpha\nbeta\ngamma<|"|>}<tool_call|>"#))
+            #expect(rendered.contains(#"Do not replace \n with a physical newline, do not insert a space after it"#))
+            #expect(!rendered.contains(#"alpha\nbeta\n gamma"#))
+            #expect(rendered.hasSuffix("<|turn>model\n"))
+        }
+    }
+
     @Test("LFM2 fallback repeats exact required tool value after history")
     func lfm2FallbackRepeatsExactRequiredToolValueAfterHistory() throws {
         let rendered = try Template(ChatTemplateFallbacks.lfm2ToolMinimal).renderDSV4([
