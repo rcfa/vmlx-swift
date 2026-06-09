@@ -673,6 +673,7 @@ private class G4ScaledLinear: Module {
     init(inputDims: Int, outputDims: Int, scalar: Float) {
         self._weight.wrappedValue = MLXArray.zeros([outputDims, inputDims])
         self._scales.wrappedValue = MLXArray.mlxNone
+        self._biases.wrappedValue = MLXArray.mlxNone
         self.scalar = scalar
         super.init()
     }

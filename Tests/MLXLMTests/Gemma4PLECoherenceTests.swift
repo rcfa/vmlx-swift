@@ -159,11 +159,30 @@ struct Gemma4PLECoherenceTests {
 
         for source in [textSource, vlmSource] {
             #expect(source.contains(#"@ParameterInfo(key: "scales") var scales: MLXArray"#))
+            #expect(source.contains(#"@ParameterInfo(key: "biases") var biases: MLXArray?"#))
             #expect(source.contains("MLXArray.mlxNone"))
             #expect(source.contains("!scales.shape.isEmpty"))
             #expect(source.contains("JangLoader.inferBitWidthAndGroupSize"))
             #expect(source.contains("quantizedMM("))
             #expect(source.contains("mode: .mxfp4"))
+        }
+    }
+
+    @Test("Gemma4 E-series scaled projection initializes JANG affine biases slot")
+    func eSeriesScaledProjectionInitializesAffineBiasSlot() throws {
+        let repo = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let textSource = try String(
+            contentsOf: repo.appendingPathComponent("Libraries/MLXLLM/Models/Gemma4Text.swift"),
+            encoding: .utf8)
+        let vlmSource = try String(
+            contentsOf: repo.appendingPathComponent("Libraries/MLXVLM/Models/Gemma4.swift"),
+            encoding: .utf8)
+
+        for source in [textSource, vlmSource] {
+            #expect(source.contains("self._biases.wrappedValue = MLXArray.mlxNone"))
         }
     }
 }
