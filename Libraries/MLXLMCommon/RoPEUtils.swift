@@ -268,38 +268,45 @@ public class ProportionalRoPE: Module, OffsetLayer, ArrayOffsetLayer {
             return x
         }
 
-        let head: MLXArray
-        let tail: MLXArray?
-        if actualDimensions > evenDimensions {
-            let pieces = x.split(indices: [evenDimensions], axis: -1)
-            head = pieces[0]
-            tail = pieces[1]
-        } else {
-            head = x
-            tail = nil
+        func sliceLastAxis(_ array: MLXArray, from start: Int, to end: Int) -> MLXArray {
+            precondition(
+                start <= end,
+                "Invalid ProportionalRoPE last-axis slice \(start)..<\(end) for shape \(array.shape)")
+            var indices: [any MLXArrayIndex] = Array(repeating: MLXSlice(), count: array.ndim)
+            indices[array.ndim - 1] = MLXSlice(start: Int32(start), end: Int32(end), stride: 1)
+            return array[indices]
         }
+
+        let head =
+            actualDimensions > evenDimensions
+            ? sliceLastAxis(x, from: 0, to: evenDimensions)
+            : x
+        let tail =
+            actualDimensions > evenDimensions
+            ? sliceLastAxis(x, from: evenDimensions, to: actualDimensions)
+            : nil
+
         let half = evenDimensions / 2
         let rotatedHalf = evenRotatedDimensions / 2
         let effectiveFreqs = evenRotatedDimensions == rotatedDimensions ? freqs : freqs[..<rotatedHalf]
 
-        let halves = head.split(indices: [half], axis: -1)
-        let left = halves[0]
-        let right = halves[1]
-        let leftPieces = rotatedHalf < half ? left.split(indices: [rotatedHalf], axis: -1) : [left]
-        let rightPieces = rotatedHalf < half ? right.split(indices: [rotatedHalf], axis: -1) : [right]
-        let rotatedInput = concatenated(
-            [leftPieces[0], rightPieces[0]], axis: -1)
+        let left = sliceLastAxis(head, from: 0, to: half)
+        let right = sliceLastAxis(head, from: half, to: evenDimensions)
+        let leftRotary = rotatedHalf < half ? sliceLastAxis(left, from: 0, to: rotatedHalf) : left
+        let rightRotary = rotatedHalf < half ? sliceLastAxis(right, from: 0, to: rotatedHalf) : right
+        let rotatedInput = concatenated([leftRotary, rightRotary], axis: -1).contiguous()
         let rotated = applyRoPE(rotatedInput, evenRotatedDimensions, effectiveFreqs)
-        let rotatedPieces = rotated.split(indices: [rotatedHalf], axis: -1)
+        let rotatedLeft = sliceLastAxis(rotated, from: 0, to: rotatedHalf)
+        let rotatedRight = sliceLastAxis(rotated, from: rotatedHalf, to: evenRotatedDimensions)
 
         let mergedLeft =
             rotatedHalf < half
-            ? concatenated([rotatedPieces[0], leftPieces[1]], axis: -1)
-            : rotatedPieces[0]
+            ? concatenated([rotatedLeft, sliceLastAxis(left, from: rotatedHalf, to: half)], axis: -1)
+            : rotatedLeft
         let mergedRight =
             rotatedHalf < half
-            ? concatenated([rotatedPieces[1], rightPieces[1]], axis: -1)
-            : rotatedPieces[1]
+            ? concatenated([rotatedRight, sliceLastAxis(right, from: rotatedHalf, to: half)], axis: -1)
+            : rotatedRight
         let mergedHead = concatenated([mergedLeft, mergedRight], axis: -1)
 
         guard let tail else { return mergedHead }

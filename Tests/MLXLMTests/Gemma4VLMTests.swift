@@ -302,6 +302,22 @@ private func maskedScatter(input: MLXArray, mask: MLXArray, source: MLXArray) ->
         #expect(rotatedKey.shape == key.shape)
         #expect(dynamicQuery.shape == query.shape)
         #expect(dynamicKey.shape == key.shape)
+
+        let e4bGlobalRope = ProportionalRoPE(
+            dimensions: 512,
+            base: 1_000_000,
+            scalingConfig: [
+                "rope_type": .string("proportional"),
+                "partial_rotary_factor": .float(0.25),
+            ])
+        let e4bQuery = MLXArray.ones([1, 8, 4, 512])
+        let e4bKey = MLXArray.ones([1, 2, 4, 256])
+        let e4bRotatedQuery = e4bGlobalRope(e4bQuery, offset: dynamicOffset)
+        let e4bRotatedKey = e4bGlobalRope(e4bKey, offset: dynamicOffset)
+        eval(e4bRotatedQuery, e4bRotatedKey)
+
+        #expect(e4bRotatedQuery.shape == e4bQuery.shape)
+        #expect(e4bRotatedKey.shape == e4bKey.shape)
     }
 }
 
