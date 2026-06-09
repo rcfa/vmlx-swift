@@ -30,6 +30,7 @@ public struct Gemma4ToolCallParser: ToolCallParser, Sendable {
 
     public var startTag: String? { native.startTag }
     public var endTag: String? { native.endTag }
+    public var supportsBareCallToolFallback: Bool { true }
 
     public var startTagAliases: [String] {
         native.startTagAliases + zyphra.startTagAliases

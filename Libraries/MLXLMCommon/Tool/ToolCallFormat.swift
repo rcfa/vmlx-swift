@@ -62,6 +62,11 @@ public protocol ToolCallParser: Sendable {
     /// outputs that fall back from DSML to `{"tool": "name", ...}` while still
     /// carrying a registered tool name.
     var supportsInlineJSONToolFallback: Bool { get }
+
+    /// Whether a tagged parser should also buffer a bare native
+    /// `call:name{...}` body as a possible tool call. Gemma4 can emit this
+    /// body without its `<|tool_call>` wrapper on required-tool turns.
+    var supportsBareCallToolFallback: Bool { get }
 }
 
 extension ToolCallParser {
@@ -82,6 +87,8 @@ extension ToolCallParser {
     }
 
     public var supportsInlineJSONToolFallback: Bool { false }
+
+    public var supportsBareCallToolFallback: Bool { false }
 
     public func parseEOS(_ toolCallBuffer: String, tools: [[String: any Sendable]]?) -> [ToolCall] {
         if let startTag {

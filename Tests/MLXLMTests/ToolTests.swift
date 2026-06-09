@@ -831,6 +831,21 @@ struct ToolTests {
         #expect(toolCall.function.arguments["query"] == .string("hello, world"))
     }
 
+    @Test("Test Gemma 4 Function Parser - bare EOS body with single quoted strings")
+    func testGemma4ParserBareEOSBodyWithSingleQuotedStrings() throws {
+        let parser = GemmaFunctionParser(
+            startTag: "<|tool_call>", endTag: "<tool_call|>", escapeMarker: "<|\"|>")
+        let calls = parser.parseEOS(
+            "call:get_weather{location:'Tokyo', unit:'celsius'}",
+            tools: nil)
+
+        let toolCall = try #require(calls.first)
+        #expect(calls.count == 1)
+        #expect(toolCall.function.name == "get_weather")
+        #expect(toolCall.function.arguments["location"] == .string("Tokyo"))
+        #expect(toolCall.function.arguments["unit"] == .string("celsius"))
+    }
+
     @Test("Test Gemma 4 Format via ToolCallProcessor (auto-infer)")
     func testGemma4FormatProcessor() throws {
         // Verify the factory gemma4 case wires the correct tags and escape marker.
@@ -841,6 +856,22 @@ struct ToolTests {
         let toolCall = try #require(processor.toolCalls.first)
         #expect(toolCall.function.name == "calculator")
         #expect(toolCall.function.arguments["expression"] == .string("2+2"))
+    }
+
+    @Test("Test Gemma 4 Format via ToolCallProcessor - bare EOS body")
+    func testGemma4FormatProcessorBareEOSBody() throws {
+        let processor = ToolCallProcessor(format: .gemma4)
+        let visible = processor.processChunk(
+            "call:get_weather{location:'Tokyo', unit:'celsius'}") ?? ""
+        let eosVisible = processor.processEOS() ?? ""
+
+        #expect(visible.isEmpty)
+        #expect(eosVisible.isEmpty)
+        #expect(processor.toolCalls.count == 1)
+        let toolCall = try #require(processor.toolCalls.first)
+        #expect(toolCall.function.name == "get_weather")
+        #expect(toolCall.function.arguments["location"] == .string("Tokyo"))
+        #expect(toolCall.function.arguments["unit"] == .string("celsius"))
     }
 
     @Test("Test ToolCallFormat.infer maps gemma4 model_type correctly")

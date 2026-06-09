@@ -53,6 +53,7 @@ public class ToolCallProcessor {
         case json
         case actionJSON
         case functionCall
+        case bareCall
         case requestToolXML
         case embeddedAPIToolJSON
         case bareNameJSON
@@ -385,6 +386,7 @@ public class ToolCallProcessor {
                 state = .normal
                 if inlineToolCallKind == .actionJSON
                     || inlineToolCallKind == .functionCall
+                    || inlineToolCallKind == .bareCall
                     || inlineToolCallKind == .bareNameJSON
                     || inlineToolCallKind == .bareNameKeyValue
                 {
@@ -428,6 +430,8 @@ public class ToolCallProcessor {
             return embeddedAPIToolJSONCallBalanced(text)
         case .functionCall:
             return functionCallParenthesesBalanced(text)
+        case .bareCall:
+            return bareCallBracesBalanced(text)
         case .requestToolXML:
             return requestToolXMLCallComplete(text)
         case .bareNameJSON:
@@ -441,9 +445,14 @@ public class ToolCallProcessor {
         switch inlineToolCallKind {
         case .actionJSON, .requestToolXML, .embeddedAPIToolJSON, .bareNameKeyValue:
             return inlineToolCallComplete(text)
-        case .json, .functionCall, .bareNameJSON:
+        case .json, .functionCall, .bareCall, .bareNameJSON:
             return true
         }
+    }
+
+    private func bareCallBracesBalanced(_ text: String) -> Bool {
+        guard let open = text.firstIndex(of: "{") else { return false }
+        return jsonBracesBalanced(String(text[open...]))
     }
 
     private func bareNameJSONCallBalanced(_ text: String) -> Bool {
@@ -560,6 +569,50 @@ public class ToolCallProcessor {
                 return nil
             }
             .min()
+    }
+
+    private func firstBareCallToolCallStart(in text: String) -> String.Index? {
+        var searchStart = text.startIndex
+        while let range = text.range(of: "call:", range: searchStart ..< text.endIndex) {
+            if isInlineFunctionBoundary(text, before: range.lowerBound),
+               bareCallTailStartsKnownTool(in: text, afterPrefix: range.upperBound)
+            {
+                return range.lowerBound
+            }
+            searchStart = range.upperBound
+        }
+        return nil
+    }
+
+    private func partialBareCallToolCallStart(in text: String) -> String.Index? {
+        let prefix = "call:"
+        for length in stride(from: min(prefix.count - 1, text.count), through: 1, by: -1) {
+            let suffix = String(text.suffix(length))
+            if prefix.hasPrefix(suffix) {
+                return text.index(text.endIndex, offsetBy: -length)
+            }
+        }
+        guard let range = text.range(of: prefix),
+              isInlineFunctionBoundary(text, before: range.lowerBound)
+        else {
+            return nil
+        }
+        let tail = text[range.upperBound...]
+        if tail.firstIndex(of: "{") == nil {
+            return range.lowerBound
+        }
+        return nil
+    }
+
+    private func bareCallTailStartsKnownTool(in text: String, afterPrefix: String.Index) -> Bool {
+        let tail = text[afterPrefix...]
+        guard let brace = tail.firstIndex(of: "{") else { return false }
+        let name = tail[..<brace].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return false }
+        if let tools, !tools.isEmpty {
+            return inlineFunctionToolNames().contains(String(name))
+        }
+        return name.allSatisfy { $0 == "_" || $0.isLetter || $0.isNumber }
     }
 
     private func firstInlineActionJSONToolCallStart(in text: String) -> String.Index? {
@@ -1173,6 +1226,41 @@ public class ToolCallProcessor {
             guard suffix.count > 1 else { return false }
             return partialMatch(buffer: suffix, tags: startTags, prefixes: startTagPrefixes)
         }()
+
+        if allowInlineFallback && parser.supportsBareCallToolFallback && !hasTaggedStartCandidate {
+            switch state {
+            case .collectingInlineToolCall where inlineToolCallKind == .bareCall:
+                return processInlineChunk(chunk)
+            case .normal:
+                let candidate = leadingTextBeforeToolCall + chunk
+                if let callIndex = firstBareCallToolCallStart(in: candidate) {
+                    let leading = String(candidate[..<callIndex])
+                    inlineToolCallKind = .bareCall
+                    toolCallBuffer = String(candidate[callIndex...])
+                    leadingTextBeforeToolCall = ""
+                    state = .collectingInlineToolCall
+
+                    if shouldAttemptInlineToolParse(toolCallBuffer),
+                       let toolCall = parser.parse(content: toolCallBuffer, tools: tools)
+                    {
+                        toolCalls.append(toolCall)
+                        toolCallBuffer = ""
+                        state = .normal
+                        suppressingTextAfterInlineToolCall = true
+                    }
+                    return visibleInlineLeading(leading)
+                }
+                if let fragmentIndex = partialBareCallToolCallStart(in: candidate) {
+                    let leading = String(candidate[..<fragmentIndex])
+                    leadingTextBeforeToolCall = String(candidate[fragmentIndex...])
+                    return visibleInlineLeading(leading)
+                }
+            case .collectingInlineToolCall:
+                break
+            case .potentialToolCall, .collectingToolCall:
+                break
+            }
+        }
 
         if allowInlineFallback && parser.supportsInlineJSONToolFallback && !hasTaggedStartCandidate {
             switch state {

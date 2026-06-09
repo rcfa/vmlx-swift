@@ -7,6 +7,7 @@ import Foundation
 public struct GemmaFunctionParser: ToolCallParser, Sendable {
     public let startTag: String?
     public let endTag: String?
+    public let supportsBareCallToolFallback = true
 
     private let escapeMarker: String
 
@@ -79,6 +80,29 @@ public struct GemmaFunctionParser: ToolCallParser, Sendable {
         }
 
         return ToolCall(function: .init(name: funcName, arguments: arguments))
+    }
+
+    public func parseEOS(_ toolCallBuffer: String, tools: [[String: any Sendable]]?) -> [ToolCall] {
+        if let startTag {
+            let tagged = toolCallBuffer
+                .components(separatedBy: startTag)
+                .filter { !$0.isEmpty }
+                .compactMap { parse(content: $0, tools: tools) }
+            if !tagged.isEmpty {
+                return tagged
+            }
+        }
+
+        // Some Gemma4 VLM rows emit the canonical call body without the
+        // `<|tool_call>` wrapper at EOS, e.g. `call:get_weather{...}`.
+        // Treat only an actual call body as a tool call; ordinary visible text
+        // remains visible through ToolCallProcessor's normal streaming path.
+        guard toolCallBuffer.range(of: "call:") != nil,
+              let bare = parse(content: toolCallBuffer, tools: tools)
+        else {
+            return []
+        }
+        return [bare]
     }
 
     private func parseValue(from text: inout String) -> (any Sendable)? {
@@ -158,6 +182,11 @@ public struct GemmaFunctionParser: ToolCallParser, Sendable {
                 return decoded
             }
             return decodeQuotedStringLiteral(value)
+        }
+        if value.hasPrefix("'"),
+           value.hasSuffix("'")
+        {
+            return String(value.dropFirst().dropLast())
         }
         if let data = value.data(using: .utf8),
             let json = deserializeJSON(data)
