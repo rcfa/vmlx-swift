@@ -210,6 +210,7 @@ struct G4TextConfig: Codable, Sendable {
     let topKExperts: Int
     let ropeTraditional: Bool
     let ropeParameters: [String: [String: StringOrNumber]]
+    let padTokenId: Int
 
     enum CodingKeys: String, CodingKey {
         case hiddenSize = "hidden_size"
@@ -238,6 +239,7 @@ struct G4TextConfig: Codable, Sendable {
         case topKExperts = "top_k_experts"
         case ropeTraditional = "rope_traditional"
         case ropeParameters = "rope_parameters"
+        case padTokenId = "pad_token_id"
     }
 
     init(from decoder: Decoder) throws {
@@ -288,6 +290,7 @@ struct G4TextConfig: Codable, Sendable {
             field: CodingKeys.topKExperts.rawValue)
         ropeTraditional = try c.decodeIfPresent(Bool.self, forKey: .ropeTraditional) ?? false
         ropeParameters = try c.decodeIfPresent([String: [String: StringOrNumber]].self, forKey: .ropeParameters) ?? [:]
+        padTokenId = try c.decodeIfPresent(Int.self, forKey: .padTokenId) ?? 0
     }
 }
 
@@ -1084,7 +1087,14 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
                 "Gemma4 VLM does not implement video inputs; LMInput.video must be nil. " +
                 "Video-bearing Gemma4 bundles have no proven vMLX video path yet.")
         }
-        var emb = languageModel.model.emb(input.text.tokens)
+        let imageMask = MLX.equal(input.text.tokens, MLXArray(Int32(config.imageTokenId)))
+        let audioMask = MLX.equal(input.text.tokens, MLXArray(Int32(config.audioTokenId)))
+        let multimodalMask = MLX.logicalOr(imageMask, audioMask)
+        let llmTokens = MLX.where(
+            multimodalMask,
+            MLXArray(Int32(config.textConfig.padTokenId)),
+            input.text.tokens)
+        var emb = languageModel.model.emb(llmTokens)
         emb = emb * MLXArray(sqrt(Float(config.textConfig.hiddenSize)), dtype: emb.dtype)
 
         if let pixels = input.image?.pixels {
@@ -1115,8 +1125,7 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
             }
             let imgFeatures = (B == 1 ? featuresList[0] : concatenated(featuresList)).asType(emb.dtype)
 
-            let imgMask = MLX.equal(input.text.tokens, MLXArray(Int32(config.imageTokenId)))
-            let imgMaskExp = MLX.broadcast(expandedDimensions(imgMask, axis: -1), to: emb.shape)
+            let imgMaskExp = MLX.broadcast(expandedDimensions(imageMask, axis: -1), to: emb.shape)
             emb = try maskedScatter(input: emb, mask: imgMaskExp, source: imgFeatures)
         }
 
@@ -1131,13 +1140,12 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
                     "Gemma4 audio feature width mismatch: expected \(config.audioEmbedDim), got \(audioFeatures.dim(-1)).")
             }
             let projectedAudio = embedAudio(audioFeatures).asType(emb.dtype)
-            let audioMask = MLX.equal(input.text.tokens, MLXArray(Int32(config.audioTokenId)))
             let audioMaskExp = MLX.broadcast(expandedDimensions(audioMask, axis: -1), to: emb.shape)
             emb = try maskedScatter(input: emb, mask: audioMaskExp, source: projectedAudio)
         }
 
         let paddedCache = padCache(cache)
-        let out = languageModel(input.text.tokens, inputEmbedding: emb, cache: paddedCache)
+        let out = languageModel(llmTokens, inputEmbedding: emb, cache: paddedCache)
         return .logits(.init(logits: out))
     }
 
