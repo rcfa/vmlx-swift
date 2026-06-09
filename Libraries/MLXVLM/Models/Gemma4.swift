@@ -941,14 +941,29 @@ private class TextModel: Module {
         let layerCount = layers.count
         guard layerCount > 0 else { return [] }
         let width = cfg.hiddenSizePerLayerInput
-        let boundaries = layerCount > 1 ? (1 ..< layerCount).map { $0 * width } : []
-        let splitAxis = perLayerInputs.ndim - 1
-        let splitInputs = perLayerInputs.split(indices: boundaries, axis: splitAxis).map { $0 as MLXArray? }
-        if splitInputs.count == layerCount {
-            return splitInputs
+        precondition(width > 0, "Gemma4 per-layer input width must be positive")
+        precondition(
+            perLayerInputs.dim(-1) == layerCount * width,
+            "Gemma4 per-layer input width \(perLayerInputs.dim(-1)) does not match \(layerCount) * \(width)")
+
+        var splitInputs: [MLXArray?] = []
+        splitInputs.reserveCapacity(layerCount)
+        for layerIndex in 0 ..< layerCount {
+            let start = layerIndex * width
+            let end = start + width
+            switch perLayerInputs.ndim {
+            case 1:
+                splitInputs.append(perLayerInputs[start ..< end])
+            case 2:
+                splitInputs.append(perLayerInputs[0..., start ..< end])
+            case 3:
+                splitInputs.append(perLayerInputs[0..., 0..., start ..< end])
+            default:
+                preconditionFailure(
+                    "Gemma4 per-layer input split requires 1D, 2D, or 3D tensor, got \(perLayerInputs.ndim)D")
+            }
         }
-        preconditionFailure(
-            "Gemma4 per-layer input split produced \(splitInputs.count) chunks for \(layerCount) layers")
+        return splitInputs
     }
 
     func callAsFunction(_ inputs: MLXArray?, inputEmbedding: MLXArray? = nil, cache: [KVCache?]? = nil) -> MLXArray {
