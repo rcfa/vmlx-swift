@@ -258,6 +258,8 @@ private func maskedScatter(input: MLXArray, mask: MLXArray, source: MLXArray) ->
 
     #expect(config.modelType == "gemma4_unified")
     #expect(config.imageTokenId == 258880)
+    #expect(config.audioTokenId == 258881)
+    #expect(config.audioEmbedDim == 640)
     #expect(config.visionSoftTokensPerImage == 280)
     #expect(config.textConfig.numHiddenLayers == 48)
     #expect(config.textConfig.enableMoeBlock == false)
@@ -274,6 +276,43 @@ private func maskedScatter(input: MLXArray, mask: MLXArray, source: MLXArray) ->
     #expect(config.visionConfig.modelPatchSize == 48)
     #expect(config.visionConfig.positionEmbeddingSize == 1120)
     #expect(config.visionConfig.defaultOutputLength == 280)
+}
+
+@Test func gemma4Unified12BAudioConfigDecode() throws {
+    let data = Data(#"""
+    {
+      "model_type": "gemma4_unified",
+      "image_token_id": 258880,
+      "audio_token_id": 258881,
+      "audio_config": {
+        "model_type": "gemma4_unified_audio",
+        "audio_embed_dim": 640,
+        "hidden_size": 640,
+        "output_proj_dims": 640
+      },
+      "text_config": {
+        "model_type": "gemma4_unified_text",
+        "hidden_size": 3840,
+        "num_hidden_layers": 48,
+        "num_attention_heads": 16,
+        "num_key_value_heads": 8,
+        "num_global_key_value_heads": 1,
+        "head_dim": 256,
+        "global_head_dim": 512,
+        "intermediate_size": 15360,
+        "vocab_size": 262144
+      },
+      "vision_config": {
+        "model_type": "gemma4_unified_vision",
+        "output_proj_dims": 3840
+      }
+    }
+    """#.utf8)
+
+    let config = try JSONDecoder().decode(Gemma4Configuration.self, from: data)
+
+    #expect(config.audioTokenId == 258881)
+    #expect(config.audioEmbedDim == 640)
 }
 
 @Test func gemma4UnifiedProcessorConfigDecode() throws {
@@ -305,6 +344,22 @@ private func maskedScatter(input: MLXArray, mask: MLXArray, source: MLXArray) ->
     #expect(config.maxSoftTokens == 280)
     #expect(config.imageSeqLength == 280)
     #expect(config.audioSeqLength == 750)
+}
+
+@Test func gemma4ProcessorExpandsPreEncodedAudioSoftTokens() throws {
+    let source = try String(
+        contentsOfFile: "Libraries/MLXVLM/Models/Gemma4.swift",
+        encoding: .utf8)
+
+    #expect(source.contains("case .preEncoded(let samples, let sr, let embedding):"))
+    #expect(source.contains("tokenCounts.append(embedding.dim(-2))"))
+    #expect(source.contains("let audioId = tokenizer.convertTokenToId(\"<|audio|>\") ?? 258881"))
+    #expect(source.contains("let beginAudioId = tokenizer.convertTokenToId(\"<|audio>\")"))
+    #expect(source.contains("let endAudioId = tokenizer.convertTokenToId(\"<audio|>\")"))
+    #expect(source.contains("exp.append(contentsOf: Array(repeating: audioId, count: tokenCount))"))
+    #expect(source.contains("audio: processedAudio"))
+    #expect(source.contains("preEncodedEmbedding: embedding"))
+    #expect(source.contains("Gemma4 raw audio feature extraction is not implemented"))
 }
 
 @Test func imageSeqLengthMatchesVisionOutput() throws {

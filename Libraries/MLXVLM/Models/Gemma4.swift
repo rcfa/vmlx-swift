@@ -296,6 +296,8 @@ public struct Gemma4Configuration: Codable, Sendable {
     let visionConfig: Gemma4VisionConfig
     let modelType: String
     let imageTokenId: Int
+    let audioTokenId: Int
+    let audioEmbedDim: Int
     let visionSoftTokensPerImage: Int
     let quantization: BaseConfiguration.Quantization?
 
@@ -304,16 +306,44 @@ public struct Gemma4Configuration: Codable, Sendable {
         case visionConfig = "vision_config"
         case modelType = "model_type"
         case imageTokenId = "image_token_id"
+        case audioTokenId = "audio_token_id"
         case visionSoftTokensPerImage = "vision_soft_tokens_per_image"
         case quantization
     }
 
+    enum DecodingKeys: String, CodingKey {
+        case textConfig = "text_config"
+        case visionConfig = "vision_config"
+        case audioConfig = "audio_config"
+        case modelType = "model_type"
+        case imageTokenId = "image_token_id"
+        case audioTokenId = "audio_token_id"
+        case visionSoftTokensPerImage = "vision_soft_tokens_per_image"
+        case quantization
+    }
+
+    enum AudioCodingKeys: String, CodingKey {
+        case audioEmbedDim = "audio_embed_dim"
+        case hiddenSize = "hidden_size"
+        case outputProjDims = "output_proj_dims"
+    }
+
     public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let c = try decoder.container(keyedBy: DecodingKeys.self)
         textConfig = try c.decode(G4TextConfig.self, forKey: .textConfig)
         visionConfig = try c.decode(Gemma4VisionConfig.self, forKey: .visionConfig)
         modelType = try c.decodeIfPresent(String.self, forKey: .modelType) ?? "gemma4"
         imageTokenId = try c.decodeIfPresent(Int.self, forKey: .imageTokenId) ?? 258880
+        audioTokenId = try c.decodeIfPresent(Int.self, forKey: .audioTokenId) ?? 258881
+        if let audioConfig = try? c.nestedContainer(keyedBy: AudioCodingKeys.self, forKey: .audioConfig) {
+            audioEmbedDim =
+                try audioConfig.decodeIfPresent(Int.self, forKey: .audioEmbedDim)
+                ?? audioConfig.decodeIfPresent(Int.self, forKey: .hiddenSize)
+                ?? audioConfig.decodeIfPresent(Int.self, forKey: .outputProjDims)
+                ?? 640
+        } else {
+            audioEmbedDim = 640
+        }
         visionSoftTokensPerImage =
             try c.decodeIfPresent(Int.self, forKey: .visionSoftTokensPerImage)
             ?? visionConfig.defaultOutputLength
@@ -1005,6 +1035,7 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
     @ModuleInfo(key: "vision_embedder") private var unifiedVisionEmbedder: UnifiedVisionEmbedder?
     @ModuleInfo(key: "language_model") private var languageModel: G4LanguageModel
     @ModuleInfo(key: "embed_vision") private var embedVision: MultimodalEmbedder
+    @ModuleInfo(key: "embed_audio") private var embedAudio: MultimodalEmbedder
 
     public let config: Gemma4Configuration
     public var vocabularySize: Int { config.textConfig.vocabSize }
@@ -1027,15 +1058,16 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
         }
         _languageModel.wrappedValue = G4LanguageModel(config.textConfig)
         _embedVision.wrappedValue = MultimodalEmbedder(embDim: config.visionConfig.outputProjectionDimensions, textDim: config.textConfig.hiddenSize)
+        _embedAudio.wrappedValue = MultimodalEmbedder(embDim: config.audioEmbedDim, textDim: config.textConfig.hiddenSize)
     }
 
     public func prepare(_ input: LMInput, cache: [any KVCache], windowSize: Int?) throws -> PrepareResult {
-        // Audio/video preprocessing is not implemented for the 2026 Gemma4
-        // unified release. Do not silently generate over missing embeddings.
-        if input.audio != nil || input.video != nil {
+        // Video preprocessing is not implemented for the 2026 Gemma4 unified
+        // release. Do not silently generate over missing embeddings.
+        if input.video != nil {
             throw VLMError.processing(
-                "Gemma4 VLM does not implement audio/video inputs; LMInput.audio and LMInput.video must be nil. " +
-                "Audio/video-bearing Gemma4 bundles have no proven vMLX audio/video tower path yet.")
+                "Gemma4 VLM does not implement video inputs; LMInput.video must be nil. " +
+                "Video-bearing Gemma4 bundles have no proven vMLX video path yet.")
         }
         var emb = languageModel.model.emb(input.text.tokens)
         emb = emb * MLXArray(sqrt(Float(config.textConfig.hiddenSize)), dtype: emb.dtype)
@@ -1073,6 +1105,22 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
             emb = try maskedScatter(input: emb, mask: imgMaskExp, source: imgFeatures)
         }
 
+        if let audio = input.audio {
+            guard let audioFeatures = audio.preEncodedEmbedding else {
+                throw VLMError.processing(
+                    "Gemma4 audio requires pre-encoded 640-dim audio features. " +
+                    "Raw waveform feature extraction is not implemented for Gemma4 yet.")
+            }
+            guard audioFeatures.dim(-1) == config.audioEmbedDim else {
+                throw VLMError.processing(
+                    "Gemma4 audio feature width mismatch: expected \(config.audioEmbedDim), got \(audioFeatures.dim(-1)).")
+            }
+            let projectedAudio = embedAudio(audioFeatures).asType(emb.dtype)
+            let audioMask = MLX.equal(input.text.tokens, MLXArray(Int32(config.audioTokenId)))
+            let audioMaskExp = MLX.broadcast(expandedDimensions(audioMask, axis: -1), to: emb.shape)
+            emb = try maskedScatter(input: emb, mask: audioMaskExp, source: projectedAudio)
+        }
+
         let paddedCache = padCache(cache)
         let out = languageModel(input.text.tokens, inputEmbedding: emb, cache: paddedCache)
         return .logits(.init(logits: out))
@@ -1094,8 +1142,10 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
         for (k, v) in weights {
             var nk = k
             if nk.hasPrefix("model.") { nk = String(nk.dropFirst("model.".count)) }
-            // Skip audio — Gemma4 VLM doesn't implement audio, these weights have no module
-            if nk.hasPrefix("audio_tower.") || nk.hasPrefix("embed_audio.") { continue }
+            // 12B unified Gemma4 has no audio tower, but does ship
+            // `embed_audio.embedding_projection` for early-fusion 640-dim
+            // features. Keep the embedder and reject only unsupported tower keys.
+            if nk.hasPrefix("audio_tower.") { continue }
             if nk.hasPrefix("vision_tower.") && config.visionConfig.usesUnifiedVisionEmbedder { continue }
             if nk.hasPrefix("vision_embedder.") && !config.visionConfig.usesUnifiedVisionEmbedder { continue }
             // Skip clipped linear params — training artifacts, not used in inference (we use plain Linear)
@@ -1184,9 +1234,9 @@ public struct Gemma4Processor: UserInputProcessor {
     }
 
     public func prepare(input: UserInput) async throws -> LMInput {
-        if !input.videos.isEmpty || !input.audios.isEmpty {
+        if !input.videos.isEmpty {
             throw VLMError.processing(
-                "Gemma4 processor currently supports image inputs only; audio/video lanes are explicit unsupported until implemented and proven.")
+                "Gemma4 processor currently supports image/audio inputs only; video is explicit unsupported until implemented and proven.")
         }
         var messages = Gemma4MessageGenerator().generate(from: input)
         if Self.requiresToolChoice(input.additionalContext) {
@@ -1276,12 +1326,74 @@ public struct Gemma4Processor: UserInputProcessor {
             tokens = exp
         }
 
+        var processedAudio: LMInput.ProcessedAudio?
+        if !input.audios.isEmpty {
+            let prepared = try Self.preEncodedAudio(from: input.audios)
+            processedAudio = prepared.audio
+
+            let audioId = tokenizer.convertTokenToId("<|audio|>") ?? 258881
+            let beginAudioId = tokenizer.convertTokenToId("<|audio>")
+            let endAudioId = tokenizer.convertTokenToId("<audio|>")
+            var audioTokenIterator = prepared.tokenCounts.makeIterator()
+            var exp = [Int]()
+            for t in tokens {
+                if t == audioId {
+                    let tokenCount = audioTokenIterator.next() ?? config.audioSeqLength
+                    if let beginAudioId { exp.append(beginAudioId) }
+                    exp.append(contentsOf: Array(repeating: audioId, count: tokenCount))
+                    if let endAudioId { exp.append(endAudioId) }
+                } else {
+                    exp.append(t)
+                }
+            }
+            tokens = exp
+        }
+
         let pa = MLXArray(tokens).expandedDimensions(axis: 0)
         return LMInput(
             text: .init(tokens: pa, mask: ones(like: pa).asType(.int8), tokenIds: tokens),
             image: processedImage,
+            audio: processedAudio,
             cacheScopeSalt: cacheScopeSalt(from: input.additionalContext),
             toolSchemas: input.tools)
+    }
+
+    private static func preEncodedAudio(
+        from audios: [UserInput.Audio]
+    ) throws -> (audio: LMInput.ProcessedAudio, tokenCounts: [Int]) {
+        var embeddings = [MLXArray]()
+        var tokenCounts = [Int]()
+        var waveforms = [MLXArray]()
+        var sampleRate = 16_000
+
+        for audio in audios {
+            switch audio {
+            case .preEncoded(let samples, let sr, let embedding):
+                guard embedding.ndim >= 2 else {
+                    throw VLMError.processing(
+                        "Gemma4 pre-encoded audio embedding must have shape [tokens, 640] or [batch, tokens, 640].")
+                }
+                embeddings.append(embedding)
+                tokenCounts.append(embedding.dim(-2))
+                waveforms.append(MLXArray(samples).reshaped(1, samples.count))
+                sampleRate = sr
+            case .url, .samples, .array:
+                throw VLMError.processing(
+                    "Gemma4 raw audio feature extraction is not implemented. " +
+                    "Provide UserInput.Audio.preEncoded with 640-dim Gemma4 audio features.")
+            }
+        }
+
+        let embedding =
+            embeddings.count == 1 ? embeddings[0] : concatenated(embeddings, axis: embeddings[0].ndim == 2 ? 0 : 1)
+        let waveform =
+            waveforms.count == 1 ? waveforms[0] : concatenated(waveforms, axis: 1)
+        return (
+            LMInput.ProcessedAudio(
+                waveform: waveform, sampleRate: sampleRate,
+                preEncodedEmbedding: embedding),
+            tokenCounts
+        )
     }
 
     private static func requiresToolChoice(_ context: [String: any Sendable]?) -> Bool {

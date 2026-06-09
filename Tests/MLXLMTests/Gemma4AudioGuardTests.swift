@@ -1,15 +1,13 @@
-// Pin Gemma4 audio-input guard + image-token-id resolution contracts via
+// Pin Gemma4 audio-input contract + image-token-id resolution contracts via
 // source-coverage tests (no MLX runtime required).
 //
 // Background (see `docs/GEMMA4-DEEP-TRACE-2026-05-10.md` §7.4 + §7.5):
 //
-// §7.5 Audio guard. `Gemma4.sanitize` drops `audio_tower.*` and
-// `embed_audio.*` weights silently and there's no audio module wired
-// in `init`, so a caller passing `LMInput.audio` to `Gemma4.prepare`
-// would have its waveform silently ignored. The audio guard at the
-// top of `Gemma4.prepare` surfaces this as a clean
-// `VLMError.processing` so the call site sees the failure
-// immediately. This test pins the guard's presence + message contract.
+// §7.5 Audio contract. Gemma4 unified 12B ships
+// `embed_audio.embedding_projection` for pre-encoded 640-dim early-fusion
+// audio features, but not a raw audio feature extractor or audio tower.
+// `Gemma4.prepare` must project pre-encoded audio and typed-refuse raw audio
+// instead of silently dropping the lane.
 //
 // §7.4 Image-token-id resolution. The processor used to call
 // `tokenizer.encode("<|image|>").last ?? 258880` — fragile because
@@ -29,7 +27,7 @@
 import Foundation
 import Testing
 
-@Suite("Gemma4 audio guard + image-token-id resolution source coverage")
+@Suite("Gemma4 audio contract + image-token-id resolution source coverage")
 struct Gemma4AudioGuardTests {
 
     /// Resolves the absolute path of `Libraries/MLXVLM/Models/Gemma4.swift`
@@ -47,33 +45,30 @@ struct Gemma4AudioGuardTests {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
-    /// Pins the audio/video guard at the top of `Gemma4.prepare`.
-    /// The guard MUST throw a `VLMError.processing` that mentions
-    /// `LMInput.audio`/`LMInput.video` (so the caller can grep for the failure cause)
-    /// and explains why audio/video is rejected (so they don't loop on
-    /// retry).
-    @Test("Gemma4.prepare contains the LMInput audio/video guard")
-    func audioGuardIsPresent() throws {
+    /// Pins the audio/video contract at the top of `Gemma4.prepare`.
+    @Test("Gemma4.prepare supports pre-encoded audio and typed-refuses unsupported media")
+    func audioProjectionContractIsPresent() throws {
         let source = try Self.gemma4Source()
 
-        // The guard fires before any forward op.
-        #expect(source.contains("if input.audio != nil || input.video != nil {"),
-            "Gemma4.prepare must check `input.audio` and `input.video` before proceeding.")
+        #expect(source.contains("if input.video != nil {"),
+            "Gemma4.prepare must reject unsupported video before proceeding.")
+        #expect(!source.contains("if input.audio != nil || input.video != nil {"),
+            "Gemma4.prepare must not reject the pre-encoded audio lane.")
 
-        // The throw is a VLMError.processing for graceful caller handling.
         #expect(source.contains("throw VLMError.processing("),
-            "Audio/video guard must surface as VLMError.processing, not fatalError or silent fallthrough.")
-
-        // The error message names the fields that are rejected so the
-        // caller sees a specific diagnostic.
-        #expect(source.contains("LMInput.audio and LMInput.video must be nil"),
-            "Audio/video guard message must name `LMInput.audio` and `LMInput.video` so the call site sees what to fix.")
-
-        // The message explains WHY (the audio/video lanes are not proven)
-        // so the caller doesn't loop on retry.
-        #expect(
-            source.contains("Audio/video-bearing Gemma4 bundles have no proven vMLX audio/video tower path yet"),
-            "Audio/video guard rationale should state that the lane is not implemented/proven.")
+            "Unsupported media must surface as VLMError.processing, not fatalError or silent fallthrough.")
+        #expect(source.contains("@ModuleInfo(key: \"embed_audio\") private var embedAudio"),
+            "Gemma4 must keep the 12B unified audio projection module.")
+        #expect(source.contains("if nk.hasPrefix(\"audio_tower.\") { continue }"),
+            "Gemma4 should reject unsupported audio tower weights.")
+        #expect(!source.contains("nk.hasPrefix(\"embed_audio.\")"),
+            "Gemma4 must not drop the 12B unified embed_audio projection weights.")
+        #expect(source.contains("audioFeatures.dim(-1) == config.audioEmbedDim"),
+            "Gemma4 must validate pre-encoded audio feature width before projection.")
+        #expect(source.contains("let projectedAudio = embedAudio(audioFeatures).asType(emb.dtype)"),
+            "Gemma4 must project pre-encoded audio into the text embedding dimension.")
+        #expect(source.contains("Gemma4 raw audio feature extraction is not implemented"),
+            "Raw audio must fail with a clear typed unsupported message.")
     }
 
     /// Pins the image-token-id resolution path in `Gemma4Processor.prepare`.

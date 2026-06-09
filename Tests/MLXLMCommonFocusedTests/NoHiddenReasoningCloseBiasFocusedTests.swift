@@ -1737,17 +1737,22 @@ struct Gemma4VLMFocusedSourceContractsTests {
         #expect(overload.contains("addGenerationPrompt: addGenerationPrompt"))
     }
 
-    @Test("Gemma4 prepare rejects audio/video but allows unified image path")
-    func audioGuardIsPresent() throws {
+    @Test("Gemma4 prepare supports pre-encoded audio and rejects unsupported video/raw audio")
+    func audioProjectionContractIsPresent() throws {
         let source = try gemma4VLMSource()
 
-        #expect(source.contains("if input.audio != nil || input.video != nil {"))
+        #expect(source.contains("if input.video != nil {"))
         #expect(source.contains("throw VLMError.processing("))
-        #expect(source.contains("LMInput.audio and LMInput.video must be nil"))
-        #expect(source.contains("audio/video inputs"))
+        #expect(source.contains("Gemma4 VLM does not implement video inputs"))
+        #expect(source.contains("@ModuleInfo(key: \"embed_audio\") private var embedAudio"))
+        #expect(source.contains("audioFeatures.dim(-1) == config.audioEmbedDim"))
+        #expect(source.contains("let projectedAudio = embedAudio(audioFeatures).asType(emb.dtype)"))
+        #expect(source.contains("MLX.equal(input.text.tokens, MLXArray(Int32(config.audioTokenId)))"))
+        #expect(source.contains("Gemma4 raw audio feature extraction is not implemented"))
         #expect(!source.contains("Gemma4 unified image inputs are not production-supported yet"))
         #expect(!source.contains("Use text-only for this bundle until the unified media encoder is implemented and proven."))
         #expect(source.contains("featuresList.append(embedVision(unifiedVisionEmbedder(singleImage)))"))
+        #expect(!source.contains("nk.hasPrefix(\"embed_audio.\") { continue }"))
     }
 
     @Test("Gemma4 multimodal projection normalizes before projection")
