@@ -377,6 +377,13 @@ public func reDeriveAndStoreSSMStatesForPromptBoundaries(
     mediaSalt: String? = nil,
     prefillStepSize: Int = 512
 ) -> [MLXArray]? {
+    func trace(_ message: String) {
+        guard ProcessInfo.processInfo.environment["VMLINUX_SSM_REDERIVE_TRACE"] == "1"
+            || ProcessInfo.processInfo.environment["VMLX_SSM_REDERIVE_TRACE"] == "1"
+        else { return }
+        FileHandle.standardError.write(
+            Data("[vmlx][cache/ssm-rederive] prompt-boundaries/\(message) hybrid=\(coordinator.isHybrid) promptLen=\(promptTokenIds.count)\n".utf8))
+    }
     guard coordinator.isHybrid, !promptTokenIds.isEmpty else { return nil }
 
     var boundaries = Set<Int>()
@@ -400,6 +407,7 @@ public func reDeriveAndStoreSSMStatesForPromptBoundaries(
             tokens: promptTokenIds,
             boundaries: Array(boundaries).sorted(),
             prefillStepSize: prefillStepSize)
+        trace("statesByBoundary=\(statesByBoundary.keys.sorted())")
 
         for boundary in boundaries.sorted() {
             guard let states = statesByBoundary[boundary], !states.isEmpty else {

@@ -75,7 +75,11 @@ public func scatterUnsort(x: MLXArray, invOrder: MLXArray, shape: [Int]? = nil) 
 
 // MARK: - SwitchGLU
 
-public class SwitchGLU: Module {
+public protocol SwitchGLULayer: Module {
+    func callAsFunction(_ x: MLXArray, _ indices: MLXArray) -> MLXArray
+}
+
+public class SwitchGLU: Module, SwitchGLULayer {
     @ModuleInfo(key: "gate_proj") var gateProj: SwitchLinear
     @ModuleInfo(key: "up_proj") var upProj: SwitchLinear
     @ModuleInfo(key: "down_proj") var downProj: SwitchLinear

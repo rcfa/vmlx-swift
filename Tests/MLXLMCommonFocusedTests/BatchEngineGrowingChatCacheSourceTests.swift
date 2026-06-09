@@ -28,6 +28,9 @@ struct BatchEngineGrowingChatCacheSourceTests {
         #expect(source.contains("slot.originalInput.cacheHitSuffixContainsMediaPlaceholder(remaining)"))
         #expect(source.contains("let requiresDiskBackedRestore ="))
         #expect(source.contains("cacheRequiresDiskBackedCoordinatorRestore(slot.cache)"))
+        #expect(!source.contains("!requiresDiskBackedRestore &&\n                        !slot.originalInput.hasMediaContent"))
+        #expect(source.contains("return reDeriveAndStoreSSMStatesForPromptBoundaries("))
+        #expect(source.contains("?? exactBoundarySSMStatesFromSnapshotIfSufficient("))
         #expect(source.contains("let unsafeFullHit = remaining.isEmpty && requiresDiskBackedRestore"))
         #expect(source.contains("let seedBoundary = promptLen - 1"))
         #expect(source.contains("restoreSSMStates(seedSSM, into: slot.cache)"))
@@ -57,6 +60,9 @@ struct BatchEngineGrowingChatCacheSourceTests {
         #expect(source.contains("let requiresDiskBackedRestore ="))
         #expect(source.contains("cacheRequiresDiskBackedCoordinatorRestore(self.cache)"))
         #expect(source.contains("let unsafeFullHit = remainingTokens.isEmpty && requiresDiskBackedRestore"))
+        #expect(!source.contains("!requiresDiskBackedRestore,\n                    !originalInput.hasMediaContent"))
+        #expect(source.contains("return reDeriveAndStoreSSMStatesForPromptBoundaries("))
+        #expect(source.contains("?? exactBoundarySSMStatesFromSnapshotIfSufficient("))
         #expect(source.contains("let seedBoundary = promptLen - 1"))
         #expect(source.contains("restoreSSMStates(seedSSM, into: self.cache)"))
         #expect(source.contains("boundary: seedBoundary"))
@@ -76,6 +82,9 @@ struct BatchEngineGrowingChatCacheSourceTests {
 
         #expect(source.contains("shouldSkipHistoryBoundaryRederiveAfterTrimMiss(promptSnapshot)"))
         #expect(source.contains("return nil"))
+        #expect(!source.contains("!requiresDiskBackedRestore,\n                        !originalInput.hasMediaContent"))
+        #expect(source.contains("return reDeriveAndStoreSSMStatesForPromptBoundaries("))
+        #expect(source.contains("?? exactBoundarySSMStatesFromSnapshotIfSufficient("))
     }
 
     @Test("token iterator drains MLX around cache store before completion info")

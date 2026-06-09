@@ -570,8 +570,6 @@ public final class VLMModelFactory: ModelFactory {
                 configurationURL.lastPathComponent, configuration.name, error)
         }
 
-        // Load EOS token IDs from config.json, with optional override from generation_config.json
-        var eosTokenIds = Set(baseConfig.eosTokenIds?.values ?? [])
         let generationConfigURL = modelDirectory.appending(component: "generation_config.json")
         let generationConfig =
             if let generationData = try? Data(contentsOf: generationConfigURL) {
@@ -579,9 +577,12 @@ public final class VLMModelFactory: ModelFactory {
             } else {
                 nil as GenerationConfigFile?
             }
-        if let genEosIds = generationConfig?.eosTokenIds?.values {
-            eosTokenIds = Set(genEosIds)  // Override per Python mlx-lm behavior
-        }
+        // Load EOS token IDs from config.json, nested text_config, with optional
+        // override from generation_config.json.
+        var eosTokenIds = ModelTokenConfigurationResolver.resolvedEOSTokenIds(
+            baseConfig: baseConfig,
+            configurationData: mergedConfigData,
+            generationConfig: generationConfig)
         if baseConfig.modelType == "deepseek_v4" {
             eosTokenIds.formUnion([1, 128803, 128804])
         }

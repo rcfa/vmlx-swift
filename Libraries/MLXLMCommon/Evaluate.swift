@@ -1847,20 +1847,19 @@ public struct TokenIterator: TokenIteratorProtocol {
             let ssmCapture: [MLXArray]? = {
                 guard coordinator.isHybrid else { return nil }
                 guard coordinator.config.enableSSMReDerive,
-                    !requiresDiskBackedRestore,
                     !originalInput.hasMediaContent
                 else {
                     return extractSSMStates(from: snapshot)
                 }
-                return exactBoundarySSMStatesFromSnapshotIfSufficient(
+                return reDeriveAndStoreSSMStatesForPromptBoundaries(
                     coordinator: coordinator,
-                    snapshot: snapshot,
-                    tokenCount: tokens.count)
-                    ?? reDeriveAndStoreSSMStatesForPromptBoundaries(
+                    model: model,
+                    promptTokenIds: tokens,
+                    mediaSalt: mediaSalt)
+                    ?? exactBoundarySSMStatesFromSnapshotIfSufficient(
                         coordinator: coordinator,
-                        model: model,
-                        promptTokenIds: tokens,
-                        mediaSalt: mediaSalt)
+                        snapshot: snapshot,
+                        tokenCount: tokens.count)
             }()
             let diskStoreCache = makeDiskStoreCache(
                 fromPromptBoundary: snapshot,

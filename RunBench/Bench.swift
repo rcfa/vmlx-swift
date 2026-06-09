@@ -3999,10 +3999,13 @@ func runConfigSmoke(modelPath: String) async throws {
     let attnListCount = (config["attn_type_list"] as? [Any])?.count
 
     let configEOS = jsonInts(config["eos_token_id"])
+    let textConfigEOS = jsonInts(jsonAt(config, ["text_config", "eos_token_id"]))
     let generationEOS = jsonInts(generationConfig?["eos_token_id"])
     let configBOS = jsonInts(config["bos_token_id"])
     let generationBOS = jsonInts(generationConfig?["bos_token_id"])
-    var effectiveEOS = generationEOS.isEmpty ? configEOS : generationEOS
+    var effectiveEOS = generationEOS.isEmpty
+        ? (configEOS.isEmpty ? textConfigEOS : configEOS)
+        : generationEOS
     if modelType == "deepseek_v4" {
         effectiveEOS = Array(Set(effectiveEOS).union([1, 128803, 128804])).sorted()
     }
@@ -4072,7 +4075,7 @@ func runConfigSmoke(modelPath: String) async throws {
     }
 
     print(
-        "CONFIG_SMOKE status=\(failures.isEmpty ? "PASS" : "FAIL") modelType=\(modelType) dispatch=\(dispatchHint) layers=\(layers.map(String.init) ?? "nil") hidden=\(hidden.map(String.init) ?? "nil") heads=\(heads.map(String.init) ?? "nil") kvHeads=\(kvHeads.map(String.init) ?? "nil") attnList=\(attnListCount.map(String.init) ?? "nil") weightFormat=\(weightFormat) profile=\(profile) sidecar=\(sidecarExists) tqPacked=\(tqPackedCount) tqNorms=\(tqNormsCount) tqBits=\(tqBitsCount) routedBits=\(routed.description) eosConfig=\(configEOS) eosGen=\(generationEOS) eosEffective=\(effectiveEOS) tokenizerEOS=\(tokenizerEOS.map(String.init) ?? "nil") tokenizerEOSCovered=\(tokenizerEOSCovered) bosConfig=\(configBOS) bosGen=\(generationBOS) bosEffective=\(effectiveBOS) tokenizerBOS=\(tokenizerBOS.map(String.init) ?? "nil") tokenizerBOSCovered=\(tokenizerBOSCovered) bosInEOS=\(bosInEOS)"
+        "CONFIG_SMOKE status=\(failures.isEmpty ? "PASS" : "FAIL") modelType=\(modelType) dispatch=\(dispatchHint) layers=\(layers.map(String.init) ?? "nil") hidden=\(hidden.map(String.init) ?? "nil") heads=\(heads.map(String.init) ?? "nil") kvHeads=\(kvHeads.map(String.init) ?? "nil") attnList=\(attnListCount.map(String.init) ?? "nil") weightFormat=\(weightFormat) profile=\(profile) sidecar=\(sidecarExists) tqPacked=\(tqPackedCount) tqNorms=\(tqNormsCount) tqBits=\(tqBitsCount) routedBits=\(routed.description) eosConfig=\(configEOS) eosTextConfig=\(textConfigEOS) eosGen=\(generationEOS) eosEffective=\(effectiveEOS) tokenizerEOS=\(tokenizerEOS.map(String.init) ?? "nil") tokenizerEOSCovered=\(tokenizerEOSCovered) bosConfig=\(configBOS) bosGen=\(generationBOS) bosEffective=\(effectiveBOS) tokenizerBOS=\(tokenizerBOS.map(String.init) ?? "nil") tokenizerBOSCovered=\(tokenizerBOSCovered) bosInEOS=\(bosInEOS)"
     )
     if !warnings.isEmpty {
         print("CONFIG_SMOKE warnings=\(warnings)")

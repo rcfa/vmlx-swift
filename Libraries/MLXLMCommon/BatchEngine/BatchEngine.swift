@@ -2275,19 +2275,18 @@ public actor BatchEngine {
                 let ssmStates: [MLXArray]? = {
                     guard coordinator.isHybrid else { return nil }
                     if coordinator.config.enableSSMReDerive &&
-                        !requiresDiskBackedRestore &&
                         !slot.originalInput.hasMediaContent
                     {
-                        return exactBoundarySSMStatesFromSnapshotIfSufficient(
+                        return reDeriveAndStoreSSMStatesForPromptBoundaries(
                             coordinator: coordinator,
-                            snapshot: snapshot,
-                            tokenCount: tokens.count)
-                            ?? reDeriveAndStoreSSMStatesForPromptBoundaries(
+                            model: context.model,
+                            promptTokenIds: tokens,
+                            mediaSalt: slot.mediaSalt,
+                            prefillStepSize: slot.parameters.prefillStepSize)
+                            ?? exactBoundarySSMStatesFromSnapshotIfSufficient(
                                 coordinator: coordinator,
-                                model: context.model,
-                                promptTokenIds: tokens,
-                                mediaSalt: slot.mediaSalt,
-                                prefillStepSize: slot.parameters.prefillStepSize)
+                                snapshot: snapshot,
+                                tokenCount: tokens.count)
                     }
                     return extractSSMStates(from: snapshot)
                 }()

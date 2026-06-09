@@ -343,12 +343,17 @@ public func loadWeights(
         // bits=4)`) and would re-introduce the wrong values.
         let hiddenHint = readHiddenSizeHint(at: modelDirectory)
         let linearAttnValueDimHint = readLinearAttnValueDimHint(at: modelDirectory)
+        let expertIntermediateSizeHint = readExpertIntermediateSizeHint(at: modelDirectory)
         let validInDims = readValidInDims(at: modelDirectory)
+        let attentionOutputDimHints = readAttentionOutputDimHintsForJANGQuantization(
+            at: modelDirectory)
         let inferred = JangLoader.inferPerLayerQuantization(
             weights: weights, jangConfig: jangConfig,
             hiddenSizeHint: hiddenHint,
             linearAttnValueDimHint: linearAttnValueDimHint,
+            expertIntermediateSizeHint: expertIntermediateSizeHint,
             validInDims: validInDims,
+            attentionOutputDimHints: attentionOutputDimHints,
             declaredDefaultQuantization: declaredAffineQuantization ?? quantization,
             declaredPerLayerQuantization: perLayerQuantization)
 
@@ -668,15 +673,13 @@ public func loadWeights(
     // For non-mmap JANGTQ loads, still convert non-TQ Mamba/attention/router
     // weights so resident decode avoids preventable fp16 AsType cascades. For
     // mmap/JangPress loads, default to preserving file-backed tensor residency
-    // unless the bundle is Nemotron-H: Ultra live rows show converting only
-    // non-TQ tensors keeps the low-footprint gate while removing avoidable
-    // decode AsType work. Other native JANGTQ families remain opt-in until
-    // they have their own mmap footprint/speed proof.
+    // unless the bundle has live proof that affine quant metadata must be
+    // materialized to bf16 while raw TurboQuant tensors stay untouched.
     let mmapSafetensorsActive = envFlag("MLX_SAFETENSORS_MMAP")
         || envFlag("VMLINUX_MMAP_SAFETENSORS")
     let allowJANGTQMmapBFloat16 = envFlag("VMLINUX_JANGTQ_BF16_MMAP")
         || envFlag("MLX_JANGTQ_BF16_MMAP")
-    let autoJANGTQMmapBFloat16 = isNemotronHBundle(modelDirectory)
+    let autoJANGTQMmapBFloat16 = requiresJANGTQMmapBFloat16(modelDirectory)
     if !isJANGTQNative || !mmapSafetensorsActive || allowJANGTQMmapBFloat16
         || autoJANGTQMmapBFloat16
     {
@@ -707,16 +710,25 @@ private func isJANGTQParameterKey(_ key: String) -> Bool {
     key.hasSuffix(".tq_packed") || key.hasSuffix(".tq_norms")
 }
 
-private func isNemotronHBundle(_ modelDirectory: URL) -> Bool {
+private func requiresJANGTQMmapBFloat16(_ modelDirectory: URL) -> Bool {
     let configURL = modelDirectory.appendingPathComponent("config.json")
     guard
         let data = try? Data(contentsOf: configURL),
-        let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-        let modelType = object["model_type"] as? String
+        let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     else {
         return false
     }
-    return modelType.lowercased() == "nemotron_h"
+    let config = (object["text_config"] as? [String: Any]) ?? object
+    let modelType = ((config["model_type"] as? String) ?? (object["model_type"] as? String) ?? "")
+        .lowercased()
+    if modelType == "nemotron_h" {
+        return true
+    }
+    guard modelType == "qwen3_5_moe" || modelType == "qwen3_5_moe_text" else {
+        return false
+    }
+    let layerTypes = config["layer_types"] as? [String] ?? []
+    return layerTypes.contains("linear_attention")
 }
 
 private func envFlag(_ key: String) -> Bool {
@@ -850,6 +862,20 @@ private func readLinearAttnValueDimHint(at modelDirectory: URL) -> Int? {
     return valueHeads * valueHeadDim
 }
 
+private func readExpertIntermediateSizeHint(at modelDirectory: URL) -> Int? {
+    let configURL = modelDirectory.appendingPathComponent("config.json")
+    guard let data = try? Data(contentsOf: configURL),
+          let top = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return nil }
+    let config = (top["text_config"] as? [String: Any]) ?? top
+    for key in ["moe_intermediate_size", "expert_intermediate_size", "intermediate_size"] {
+        if let value = config[key] as? Int, value > 0 {
+            return value
+        }
+    }
+    return nil
+}
+
 /// Build architecture-valid input dimensions for JANG bit/group-size
 /// disambiguation. Shape math alone can make (8, 32), (4, 64), and
 /// (2, 128) look equivalent; these dimensions constrain Qwen hybrid SSM,
@@ -878,15 +904,39 @@ private func readValidInDims(at modelDirectory: URL) -> Set<Int> {
     add(config["qk_nope_head_dim"])
     add(config["qk_rope_head_dim"])
 
-    let headDims = [config["head_dim"], config["global_head_dim"]].compactMap { $0 as? Int }
+    let headDims = [
+        config["head_dim"],
+        config["swa_head_dim"],
+        config["global_head_dim"],
+    ].compactMap { $0 as? Int }
     let headCounts = [
         config["num_attention_heads"],
         config["num_key_value_heads"],
+        config["swa_num_attention_heads"],
+        config["swa_num_key_value_heads"],
         config["num_global_key_value_heads"],
     ].compactMap { $0 as? Int }
     for headDim in headDims where headDim > 0 {
         for count in headCounts where count > 0 {
             dims.insert(headDim * count)
+        }
+    }
+
+    let valueHeadDims = [
+        config["v_head_dim"],
+        config["swa_v_head_dim"],
+        config["global_v_head_dim"],
+    ].compactMap { $0 as? Int }
+    let valueHeadCounts = [
+        config["num_attention_heads"],
+        config["num_key_value_heads"],
+        config["swa_num_attention_heads"],
+        config["swa_num_key_value_heads"],
+        config["num_global_key_value_heads"],
+    ].compactMap { $0 as? Int }
+    for valueHeadDim in valueHeadDims where valueHeadDim > 0 {
+        for count in valueHeadCounts where count > 0 {
+            dims.insert(valueHeadDim * count)
         }
     }
 
@@ -921,6 +971,39 @@ private func readValidInDims(at modelDirectory: URL) -> Set<Int> {
             if convDim > 0 { dims.insert(convDim) }
         }
     }
+
+    return dims
+}
+
+func readAttentionOutputDimHintsForJANGQuantization(at modelDirectory: URL) -> Set<Int> {
+    let configURL = modelDirectory.appendingPathComponent("config.json")
+    guard let data = try? Data(contentsOf: configURL),
+          let top = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return [] }
+    let config = (top["text_config"] as? [String: Any]) ?? top
+    var dims = Set<Int>()
+
+    func add(headsKey: String, valueDimKey: String, fallbackDimKey: String) {
+        guard let heads = config[headsKey] as? Int, heads > 0 else { return }
+        if let valueDim = config[valueDimKey] as? Int, valueDim > 0 {
+            dims.insert(heads * valueDim)
+        } else if let headDim = config[fallbackDimKey] as? Int, headDim > 0 {
+            dims.insert(heads * headDim)
+        }
+    }
+
+    add(
+        headsKey: "num_attention_heads",
+        valueDimKey: "v_head_dim",
+        fallbackDimKey: "head_dim")
+    add(
+        headsKey: "swa_num_attention_heads",
+        valueDimKey: "swa_v_head_dim",
+        fallbackDimKey: "swa_head_dim")
+    add(
+        headsKey: "num_global_attention_heads",
+        valueDimKey: "global_v_head_dim",
+        fallbackDimKey: "global_head_dim")
 
     return dims
 }

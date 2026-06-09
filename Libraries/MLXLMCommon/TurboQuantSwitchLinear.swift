@@ -354,3 +354,5 @@ public class TurboQuantSwitchGLU: Module {
         return y.reshaped(outShape).asType(x.dtype)
     }
 }
+
+extension TurboQuantSwitchGLU: SwitchGLULayer {}

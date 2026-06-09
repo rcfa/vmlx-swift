@@ -37,6 +37,49 @@ final class GenerationConfigDefaultsTests: XCTestCase {
         XCTAssertEqual(config.suppressTokens, [258883, 258882])
     }
 
+    func testResolvedEOSTokenIdsFallsBackToNestedTextConfig() throws {
+        let json = """
+        {
+          "model_type": "qwen3_5_moe",
+          "text_config": {
+            "model_type": "qwen3_5_moe_text",
+            "eos_token_id": 248046
+          }
+        }
+        """
+        let data = Data(json.utf8)
+        let baseConfig = try JSONDecoder.json5().decode(BaseConfiguration.self, from: data)
+
+        let eos = ModelTokenConfigurationResolver.resolvedEOSTokenIds(
+            baseConfig: baseConfig,
+            configurationData: data,
+            generationConfig: nil)
+
+        XCTAssertEqual(eos, [248046])
+    }
+
+    func testResolvedEOSTokenIdsGenerationConfigOverridesNestedTextConfig() throws {
+        let json = """
+        {
+          "model_type": "qwen3_5_moe",
+          "text_config": {
+            "model_type": "qwen3_5_moe_text",
+            "eos_token_id": 248046
+          }
+        }
+        """
+        let data = Data(json.utf8)
+        let baseConfig = try JSONDecoder.json5().decode(BaseConfiguration.self, from: data)
+        let generationConfig = GenerationConfigFile(eosTokenIds: IntOrIntArray([2, 11]))
+
+        let eos = ModelTokenConfigurationResolver.resolvedEOSTokenIds(
+            baseConfig: baseConfig,
+            configurationData: data,
+            generationConfig: generationConfig)
+
+        XCTAssertEqual(eos, [2, 11])
+    }
+
     func testGenerateParametersApplyConfigDefaultsAndPreserveRuntimeControls() {
         let fallback = GenerateParameters(
             maxTokens: 64,
