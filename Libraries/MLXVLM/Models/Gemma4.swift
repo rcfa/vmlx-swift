@@ -1171,6 +1171,22 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
                 nk = "language_model.model." + String(nk.dropFirst("language_model.".count))
             }
             if nk.contains(".switch_mlp.") { nk = nk.replacingOccurrences(of: ".switch_mlp.", with: ".experts.switch_glu.") }
+            if nk.contains(".experts.down_proj.") {
+                nk = nk.replacingOccurrences(of: ".experts.down_proj.", with: ".experts.switch_glu.down_proj.")
+            }
+            if nk.contains(".experts.gate_up_proj.") {
+                let mid = config.textConfig.moeIntermediateSize
+                let gateKey = nk.replacingOccurrences(of: ".experts.gate_up_proj.", with: ".experts.switch_glu.gate_proj.")
+                let upKey = nk.replacingOccurrences(of: ".experts.gate_up_proj.", with: ".experts.switch_glu.up_proj.")
+                if v.shape.count >= 3 {
+                    p[gateKey] = v[0..., ..<mid, 0...]
+                    p[upKey] = v[0..., mid..., 0...]
+                } else if v.shape.count == 2 {
+                    p[gateKey] = v[0..., ..<mid]
+                    p[upKey] = v[0..., mid...]
+                }
+                continue
+            }
             // Vision tower uses ClippableLinear wrappers — checkpoint has .linear. segment
             // that doesn't exist in our module tree (we use plain Linear)
             if nk.hasPrefix("vision_tower.") && nk.contains(".linear.") {
