@@ -268,15 +268,16 @@ public class ProportionalRoPE: Module, OffsetLayer, ArrayOffsetLayer {
             return x
         }
 
-        let rank = x.shape.count
-        precondition(rank > 0, "ProportionalRoPE requires a ranked input tensor, got shape \(x.shape)")
+        precondition(!x.shape.isEmpty, "ProportionalRoPE requires a ranked input tensor, got shape \(x.shape)")
 
         func sliceLastAxis(_ array: MLXArray, from start: Int, to end: Int) -> MLXArray {
+            let arrayRank = array.shape.count
+            precondition(arrayRank > 0, "ProportionalRoPE requires a ranked intermediate tensor, got shape \(array.shape)")
             precondition(
                 start <= end,
                 "Invalid ProportionalRoPE last-axis slice \(start)..<\(end) for shape \(array.shape)")
-            var indices: [any MLXArrayIndex] = Array(repeating: MLXSlice(), count: rank)
-            indices[rank - 1] = MLXSlice(start: Int32(start), end: Int32(end), stride: 1)
+            var indices: [any MLXArrayIndex] = Array(repeating: MLXSlice(), count: arrayRank)
+            indices[arrayRank - 1] = MLXSlice(start: Int32(start), end: Int32(end), stride: 1)
             return array[indices]
         }
 

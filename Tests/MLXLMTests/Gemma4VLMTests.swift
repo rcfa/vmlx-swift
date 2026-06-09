@@ -329,6 +329,17 @@ private func maskedScatter(input: MLXArray, mask: MLXArray, source: MLXArray) ->
     }
 }
 
+@Test func proportionalRoPESlicesIntermediateUsingItsOwnRank() throws {
+    let source = try String(
+        contentsOfFile: "Libraries/MLXLMCommon/RoPEUtils.swift",
+        encoding: .utf8)
+
+    #expect(source.contains("let arrayRank = array.shape.count"))
+    #expect(source.contains("Array(repeating: MLXSlice(), count: arrayRank)"))
+    #expect(source.contains("indices[arrayRank - 1]"))
+    #expect(!source.contains("let rank = x.shape.count"))
+}
+
 @Test func gemma4Unified12BAudioConfigDecode() throws {
     let data = Data(#"""
     {
@@ -364,6 +375,46 @@ private func maskedScatter(input: MLXArray, mask: MLXArray, source: MLXArray) ->
 
     #expect(config.audioTokenId == 258881)
     #expect(config.audioEmbedDim == 640)
+}
+
+@Test func gemma4ESeriesAudioConfigPrefersOutputProjectionWidth() throws {
+    let data = Data(#"""
+    {
+      "model_type": "gemma4",
+      "image_token_id": 258880,
+      "audio_token_id": 258881,
+      "audio_config": {
+        "model_type": "gemma4_audio",
+        "hidden_size": 1024,
+        "output_proj_dims": 1536,
+        "num_hidden_layers": 12,
+        "num_attention_heads": 8
+      },
+      "text_config": {
+        "model_type": "gemma4_text",
+        "hidden_size": 1536,
+        "num_hidden_layers": 35,
+        "num_attention_heads": 8,
+        "num_key_value_heads": 1,
+        "num_global_key_value_heads": 1,
+        "head_dim": 256,
+        "global_head_dim": 512,
+        "intermediate_size": 6144,
+        "vocab_size": 262144
+      },
+      "vision_config": {
+        "model_type": "gemma4_vision",
+        "hidden_size": 1536,
+        "output_proj_dims": 1536,
+        "default_output_length": 280
+      }
+    }
+    """#.utf8)
+
+    let config = try JSONDecoder().decode(Gemma4Configuration.self, from: data)
+
+    #expect(config.audioTokenId == 258881)
+    #expect(config.audioEmbedDim == 1536)
 }
 
 @Test func gemma4UnifiedProcessorConfigDecode() throws {
@@ -411,6 +462,7 @@ private func maskedScatter(input: MLXArray, mask: MLXArray, source: MLXArray) ->
     #expect(source.contains("audio: processedAudio"))
     #expect(source.contains("preEncodedEmbedding: embedding"))
     #expect(source.contains("Gemma4 raw audio feature extraction is not implemented"))
+    #expect(!source.contains("pre-encoded 640-dim"))
 }
 
 @Test func gemma4SanitizeSplitsFusedMoEExpertWeights() throws {

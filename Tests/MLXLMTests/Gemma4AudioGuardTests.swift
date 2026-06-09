@@ -3,11 +3,11 @@
 //
 // Background (see `docs/GEMMA4-DEEP-TRACE-2026-05-10.md` §7.4 + §7.5):
 //
-// §7.5 Audio contract. Gemma4 unified 12B ships
-// `embed_audio.embedding_projection` for pre-encoded 640-dim early-fusion
-// audio features, but not a raw audio feature extractor or audio tower.
-// `Gemma4.prepare` must project pre-encoded audio and typed-refuse raw audio
-// instead of silently dropping the lane.
+// §7.5 Audio contract. Gemma4 bundles ship `embed_audio.embedding_projection`
+// for pre-encoded early-fusion audio features. E-series bundles also ship an
+// `audio_tower`, but raw audio feature extraction is not implemented in Swift.
+// `Gemma4.prepare` must project pre-encoded audio at the configured width and
+// typed-refuse raw audio instead of silently dropping the lane.
 //
 // §7.4 Image-token-id resolution. The processor used to call
 // `tokenizer.encode("<|image|>").last ?? 258880` — fragile because
@@ -58,15 +58,17 @@ struct Gemma4AudioGuardTests {
         #expect(source.contains("throw VLMError.processing("),
             "Unsupported media must surface as VLMError.processing, not fatalError or silent fallthrough.")
         #expect(source.contains("@ModuleInfo(key: \"embed_audio\") private var embedAudio"),
-            "Gemma4 must keep the 12B unified audio projection module.")
+            "Gemma4 must keep the audio projection module.")
         #expect(source.contains("if nk.hasPrefix(\"audio_tower.\") { continue }"),
-            "Gemma4 should reject unsupported audio tower weights.")
+            "Gemma4 should reject raw audio tower weights until the encoder is implemented.")
         #expect(!source.contains("nk.hasPrefix(\"embed_audio.\")"),
-            "Gemma4 must not drop the 12B unified embed_audio projection weights.")
+            "Gemma4 must not drop embed_audio projection weights.")
         #expect(source.contains("audioFeatures.dim(-1) == config.audioEmbedDim"),
             "Gemma4 must validate pre-encoded audio feature width before projection.")
         #expect(source.contains("let projectedAudio = embedAudio(audioFeatures).asType(emb.dtype)"),
             "Gemma4 must project pre-encoded audio into the text embedding dimension.")
+        #expect(!source.contains("pre-encoded 640-dim"),
+            "Gemma4 raw/pre-encoded audio errors must not hard-code 640; E-series bundles use a different configured width.")
         #expect(source.contains("Gemma4 raw audio feature extraction is not implemented"),
             "Raw audio must fail with a clear typed unsupported message.")
     }

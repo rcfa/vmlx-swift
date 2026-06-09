@@ -338,8 +338,8 @@ public struct Gemma4Configuration: Codable, Sendable {
         if let audioConfig = try? c.nestedContainer(keyedBy: AudioCodingKeys.self, forKey: .audioConfig) {
             audioEmbedDim =
                 try audioConfig.decodeIfPresent(Int.self, forKey: .audioEmbedDim)
-                ?? audioConfig.decodeIfPresent(Int.self, forKey: .hiddenSize)
                 ?? audioConfig.decodeIfPresent(Int.self, forKey: .outputProjDims)
+                ?? audioConfig.decodeIfPresent(Int.self, forKey: .hiddenSize)
                 ?? 640
         } else {
             audioEmbedDim = 640
@@ -1123,7 +1123,7 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
         if let audio = input.audio {
             guard let audioFeatures = audio.preEncodedEmbedding else {
                 throw VLMError.processing(
-                    "Gemma4 audio requires pre-encoded 640-dim audio features. " +
+                    "Gemma4 audio requires pre-encoded features matching this bundle's configured audio embedding width. " +
                     "Raw waveform feature extraction is not implemented for Gemma4 yet.")
             }
             guard audioFeatures.dim(-1) == config.audioEmbedDim else {
@@ -1157,9 +1157,9 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
         for (k, v) in weights {
             var nk = k
             if nk.hasPrefix("model.") { nk = String(nk.dropFirst("model.".count)) }
-            // 12B unified Gemma4 has no audio tower, but does ship
-            // `embed_audio.embedding_projection` for early-fusion 640-dim
-            // features. Keep the embedder and reject only unsupported tower keys.
+            // Until the Gemma4 audio tower encoder is implemented, text and
+            // pre-encoded audio paths keep `embed_audio.embedding_projection`
+            // while raw `audio_tower.*` weights are rejected.
             if nk.hasPrefix("audio_tower.") { continue }
             if nk.hasPrefix("vision_tower.") && config.visionConfig.usesUnifiedVisionEmbedder { continue }
             if nk.hasPrefix("vision_embedder.") && !config.visionConfig.usesUnifiedVisionEmbedder { continue }
@@ -1402,7 +1402,7 @@ public struct Gemma4Processor: UserInputProcessor {
             case .preEncoded(let samples, let sr, let embedding):
                 guard embedding.ndim >= 2 else {
                     throw VLMError.processing(
-                        "Gemma4 pre-encoded audio embedding must have shape [tokens, 640] or [batch, tokens, 640].")
+                        "Gemma4 pre-encoded audio embedding must have shape [tokens, width] or [batch, tokens, width].")
                 }
                 embeddings.append(embedding)
                 tokenCounts.append(embedding.dim(-2))
@@ -1411,7 +1411,7 @@ public struct Gemma4Processor: UserInputProcessor {
             case .url, .samples, .array:
                 throw VLMError.processing(
                     "Gemma4 raw audio feature extraction is not implemented. " +
-                    "Provide UserInput.Audio.preEncoded with 640-dim Gemma4 audio features.")
+                    "Provide UserInput.Audio.preEncoded with configured-width Gemma4 audio features.")
             }
         }
 
