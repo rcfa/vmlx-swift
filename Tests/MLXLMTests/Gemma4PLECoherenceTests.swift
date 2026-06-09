@@ -158,7 +158,9 @@ struct Gemma4PLECoherenceTests {
             encoding: .utf8)
 
         for source in [textSource, vlmSource] {
-            #expect(source.contains(#"@ParameterInfo(key: "scales") var scales: MLXArray?"#))
+            #expect(source.contains(#"@ParameterInfo(key: "scales") var scales: MLXArray"#))
+            #expect(source.contains("MLXArray.mlxNone"))
+            #expect(source.contains("!scales.shape.isEmpty"))
             #expect(source.contains("JangLoader.inferBitWidthAndGroupSize"))
             #expect(source.contains("quantizedMM("))
             #expect(source.contains("mode: .mxfp4"))

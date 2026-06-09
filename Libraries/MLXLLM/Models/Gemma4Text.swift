@@ -387,18 +387,19 @@ class Gemma4MLP: Module {
 /// Python: (x @ self.weight.T) * scalar
 class Gemma4ScaledLinear: Module {
     @ParameterInfo(key: "weight") var weight: MLXArray
-    @ParameterInfo(key: "scales") var scales: MLXArray?
+    @ParameterInfo(key: "scales") var scales: MLXArray
     @ParameterInfo(key: "biases") var biases: MLXArray?
     let scalar: Float
 
     init(inputDims: Int, outputDims: Int, scalar: Float) {
         self._weight.wrappedValue = MLXArray.zeros([outputDims, inputDims])
+        self._scales.wrappedValue = MLXArray.mlxNone
         self.scalar = scalar
         super.init()
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
-        if let scales {
+        if !scales.shape.isEmpty {
             let inferred = JangLoader.inferBitWidthAndGroupSize(
                 weight: weight, scales: scales, knownGroupSize: 32)
             return quantizedMM(
