@@ -50,6 +50,54 @@
     {%- endif -%}
 {%- endif -%}
 {%- macro render_required_tool_choice_instruction(latest_user_content='') -%}
+    {%- set latest_user_text = render_content(latest_user_content) -%}
+    {{- '\nTool use is REQUIRED for this assistant turn. Reply only with one native Gemma4 tool call and no prose, reasoning text, markdown, or channel markers.' -}}
+    {%- if required_tool_name -%}
+        {{- '\nUse exactly this function name: ' + required_tool_name -}}
+        {%- for tool in tools -%}
+            {%- set selected_tool = tool['function'] if tool['function'] is defined else tool -%}
+            {%- if selected_tool['name'] == required_tool_name and selected_tool['parameters'] is defined and selected_tool['parameters']['required'] is defined -%}
+                {{- '\nRequired arguments: ' + (selected_tool['parameters']['required'] | join(', ')) -}}
+                {%- for param_name in selected_tool['parameters']['required'] -%}
+                    {%- set exact = namespace(value='') -%}
+                    {%- set exact_markers = [
+                        'on this exact ' ~ param_name ~ ':',
+                        'On this exact ' ~ param_name ~ ':',
+                        'this exact ' ~ param_name ~ ':',
+                        'This exact ' ~ param_name ~ ':',
+                        'exact ' ~ param_name ~ ':',
+                        'Exact ' ~ param_name ~ ':',
+                        'on exactly this ' ~ param_name ~ ':',
+                        'On exactly this ' ~ param_name ~ ':',
+                        'exactly this ' ~ param_name ~ ':',
+                        'Exactly this ' ~ param_name ~ ':',
+                        'on this exact text:',
+                        'On this exact text:',
+                        'this exact text:',
+                        'This exact text:',
+                        'exact text:',
+                        'Exact text:',
+                        'on exactly this text:',
+                        'On exactly this text:',
+                        'exactly this text:',
+                        'Exactly this text:'
+                    ] -%}
+                    {%- for marker in exact_markers -%}
+                        {%- if not exact.value and latest_user_text is string and marker in latest_user_text -%}
+                            {%- set exact.value = latest_user_text.split(marker)[1] | trim -%}
+                        {%- endif -%}
+                    {%- endfor -%}
+                    {%- if exact.value -%}
+                        {{- '\nRequired call shape for the current request:\n<|tool_call>call:' + required_tool_name + '{' + param_name + ':<|"|>' + exact.value + '<|"|>}<tool_call|>' -}}
+                    {%- else -%}
+                        {{- '\nCopy the `' + param_name + '` value exactly from the current user request. Do not invent placeholders, summaries, or prior-turn text.' -}}
+                    {%- endif -%}
+                {%- endfor -%}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- else -%}
+        {{- '\nUse exactly one declared function.' -}}
+    {%- endif -%}
 {%- endmacro -%}
 {%- if (tools or (messages[0]['role'] in ['system', 'developer'])) -%}
     {{- '<|turn>system\n' -}}
