@@ -317,6 +317,11 @@ let package = Package(
         .library(name: "MLXPress", targets: ["MLXPress"]),
         .library(name: "VMLX", targets: ["VMLX"]),
         .executable(name: "RunBench", targets: ["RunBench"]),
+        .executable(name: "TPRankWorker", targets: ["TPRankWorker"]),
+        .executable(name: "DistributedProbe", targets: ["DistributedProbe"]),
+        .executable(name: "DistributedPeerSmoke", targets: ["DistributedPeerSmoke"]),
+        .executable(name: "DistributedModelInventory", targets: ["DistributedModelInventory"]),
+        .executable(name: "DistributedReplicaSmoke", targets: ["DistributedReplicaSmoke"]),
         .executable(name: "ANEProbe", targets: ["ANEProbe"]),
         .executable(name: "OmniAudioLatencyBench", targets: ["OmniAudioLatencyBench"]),
         .executable(name: "OmniAudioChunkStabilityBench", targets: ["OmniAudioChunkStabilityBench"]),
@@ -503,7 +508,7 @@ let package = Package(
         ),
         .target(
             name: "MLXDistributedJACCL",
-            dependencies: ["MLXDistributedCore", "MLX"],
+            dependencies: ["MLXDistributedCore", "CmlxDistributedShim", "MLX"],
             path: "Libraries/MLXDistributedJACCL",
             exclude: ["README.md"]
         ),
@@ -643,6 +648,31 @@ let package = Package(
             path: "tools/TPRankWorker"
         ),
         .executableTarget(
+            name: "DistributedProbe",
+            dependencies: ["MLXDistributedCore", "MLXDistributedJACCL"],
+            path: "tools/DistributedProbe"
+        ),
+        .executableTarget(
+            name: "DistributedPeerSmoke",
+            dependencies: [
+                "MLXDistributedCore",
+                "MLXDistributedJACCL",
+                "MLXDistributedTransport",
+                .product(name: "NIOCore", package: "swift-nio"),
+            ],
+            path: "tools/DistributedPeerSmoke"
+        ),
+        .executableTarget(
+            name: "DistributedModelInventory",
+            dependencies: ["MLXDistributedCore"],
+            path: "tools/DistributedModelInventory"
+        ),
+        .executableTarget(
+            name: "DistributedReplicaSmoke",
+            dependencies: ["MLXDistributedCore"],
+            path: "tools/DistributedReplicaSmoke"
+        ),
+        .executableTarget(
             name: "ANEProbe",
             dependencies: ["MLXLMCommon"],
             path: "tools/ANEProbe"
@@ -724,6 +754,11 @@ let package = Package(
             name: "MLXPressPolicyTests",
             path: "Tests/MLXPressPolicyTests",
             sources: ["MLXPressLowRamPolicySourceTests.swift"]
+        ),
+        .testTarget(
+            name: "MLXDistributedCoreTests",
+            dependencies: ["MLXDistributedCore"],
+            path: "Tests/MLXDistributedCoreTests"
         ),
         .testTarget(
             name: "MLXLMCommonFocusedTests",
