@@ -726,21 +726,9 @@ public class Gemma4Model: Module {
         let width = config.hiddenSizePerLayerInput
         precondition(width > 0, "Gemma4 per-layer input width must be positive")
 
-        var splitInputs: [MLXArray?] = []
-        splitInputs.reserveCapacity(layerCount)
-        for layerIndex in 0 ..< layerCount {
-            let start = layerIndex * width
-            let end = start + width
-            switch prefixRank {
-            case 0:
-                splitInputs.append(perLayerInputs[start ..< end])
-            case 1:
-                splitInputs.append(perLayerInputs[0..., start ..< end])
-            default:
-                splitInputs.append(perLayerInputs[0..., 0..., start ..< end])
-            }
-        }
-        return splitInputs
+        return perLayerInputs
+            .split(parts: layerCount, axis: prefixRank)
+            .map { $0 as MLXArray? }
     }
 
     func callAsFunction(
