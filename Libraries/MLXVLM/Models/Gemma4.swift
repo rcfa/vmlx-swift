@@ -1209,8 +1209,7 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
         }
 
         let paddedCache = padCache(cache)
-        let out = languageModel(
-            llmTokens, inputEmbedding: emb, cache: paddedCache, prefixShape: input.text.tokens.shape)
+        let out = languageModel(llmTokens, inputEmbedding: emb, cache: paddedCache)
         return .logits(.init(logits: out))
     }
 

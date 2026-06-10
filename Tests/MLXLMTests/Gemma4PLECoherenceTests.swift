@@ -284,4 +284,18 @@ struct Gemma4PLECoherenceTests {
             #expect(!source.contains("[0..., 0..., $0, 0...]"))
         }
     }
+
+    @Test("Gemma4 VLM prepare lets language model derive PLE prefix shape from embeddings")
+    func vlmPrepareDoesNotForceTokenShapeAsPLEPrefixShape() throws {
+        let repo = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repo.appendingPathComponent("Libraries/MLXVLM/Models/Gemma4.swift"),
+            encoding: .utf8)
+
+        #expect(source.contains("languageModel(llmTokens, inputEmbedding: emb, cache: paddedCache)"))
+        #expect(!source.contains("prefixShape: input.text.tokens.shape"))
+    }
 }

@@ -1751,6 +1751,7 @@ struct Gemma4VLMFocusedSourceContractsTests {
         #expect(source.contains("let llmTokens = MLX.where("))
         #expect(source.contains("MLXArray(Int32(config.textConfig.padTokenId))"))
         #expect(source.contains("languageModel(llmTokens, inputEmbedding: emb, cache: paddedCache)"))
+        #expect(!source.contains("prefixShape: input.text.tokens.shape"))
         #expect(!source.contains("languageModel(input.text.tokens, inputEmbedding: emb, cache: paddedCache)"))
         #expect(source.contains("Gemma4 raw audio feature extraction is not implemented"))
         #expect(!source.contains("Gemma4 unified image inputs are not production-supported yet"))
