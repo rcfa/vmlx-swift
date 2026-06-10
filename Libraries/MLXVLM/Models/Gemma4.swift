@@ -957,9 +957,16 @@ private class TextModel: Module {
         guard layerCount > 0 else { return [] }
         let width = cfg.hiddenSizePerLayerInput
         precondition(width > 0, "Gemma4 per-layer input width must be positive")
+        precondition(
+            prefixRank >= 0 && prefixRank < perLayerInputs.ndim,
+            "Gemma4 PLE prefix rank \(prefixRank) is outside shape \(perLayerInputs.shape)")
+        precondition(
+            perLayerInputs.dim(prefixRank) == layerCount * width,
+            "Gemma4 PLE axis width \(perLayerInputs.dim(prefixRank)) does not match \(layerCount) layers * \(width), prefixRank=\(prefixRank), prefixShape=\(prefixShape), shape=\(perLayerInputs.shape)")
 
+        let boundaries = layerCount > 1 ? (1 ..< layerCount).map { $0 * width } : []
         let splitInputs = perLayerInputs
-            .split(parts: layerCount, axis: prefixRank)
+            .split(indices: boundaries, axis: prefixRank)
             .map { $0 as MLXArray? }
         precondition(
             splitInputs.count == layerCount,
