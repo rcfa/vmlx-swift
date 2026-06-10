@@ -1,4 +1,6 @@
 import Foundation
+import MLX
+@testable import MLXLLM
 import Testing
 @testable import MLXLMCommon
 
@@ -63,6 +65,49 @@ struct JANGTQStreamingExpertsTests {
             ])
 
         #expect(JANGTQStreamingExperts.hasStreamableExperts(in: bundle))
+    }
+
+    @Test("Qwen35 auto-streaming sanitize removes per-expert tensors without stacking")
+    func qwen35AutoStreamingSanitizeRemovesPerExpertTensors() throws {
+        let configData = Data(
+            """
+            {
+              "model_type": "qwen3_5_moe",
+              "auto_streaming_experts": true,
+              "text_config": {
+                "model_type": "qwen3_5_moe_text",
+                "vocab_size": 128,
+                "hidden_size": 8,
+                "num_hidden_layers": 1,
+                "num_attention_heads": 2,
+                "num_key_value_heads": 1,
+                "linear_num_value_heads": 1,
+                "linear_num_key_heads": 1,
+                "linear_key_head_dim": 4,
+                "linear_value_head_dim": 4,
+                "linear_conv_kernel_dim": 4,
+                "intermediate_size": 16,
+                "shared_expert_intermediate_size": 16,
+                "moe_intermediate_size": 4,
+                "num_experts": 2,
+                "num_experts_per_tok": 1,
+                "decoder_sparse_step": 1,
+                "full_attention_interval": 1,
+                "mxtq_bits": 2
+              }
+            }
+            """.utf8)
+        let config = try JSONDecoder().decode(Qwen35JANGTQConfiguration.self, from: configData)
+        let model = Qwen35JANGTQTextModel(config.textConfig)
+        let weights = Self.qwen35PerExpertWeights(layer: 0, experts: 2)
+
+        let sanitized = model.sanitize(weights: weights)
+
+        #expect(config.textConfig.autoStreamingExperts)
+        #expect(sanitized.keys.allSatisfy { !$0.contains(".experts.") })
+        #expect(sanitized["model.layers.0.mlp.switch_mlp.gate_proj.tq_packed"] == nil)
+        #expect(sanitized["model.layers.0.mlp.switch_mlp.up_proj.tq_packed"] == nil)
+        #expect(sanitized["model.layers.0.mlp.switch_mlp.down_proj.tq_packed"] == nil)
     }
 
     @Test("Zaya zaya_block switch_mlp tensors are streamable")
@@ -170,6 +215,20 @@ struct JANGTQStreamingExpertsTests {
                 name: "language_model.model.layers.\(layer).mlp.switch_mlp.down_proj.tq_norms",
                 dtype: "F16", shape: [experts, 2]),
         ]
+    }
+
+    private static func qwen35PerExpertWeights(layer: Int, experts: Int) -> [String: MLXArray] {
+        var weights: [String: MLXArray] = [:]
+        for expert in 0 ..< experts {
+            let prefix = "model.layers.\(layer).mlp.experts.\(expert)"
+            weights["\(prefix).w1.tq_packed"] = MLXArray.zeros([4, 1], dtype: .uint32)
+            weights["\(prefix).w1.tq_norms"] = MLXArray.zeros([4], dtype: .float16)
+            weights["\(prefix).w2.tq_packed"] = MLXArray.zeros([8, 1], dtype: .uint32)
+            weights["\(prefix).w2.tq_norms"] = MLXArray.zeros([8], dtype: .float16)
+            weights["\(prefix).w3.tq_packed"] = MLXArray.zeros([4, 1], dtype: .uint32)
+            weights["\(prefix).w3.tq_norms"] = MLXArray.zeros([4], dtype: .float16)
+        }
+        return weights
     }
 
     private static func withStreamingEnv(value: String?, body: () throws -> Void) throws {

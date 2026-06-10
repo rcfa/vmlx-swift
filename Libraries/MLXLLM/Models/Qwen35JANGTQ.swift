@@ -768,7 +768,7 @@ public class Qwen35JANGTQTextModel: Module, LLMModel, KVCacheDimensionProvider {
                     for kind in ["tq_packed", "tq_norms"] {
                         let first = "\(prefix).experts.0.\(orig).\(kind)"
                         guard weights[first] != nil else { continue }
-                        if JANGTQStreamingExperts.isEnabled {
+                        if JANGTQStreamingExperts.isEnabled || configuration.autoStreamingExperts {
                             for e in 0 ..< configuration.numExperts {
                                 weights.removeValue(
                                     forKey: "\(prefix).experts.\(e).\(orig).\(kind)")
