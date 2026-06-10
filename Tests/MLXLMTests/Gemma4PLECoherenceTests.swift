@@ -164,6 +164,7 @@ struct Gemma4PLECoherenceTests {
             #expect(source.contains("!scales.shape.isEmpty"))
             #expect(source.contains("JangLoader.inferBitWidthAndGroupSize"))
             #expect(source.contains("quantizedMM("))
+            #expect(source.contains("projected.reshaped(Array(x.shape.dropLast()) + [outputDims])"))
             #expect(source.contains("mode: .mxfp4"))
         }
     }

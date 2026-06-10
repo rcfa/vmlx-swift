@@ -390,12 +390,14 @@ class Gemma4ScaledLinear: Module {
     @ParameterInfo(key: "scales") var scales: MLXArray
     @ParameterInfo(key: "biases") var biases: MLXArray?
     let scalar: Float
+    let outputDims: Int
 
     init(inputDims: Int, outputDims: Int, scalar: Float) {
         self._weight.wrappedValue = MLXArray.zeros([outputDims, inputDims])
         self._scales.wrappedValue = MLXArray.mlxNone
         self._biases.wrappedValue = MLXArray.mlxNone
         self.scalar = scalar
+        self.outputDims = outputDims
         super.init()
     }
 
@@ -403,9 +405,10 @@ class Gemma4ScaledLinear: Module {
         if !scales.shape.isEmpty {
             let inferred = JangLoader.inferBitWidthAndGroupSize(
                 weight: weight, scales: scales, knownGroupSize: 32)
-            return quantizedMM(
+            let projected = quantizedMM(
                 x, weight, scales: scales, biases: biases, transpose: true,
-                groupSize: inferred.groupSize, bits: inferred.bits, mode: .mxfp4) * scalar
+                groupSize: inferred.groupSize, bits: inferred.bits, mode: .mxfp4)
+            return projected.reshaped(Array(x.shape.dropLast()) + [outputDims]) * scalar
         }
         return matmul(x, weight.T) * scalar
     }
