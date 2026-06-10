@@ -221,7 +221,9 @@ struct Gemma4PLECoherenceTests {
         #expect(projected.shape == [tokenCount, outputDims])
 
         let final = projected.reshaped([1, tokenCount, outputDims])
-        let split = final.split(parts: layerCount, axis: 2)
+        let split = (0 ..< layerCount).map { i in
+            final[.ellipsis, .stride(from: i * width, to: (i + 1) * width)]
+        }
         #expect(split.count == layerCount)
         #expect(split.allSatisfy { $0.shape == [1, tokenCount, width] })
     }
@@ -269,7 +271,8 @@ struct Gemma4PLECoherenceTests {
             #expect(source.contains("perLayerInputs.dim(prefixRank) == combinedWidth"))
             #expect(source.contains("perLayerInputs.shape.lastIndex(of: combinedWidth)"))
             #expect(source.contains("guard width > 0, perLayerInputs.ndim > 0 else"))
-            #expect(source.contains(".split(parts: layerCount, axis: splitAxis)"))
+            #expect(source.contains("indices[splitAxis] = MLXSlice.stride(from: start, to: start + width)"))
+            #expect(source.contains("return perLayerInputs[indices] as MLXArray?"))
             #expect(source.contains("return Array(repeating: nil, count: layerCount)"))
             #expect(!source.contains("precondition(width > 0"))
             #expect(!source.contains("preconditionFailure("))
@@ -279,7 +282,7 @@ struct Gemma4PLECoherenceTests {
             #expect(!source.contains("lastDim == layerCount * width"))
             #expect(source.contains("hiddenSizePerLayerInput"))
             #expect(!source.contains(".split(indices:"))
-            #expect(!source.contains("split(parts: layers.count, axis: 2)"))
+            #expect(!source.contains(".split(parts:"))
             #expect(!source.contains("perLayerInputs.dim(-1)"))
             #expect(!source.contains("squeezed(axis: 2)"))
             #expect(!source.contains("[0..., 0..., i, 0...]"))

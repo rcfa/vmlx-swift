@@ -971,13 +971,13 @@ private class TextModel: Module {
             return Array(repeating: nil, count: layerCount)
         }
 
-        let splitInputs = perLayerInputs
-            .split(parts: layerCount, axis: splitAxis)
-            .map { $0 as MLXArray? }
-        guard splitInputs.count == layerCount else {
-            return Array(repeating: nil, count: layerCount)
+        return (0 ..< layerCount).map { layerIndex in
+            var indices: [any MLXArrayIndex] = Array(
+                repeating: MLXSlice() as any MLXArrayIndex, count: perLayerInputs.ndim)
+            let start = layerIndex * width
+            indices[splitAxis] = MLXSlice.stride(from: start, to: start + width)
+            return perLayerInputs[indices] as MLXArray?
         }
-        return splitInputs
     }
 
     func callAsFunction(
