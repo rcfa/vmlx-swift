@@ -719,30 +719,24 @@ public class Gemma4Model: Module {
         return (proj + perLayerInputs) * pow(Float(2.0), Float(-0.5))
     }
 
-    private func splitPerLayerInputs(_ perLayerInputs: MLXArray) -> [MLXArray?] {
+    private func splitPerLayerInputs(_ perLayerInputs: MLXArray, prefixRank: Int) -> [MLXArray?] {
         let layerCount = layers.count
         guard layerCount > 0 else { return [] }
         let width = config.hiddenSizePerLayerInput
         precondition(width > 0, "Gemma4 per-layer input width must be positive")
-        if perLayerInputs.ndim == 0 {
-            perLayerInputs.eval()
-        }
 
         var splitInputs: [MLXArray?] = []
         splitInputs.reserveCapacity(layerCount)
         for layerIndex in 0 ..< layerCount {
             let start = layerIndex * width
             let end = start + width
-            switch perLayerInputs.ndim {
-            case 1:
+            switch prefixRank {
+            case 0:
                 splitInputs.append(perLayerInputs[start ..< end])
-            case 2:
+            case 1:
                 splitInputs.append(perLayerInputs[0..., start ..< end])
-            case 3:
-                splitInputs.append(perLayerInputs[0..., 0..., start ..< end])
             default:
-                preconditionFailure(
-                    "Gemma4 per-layer input split requires 1D, 2D, or 3D tensor, got \(perLayerInputs.ndim)D")
+                splitInputs.append(perLayerInputs[0..., 0..., start ..< end])
             }
         }
         return splitInputs
@@ -761,7 +755,7 @@ public class Gemma4Model: Module {
         if config.hiddenSizePerLayerInput > 0 {
             let rawPLI = getPerLayerInputs(inputs)
             if let finalPLI = projectPerLayerInputs(h, perLayerInputs: rawPLI) {
-                perLayerInputsList = splitPerLayerInputs(finalPLI)
+                perLayerInputsList = splitPerLayerInputs(finalPLI, prefixRank: max(h.ndim - 1, 0))
             } else {
                 perLayerInputsList = Array(repeating: nil, count: layers.count)
             }
