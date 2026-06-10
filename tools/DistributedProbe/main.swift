@@ -12,6 +12,8 @@ private struct Arguments {
     var rdmaGID: String?
     var rdmaDevices: [String] = []
     var dataPlaneAddresses: [String] = []
+    var ibvDevicesPath: String?
+    var worldSize: Int?
     var modelHashes: [String] = []
 
     init(_ raw: [String]) {
@@ -38,6 +40,10 @@ private struct Arguments {
             case "--data-plane-addresses", "--tp-hosts":
                 dataPlaneAddresses = Self.value(after: &index, in: raw)?
                     .split(separator: ",").map(String.init) ?? []
+            case "--ibv-devices-json":
+                ibvDevicesPath = Self.value(after: &index, in: raw)
+            case "--world-size":
+                worldSize = Self.value(after: &index, in: raw).flatMap(Int.init)
             case "--models":
                 modelHashes = Self.value(after: &index, in: raw)?
                     .split(separator: ",").map(String.init) ?? []
@@ -80,11 +86,13 @@ private struct Arguments {
       swift run DistributedProbe --modes replica,pp --tls-port 7901 --tls-fingerprint <64-hex> --models <hash[,hash]>
       swift run DistributedProbe --modes tp --tls-port 7901 --tls-fingerprint <64-hex> --rdma-gid <gid> --rdma-devices <dev[,dev]>
       swift run DistributedProbe --modes tp --data-plane-addresses 10.20.0.1:29500,10.20.0.2:29500
+      swift run DistributedProbe --modes tp --world-size 2 --ibv-devices-json /tmp/tp_ibv_devices.json --data-plane-addresses 10.20.0.1:29500,10.20.0.2:29500
 
     Notes:
       - This does not start a server and does not prove peer reachability.
       - JACCL/RDMA availability means the local backend can be loaded, not that a TB5 peer is connected.
       - Tailscale 100.x addresses are control-plane only and are rejected for TP data-plane use.
+      - MLX_IBV_DEVICES is a JSON rank matrix. Self slots must be null or empty; off-diagonal peer slots must name a device.
       - TXT output is only emitted when enough endpoint data is supplied to avoid false advertising.
     """
 }
@@ -117,6 +125,9 @@ private struct ProbeReport: Codable {
     let mlxDistBackend: String?
     let mlxJacclCoordinator: String?
     let mlxIBVDevicesSet: Bool
+    let mlxIBVDevicesPath: String?
+    let mlxWorldSize: Int?
+    let ibvDeviceMatrixFindings: [IBVDeviceMatrixFinding]
     let tensorDataPlaneAddresses: [TensorDataPlaneAddress]
     let tensorDataPlaneFindings: [TensorDataPlaneFinding]
     let interfaces: [NetworkInterface]
@@ -135,7 +146,10 @@ struct DistributedProbe {
         let jaccl = JACCL.isAvailable()
         let librdma = JACCL.librdmaLoadable()
         let anyBackend = JACCL.anyBackendAvailable()
-        let ibvSet = !(env["MLX_IBV_DEVICES"] ?? "").isEmpty
+        let ibvPath = args.ibvDevicesPath ?? env["MLX_IBV_DEVICES"]
+        let ibvSet = !(ibvPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let worldSize = args.worldSize ?? env["MLX_WORLD_SIZE"].flatMap(Int.init)
+        let ibvMatrixFindings = loadIBVMatrixFindings(path: ibvPath, worldSize: worldSize)
         let rdmaConfigured = ibvSet || !args.rdmaDevices.isEmpty
         let rawDataPlaneAddresses = orderedUnique(
             args.dataPlaneAddresses
@@ -152,6 +166,7 @@ struct DistributedProbe {
             args: args,
             jacclAvailable: jaccl,
             rdmaConfigured: rdmaConfigured,
+            ibvMatrixFindings: ibvMatrixFindings,
             dataPlaneFindings: dataPlaneFindings,
             thunderboltCandidates: tbCandidates,
             txtPreview: txtPreview
@@ -167,6 +182,9 @@ struct DistributedProbe {
             mlxDistBackend: env["MLX_DIST_BACKEND"],
             mlxJacclCoordinator: env["MLX_JACCL_COORDINATOR"],
             mlxIBVDevicesSet: ibvSet,
+            mlxIBVDevicesPath: ibvPath,
+            mlxWorldSize: worldSize,
+            ibvDeviceMatrixFindings: ibvMatrixFindings,
             tensorDataPlaneAddresses: dataPlaneAddresses,
             tensorDataPlaneFindings: dataPlaneFindings,
             interfaces: interfaces,
@@ -229,6 +247,7 @@ struct DistributedProbe {
         args: Arguments,
         jacclAvailable: Bool,
         rdmaConfigured: Bool,
+        ibvMatrixFindings: [IBVDeviceMatrixFinding],
         dataPlaneFindings: [TensorDataPlaneFinding],
         thunderboltCandidates: [NetworkInterface],
         txtPreview: [String: String]?
@@ -252,6 +271,12 @@ struct DistributedProbe {
             out.append(Finding(
                 level: "info",
                 message: "MLX_IBV_DEVICES or --rdma-devices is not set; RDMA wiring is not configured yet."))
+        }
+        for finding in ibvMatrixFindings {
+            out.append(Finding(
+                level: finding.level,
+                message: "\(finding.code): \(finding.message)"
+            ))
         }
         for finding in dataPlaneFindings {
             out.append(Finding(level: finding.level, message: finding.message))
@@ -301,6 +326,17 @@ struct DistributedProbe {
         print("  MLX_DIST_BACKEND: \(report.mlxDistBackend ?? "(unset)")")
         print("  MLX_JACCL_COORDINATOR: \(report.mlxJacclCoordinator ?? "(unset)")")
         print("  MLX_IBV_DEVICES set: \(report.mlxIBVDevicesSet)")
+        print("  MLX_IBV_DEVICES path: \(report.mlxIBVDevicesPath ?? "(unset)")")
+        print("  MLX_WORLD_SIZE: \(report.mlxWorldSize.map(String.init) ?? "(unset)")")
+        print("")
+        print("IBV device matrix:")
+        if report.ibvDeviceMatrixFindings.isEmpty {
+            print("  not validated")
+        } else {
+            for finding in report.ibvDeviceMatrixFindings {
+                print("  [\(finding.level)] \(finding.code): \(finding.message)")
+            }
+        }
         print("")
         print("Tensor data-plane addresses:")
         if report.tensorDataPlaneAddresses.isEmpty {
@@ -337,6 +373,35 @@ struct DistributedProbe {
             for finding in report.findings {
                 print("  [\(finding.level)] \(finding.message)")
             }
+        }
+    }
+
+    private static func loadIBVMatrixFindings(path: String?, worldSize: Int?) -> [IBVDeviceMatrixFinding] {
+        guard let path,
+              !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return []
+        }
+        guard let worldSize else {
+            return [
+                .init(
+                    level: "warn",
+                    code: "ibv_matrix_world_size_missing",
+                    message: "MLX_IBV_DEVICES is set but MLX_WORLD_SIZE or --world-size is missing; matrix shape was not validated."
+                )
+            ]
+        }
+        do {
+            let data = try Data(contentsOf: URL(fileURLWithPath: path))
+            return try IBVDeviceMatrix(jsonData: data).findings(worldSize: worldSize)
+        } catch {
+            return [
+                .init(
+                    level: "error",
+                    code: "ibv_matrix_unreadable",
+                    message: "Failed to read or parse MLX_IBV_DEVICES at \(path): \(error.localizedDescription)"
+                )
+            ]
         }
     }
 }
