@@ -721,7 +721,7 @@ public class Gemma4Model: Module {
         guard layerCount > 0 else { return [] }
         let width = config.hiddenSizePerLayerInput
         precondition(width > 0, "Gemma4 per-layer input width must be positive")
-        let lastDim = perLayerInputs.dim(perLayerInputs.ndim - 1)
+        let lastDim = perLayerInputs.shape.last ?? 0
         precondition(
             lastDim == layerCount * width,
             "Gemma4 per-layer input width \(lastDim) does not match \(layerCount) * \(width)")

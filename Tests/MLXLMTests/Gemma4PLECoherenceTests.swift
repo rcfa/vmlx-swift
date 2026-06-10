@@ -202,7 +202,7 @@ struct Gemma4PLECoherenceTests {
         for source in [textSource, vlmSource] {
             #expect(source.contains("splitPerLayerInputs"))
             #expect(source.contains("perLayerInputs[0..., 0..., start ..< end]"))
-            #expect(source.contains("let lastDim = perLayerInputs.dim(perLayerInputs.ndim - 1)"))
+            #expect(source.contains("let lastDim = perLayerInputs.shape.last ?? 0"))
             #expect(source.contains("lastDim == layerCount * width"))
             #expect(source.contains("hiddenSizePerLayerInput"))
             #expect(!source.contains("split(indices: boundaries"))
