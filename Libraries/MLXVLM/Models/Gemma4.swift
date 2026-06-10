@@ -957,10 +957,9 @@ private class TextModel: Module {
         guard layerCount > 0 else { return [] }
         let width = cfg.hiddenSizePerLayerInput
         let combinedWidth = layerCount * width
-        precondition(width > 0, "Gemma4 per-layer input width must be positive")
-        precondition(
-            perLayerInputs.ndim > 0,
-            "Gemma4 PLE tensor must have rank > 0, prefixRank=\(prefixRank), prefixShape=\(prefixShape)")
+        guard width > 0, perLayerInputs.ndim > 0 else {
+            return Array(repeating: nil, count: layerCount)
+        }
         let splitAxis: Int
         if prefixRank >= 0 && prefixRank < perLayerInputs.ndim
             && perLayerInputs.dim(prefixRank) == combinedWidth
@@ -969,17 +968,15 @@ private class TextModel: Module {
         } else if let axis = perLayerInputs.shape.lastIndex(of: combinedWidth) {
             splitAxis = axis
         } else {
-            preconditionFailure(
-                "Gemma4 PLE could not find axis width \(combinedWidth), prefixRank=\(prefixRank), prefixShape=\(prefixShape), shape=\(perLayerInputs.shape)")
+            return Array(repeating: nil, count: layerCount)
         }
 
-        let boundaries = layerCount > 1 ? (1 ..< layerCount).map { $0 * width } : []
         let splitInputs = perLayerInputs
-            .split(indices: boundaries, axis: splitAxis)
+            .split(parts: layerCount, axis: splitAxis)
             .map { $0 as MLXArray? }
-        precondition(
-            splitInputs.count == layerCount,
-            "Gemma4 PLE split produced \(splitInputs.count) parts for \(layerCount) layers, splitAxis=\(splitAxis), prefixRank=\(prefixRank), prefixShape=\(prefixShape), shape=\(perLayerInputs.shape)")
+        guard splitInputs.count == layerCount else {
+            return Array(repeating: nil, count: layerCount)
+        }
         return splitInputs
     }
 
