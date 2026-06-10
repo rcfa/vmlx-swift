@@ -119,6 +119,51 @@ import Testing
     }
 }
 
+@Test func coordinatorReleaseVolatilePreservesDiskTier() {
+    let mlxTestLock = lockSerializedMLXTest()
+    defer { mlxTestLock.unlock() }
+
+    let tmp = FileManager.default.temporaryDirectory
+        .appendingPathComponent("coordinator-release-volatile-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: tmp) }
+
+    let coordinator = CacheCoordinator(config: CacheCoordinatorConfig(
+        usePagedCache: true,
+        enableDiskCache: true,
+        pagedBlockSize: 4,
+        maxCacheBlocks: 8,
+        diskCacheMaxGB: 1.0,
+        diskCacheDir: tmp,
+        modelKey: "release-volatile-preserves-l2"))
+
+    let tokens = [201, 202, 203, 204]
+    let keys = MLXArray.ones([1, 1, tokens.count, 4])
+    let values = MLXArray.ones([1, 1, tokens.count, 4]) * 2.0
+    coordinator.storeAfterGeneration(
+        promptTokens: tokens,
+        perLayerData: [(keys: keys, values: values)],
+        ssmStates: nil,
+        cache: nil)
+
+    #expect(coordinator.diskCache?.candidateTokenCounts(maxTokens: tokens.count) == [tokens.count])
+
+    coordinator.releaseVolatile()
+
+    #expect(coordinator.pagedCache?.stats.allocatedBlocks == 0)
+    #expect(coordinator.diskCache?.candidateTokenCounts(maxTokens: tokens.count) == [tokens.count])
+
+    switch coordinator.fetch(tokens: tokens) {
+    case .hit(let matchedTokens, let remainingTokens, let detail, let blocks, _, let diskArrays):
+        #expect(matchedTokens == tokens.count)
+        #expect(remainingTokens.isEmpty)
+        #expect(detail == .disk)
+        #expect(blocks.isEmpty)
+        #expect(!(diskArrays?.isEmpty ?? true))
+    case .miss:
+        Issue.record("releaseVolatile must preserve L2 disk entries for later reuse")
+    }
+}
+
 @Test func coordinatorHybridZayaCCADiskHitDoesNotRequireSeparateSSMCompanion() {
     let mlxTestLock = lockSerializedMLXTest()
     defer { mlxTestLock.unlock() }

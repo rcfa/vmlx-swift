@@ -285,7 +285,7 @@ public final class ModelContainer: Sendable {
     /// Disable caching and release all cached state.
     public func disableCaching() {
         _cacheCoordinator.withLock { coordinator in
-            coordinator?.clear()
+            coordinator?.releaseVolatile()
             coordinator = nil
         }
     }

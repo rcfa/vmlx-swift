@@ -635,10 +635,19 @@ public final class CacheCoordinator: @unchecked Sendable {
 
     // MARK: - Clear
 
+    /// Release only volatile cache tiers for model unload.
+    ///
+    /// Unloading a model should drop in-memory paged/companion state, but it
+    /// must not delete the persistent L2 disk entries. Hosts rely on those
+    /// entries to survive model eviction and app restarts for prefix reuse.
+    public func releaseVolatile() {
+        pagedCache?.clear()
+        ssmStateCache.clear()
+    }
+
     /// Clear all cache tiers, releasing all cached data.
     public func clear() {
-        pagedCache?.clear()
+        releaseVolatile()
         diskCache?.clear()
-        ssmStateCache.clear()
     }
 }
