@@ -1654,6 +1654,21 @@ public final class LLMModelFactory: ModelFactory {
         if JANGTQStreamingExperts.shouldAutoEnableNemotronUltra(modelDirectory: modelDirectory) {
             JANGTQStreamingExperts.configureModelDirectory(modelDirectory)
         }
+        if JANGTQStreamingExperts.shouldAutoEnableQwen35MoE(modelDirectory: modelDirectory) {
+            JANGTQStreamingExperts.configureModelDirectory(modelDirectory)
+            if var configDict = try? JSONSerialization.jsonObject(with: configData)
+                as? [String: Any]
+            {
+                configDict["auto_streaming_experts"] = true
+                if var textConfig = configDict["text_config"] as? [String: Any] {
+                    textConfig["auto_streaming_experts"] = true
+                    configDict["text_config"] = textConfig
+                }
+                if let updated = try? JSONSerialization.data(withJSONObject: configDict) {
+                    configData = updated
+                }
+            }
+        }
 
         // Determine effective model type for the LLM factory.
         // VLM configs may wrap a different text decoder (e.g., mistral3 VLM wraps mistral4 text).

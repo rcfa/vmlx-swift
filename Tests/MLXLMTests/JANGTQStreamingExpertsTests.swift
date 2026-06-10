@@ -2,8 +2,38 @@ import Foundation
 import Testing
 @testable import MLXLMCommon
 
-@Suite("JANGTQ streaming expert index")
+@Suite("JANGTQ streaming expert index", .serialized)
 struct JANGTQStreamingExpertsTests {
+    @Test("Qwen35 MoE JANGTQ bundles auto-enable streaming for large stacked experts")
+    func qwen35MoEJANGTQAutoEnablesLargeStackedExperts() throws {
+        let bundle = try Self.makeBundle(name: "qwen35")
+        defer { try? FileManager.default.removeItem(at: bundle) }
+
+        try Self.writeQwen35Config(at: bundle, numExperts: 512)
+        try Self.writeSafetensors(
+            at: bundle.appendingPathComponent("model-00001-of-00001.safetensors"),
+            tensors: Self.qwen35SwitchMLPTensors(layer: 0, experts: 512))
+
+        try Self.withStreamingEnv(value: nil) {
+            #expect(JANGTQStreamingExperts.shouldAutoEnableQwen35MoE(modelDirectory: bundle))
+        }
+    }
+
+    @Test("explicit streaming disable wins over Qwen35 auto-enable")
+    func explicitStreamingDisableWinsOverQwen35AutoEnable() throws {
+        let bundle = try Self.makeBundle(name: "qwen35-disabled")
+        defer { try? FileManager.default.removeItem(at: bundle) }
+
+        try Self.writeQwen35Config(at: bundle, numExperts: 512)
+        try Self.writeSafetensors(
+            at: bundle.appendingPathComponent("model-00001-of-00001.safetensors"),
+            tensors: Self.qwen35SwitchMLPTensors(layer: 0, experts: 512))
+
+        try Self.withStreamingEnv(value: "0") {
+            #expect(!JANGTQStreamingExperts.shouldAutoEnableQwen35MoE(modelDirectory: bundle))
+        }
+    }
+
     @Test("prestacked switch_mlp tensors are streamable")
     func prestackedSwitchMLPTensorsAreStreamable() throws {
         let bundle = try Self.makeBundle(name: "prestacked")
@@ -97,6 +127,72 @@ struct JANGTQStreamingExpertsTests {
                 isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private static func writeQwen35Config(at bundle: URL, numExperts: Int) throws {
+        let config: [String: Any] = [
+            "model_type": "qwen3_5_moe",
+            "text_config": [
+                "model_type": "qwen3_5_moe_text",
+                "num_experts": numExperts,
+                "num_experts_per_tok": 10,
+            ],
+        ]
+        let jangConfig: [String: Any] = [
+            "format": "jangtq",
+            "weight_format": "mxtq",
+            "profile": "JANGTQ2",
+        ]
+        try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+            .write(to: bundle.appendingPathComponent("config.json"))
+        try JSONSerialization.data(withJSONObject: jangConfig, options: [.sortedKeys])
+            .write(to: bundle.appendingPathComponent("jang_config.json"))
+    }
+
+    private static func qwen35SwitchMLPTensors(layer: Int, experts: Int) -> [TensorSpec] {
+        [
+            TensorSpec(
+                name: "language_model.model.layers.\(layer).mlp.switch_mlp.gate_proj.tq_packed",
+                dtype: "U32", shape: [experts, 3, 1]),
+            TensorSpec(
+                name: "language_model.model.layers.\(layer).mlp.switch_mlp.gate_proj.tq_norms",
+                dtype: "F16", shape: [experts, 3]),
+            TensorSpec(
+                name: "language_model.model.layers.\(layer).mlp.switch_mlp.up_proj.tq_packed",
+                dtype: "U32", shape: [experts, 3, 1]),
+            TensorSpec(
+                name: "language_model.model.layers.\(layer).mlp.switch_mlp.up_proj.tq_norms",
+                dtype: "F16", shape: [experts, 3]),
+            TensorSpec(
+                name: "language_model.model.layers.\(layer).mlp.switch_mlp.down_proj.tq_packed",
+                dtype: "U32", shape: [experts, 2, 1]),
+            TensorSpec(
+                name: "language_model.model.layers.\(layer).mlp.switch_mlp.down_proj.tq_norms",
+                dtype: "F16", shape: [experts, 2]),
+        ]
+    }
+
+    private static func withStreamingEnv(value: String?, body: () throws -> Void) throws {
+        try withEnv("MLXPRESS_STREAMING_EXPERTS", value: value) {
+            try withEnv("JANGPRESS_STREAMING_EXPERTS", value: value, body: body)
+        }
+    }
+
+    private static func withEnv(_ key: String, value: String?, body: () throws -> Void) throws {
+        let previous = getenv(key).map { String(cString: $0) }
+        if let value {
+            setenv(key, value, 1)
+        } else {
+            unsetenv(key)
+        }
+        defer {
+            if let previous {
+                setenv(key, previous, 1)
+            } else {
+                unsetenv(key)
+            }
+        }
+        try body()
     }
 
     private static func writeSafetensors(at url: URL, tensors: [TensorSpec]) throws {

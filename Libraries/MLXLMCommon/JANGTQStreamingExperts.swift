@@ -98,6 +98,48 @@ public enum JANGTQStreamingExperts {
             routedBits: routedBits)
     }
 
+    public static func shouldAutoEnableQwen35MoE(modelDirectory: URL) -> Bool {
+        if let explicit = explicitStreamingEnabled {
+            return explicit
+        }
+        let configURL = modelDirectory.appendingPathComponent("config.json")
+        guard
+            let configData = try? Data(contentsOf: configURL),
+            let config = try? JSONSerialization.jsonObject(with: configData) as? [String: Any]
+        else {
+            return false
+        }
+
+        let rootModelType = (config["model_type"] as? String)?.lowercased()
+        let textConfig = config["text_config"] as? [String: Any]
+        let textModelType = (textConfig?["model_type"] as? String)?.lowercased()
+        guard rootModelType == "qwen3_5_moe" || textModelType == "qwen3_5_moe_text" else {
+            return false
+        }
+
+        let jangURL = modelDirectory.appendingPathComponent("jang_config.json")
+        let jangConfig =
+            (try? Data(contentsOf: jangURL))
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let weightFormat =
+            ((config["weight_format"] as? String)
+                ?? (textConfig?["weight_format"] as? String)
+                ?? (jangConfig?["weight_format"] as? String))?.lowercased()
+        let format = (jangConfig?["format"] as? String)?.lowercased()
+        let profile = (jangConfig?["profile"] as? String)?.lowercased() ?? ""
+        let sidecar = FileManager.default.fileExists(
+            atPath: modelDirectory.appendingPathComponent("jangtq_runtime.safetensors").path)
+        guard weightFormat == "mxtq" || format == "jangtq" || profile.contains("jangtq") || sidecar else {
+            return false
+        }
+
+        let numExperts = (textConfig?["num_experts"] as? Int) ?? (config["num_experts"] as? Int) ?? 0
+        guard numExperts >= 512 else {
+            return false
+        }
+        return hasStreamableExperts(in: modelDirectory)
+    }
+
     private static func routedBits(from value: Any?) -> Int? {
         if let value = value as? Int {
             return value

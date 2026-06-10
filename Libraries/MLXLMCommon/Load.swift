@@ -198,6 +198,8 @@ public func loadWeights(
             JANGTQStreamingExperts.isEnabled
             || JANGTQStreamingExperts.shouldAutoEnableNemotronUltra(
                 modelDirectory: modelDirectory)
+            || JANGTQStreamingExperts.shouldAutoEnableQwen35MoE(
+                modelDirectory: modelDirectory)
         if streamingRoutedExperts {
             JANGTQStreamingExperts.configureModelDirectory(modelDirectory)
         }

@@ -126,6 +126,7 @@ public struct Qwen35JANGTQTextConfiguration: Codable, Sendable {
     public var weightFormat: String = "mxtq"
     public var mxtqBits: Int = 2
     public var mxtqSeed: Int = 42
+    public var autoStreamingExperts: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case modelType = "model_type"
@@ -158,6 +159,7 @@ public struct Qwen35JANGTQTextConfiguration: Codable, Sendable {
         case weightFormat = "weight_format"
         case mxtqBits = "mxtq_bits"
         case mxtqSeed = "mxtq_seed"
+        case autoStreamingExperts = "auto_streaming_experts"
     }
 
     private enum RopeKey: String, CodingKey {
@@ -243,6 +245,8 @@ public struct Qwen35JANGTQTextConfiguration: Codable, Sendable {
             self.mxtqBits = 2
         }
         self.mxtqSeed = try container.decodeIfPresent(Int.self, forKey: .mxtqSeed) ?? 42
+        self.autoStreamingExperts =
+            try container.decodeIfPresent(Bool.self, forKey: .autoStreamingExperts) ?? false
 
         let defaultRopeParameters: [String: StringOrNumber] = [
             "type": .string("default"),
@@ -430,21 +434,29 @@ private struct JANGTQAffineProjection: Encodable {
 public struct Qwen35JANGTQConfiguration: Codable, Sendable {
     public var modelType: String
     public var textConfig: Qwen35JANGTQTextConfiguration
+    public var autoStreamingExperts: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case modelType = "model_type"
         case textConfig = "text_config"
+        case autoStreamingExperts = "auto_streaming_experts"
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.modelType = try container.decode(String.self, forKey: .modelType)
+        let autoStreaming =
+            try container.decodeIfPresent(Bool.self, forKey: .autoStreamingExperts) ?? false
+        self.autoStreamingExperts = autoStreaming
         if let nested = try container.decodeIfPresent(
             Qwen35JANGTQTextConfiguration.self, forKey: .textConfig)
         {
             self.textConfig = nested
         } else {
             self.textConfig = try Qwen35JANGTQTextConfiguration(from: decoder)
+        }
+        if autoStreaming {
+            self.textConfig.autoStreamingExperts = true
         }
     }
 }
@@ -474,7 +486,7 @@ final class Qwen35JANGTQSparseMoeBlock: Module, UnaryLayer {
         self.topK = args.numExpertsPerTok
 
         _gate.wrappedValue = Linear(args.hiddenSize, args.numExperts, bias: false)
-        if JANGTQStreamingExperts.isEnabled {
+        if JANGTQStreamingExperts.isEnabled || args.autoStreamingExperts {
             _switchMLP.wrappedValue = StreamingTurboQuantSwitchGLU(
                 inputDims: args.hiddenSize,
                 hiddenDims: args.moeIntermediateSize,
