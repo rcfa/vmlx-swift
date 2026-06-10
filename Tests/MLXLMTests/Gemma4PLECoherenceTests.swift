@@ -203,6 +203,8 @@ struct Gemma4PLECoherenceTests {
         for source in [textSource, vlmSource] {
             #expect(source.contains("splitPerLayerInputs"))
             #expect(source.contains("prefixRank: max(h.ndim - 1, 0)"))
+            #expect(source.contains("let flatShape = Array"))
+            #expect(source.contains("reshaped(flatShape)"))
             #expect(source.contains("perLayerInputs[0..., 0..., start ..< end]"))
             #expect(source.contains("precondition(width > 0"))
             #expect(!source.contains("switch perLayerInputs.ndim"))

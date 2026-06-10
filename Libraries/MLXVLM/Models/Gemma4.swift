@@ -933,11 +933,12 @@ private class TextModel: Module {
     private func projectPerLayerInputs(_ h: MLXArray, pli: MLXArray?) -> MLXArray? {
         guard let plProj, let plNorm else { return nil }
         let layerShape = Array(h.shape.dropLast()) + [cfg.numHiddenLayers, cfg.hiddenSizePerLayerInput]
+        let flatShape = Array(h.shape.dropLast()) + [cfg.numHiddenLayers * cfg.hiddenSizePerLayerInput]
         var p = plProj(h)
         p = plNorm(p.reshaped(layerShape))
-            .reshaped(Array(h.shape.dropLast()) + [cfg.numHiddenLayers * cfg.hiddenSizePerLayerInput])
+            .reshaped(flatShape)
         guard let pli else { return p }
-        return (p + pli) * pow(Float(2.0), Float(-0.5))
+        return ((p + pli) * pow(Float(2.0), Float(-0.5))).reshaped(flatShape)
     }
 
     private func splitPerLayerInputs(_ perLayerInputs: MLXArray, prefixRank: Int) -> [MLXArray?] {

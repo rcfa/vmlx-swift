@@ -710,13 +710,14 @@ public class Gemma4Model: Module {
         let layerShape = Array(inputEmbeds.shape.dropLast()) + [
             config.numHiddenLayers, config.hiddenSizePerLayerInput,
         ]
+        let flatShape = Array(inputEmbeds.shape.dropLast()) + [
+            config.numHiddenLayers * config.hiddenSizePerLayerInput,
+        ]
         proj = perLayerProjectionNorm(proj.reshaped(layerShape))
-            .reshaped(Array(inputEmbeds.shape.dropLast()) + [
-                config.numHiddenLayers * config.hiddenSizePerLayerInput,
-            ])
+            .reshaped(flatShape)
 
         guard let perLayerInputs else { return proj }
-        return (proj + perLayerInputs) * pow(Float(2.0), Float(-0.5))
+        return ((proj + perLayerInputs) * pow(Float(2.0), Float(-0.5))).reshaped(flatShape)
     }
 
     private func splitPerLayerInputs(_ perLayerInputs: MLXArray, prefixRank: Int) -> [MLXArray?] {
