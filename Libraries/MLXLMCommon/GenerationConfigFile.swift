@@ -10,6 +10,12 @@ import Foundation
 public struct GenerationConfigFile: Codable, Equatable, Sendable {
     public var eosTokenIds: IntOrIntArray?
     public var maxNewTokens: Int?
+    public var maxDenoisingSteps: Int?
+    public var tMin: Float?
+    public var tMax: Float?
+    public var stabilityThreshold: Int?
+    public var confidenceThreshold: Float?
+    public var samplerConfig: DiffusionGemmaSamplerConfig?
     public var temperature: Float?
     public var topP: Float?
     public var topK: Int?
@@ -21,6 +27,12 @@ public struct GenerationConfigFile: Codable, Equatable, Sendable {
     public init(
         eosTokenIds: IntOrIntArray? = nil,
         maxNewTokens: Int? = nil,
+        maxDenoisingSteps: Int? = nil,
+        tMin: Float? = nil,
+        tMax: Float? = nil,
+        stabilityThreshold: Int? = nil,
+        confidenceThreshold: Float? = nil,
+        samplerConfig: DiffusionGemmaSamplerConfig? = nil,
         temperature: Float? = nil,
         topP: Float? = nil,
         topK: Int? = nil,
@@ -31,6 +43,12 @@ public struct GenerationConfigFile: Codable, Equatable, Sendable {
     ) {
         self.eosTokenIds = eosTokenIds
         self.maxNewTokens = maxNewTokens
+        self.maxDenoisingSteps = maxDenoisingSteps
+        self.tMin = tMin
+        self.tMax = tMax
+        self.stabilityThreshold = stabilityThreshold
+        self.confidenceThreshold = confidenceThreshold
+        self.samplerConfig = samplerConfig
         self.temperature = temperature
         self.topP = topP
         self.topK = topK
@@ -43,6 +61,12 @@ public struct GenerationConfigFile: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case eosTokenIds = "eos_token_id"
         case maxNewTokens = "max_new_tokens"
+        case maxDenoisingSteps = "max_denoising_steps"
+        case tMin = "t_min"
+        case tMax = "t_max"
+        case stabilityThreshold = "stability_threshold"
+        case confidenceThreshold = "confidence_threshold"
+        case samplerConfig = "sampler_config"
         case temperature
         case topP = "top_p"
         case topK = "top_k"
@@ -50,6 +74,21 @@ public struct GenerationConfigFile: Codable, Equatable, Sendable {
         case repetitionPenalty = "repetition_penalty"
         case doSample = "do_sample"
         case suppressTokens = "suppress_tokens"
+    }
+}
+
+public struct DiffusionGemmaSamplerConfig: Codable, Equatable, Sendable {
+    public var className: String?
+    public var entropyBound: Float?
+
+    public init(className: String? = nil, entropyBound: Float? = nil) {
+        self.className = className
+        self.entropyBound = entropyBound
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case className = "_cls_name"
+        case entropyBound = "entropy_bound"
     }
 }
 

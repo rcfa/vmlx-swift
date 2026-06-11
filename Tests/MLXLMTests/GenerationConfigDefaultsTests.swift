@@ -37,6 +37,38 @@ final class GenerationConfigDefaultsTests: XCTestCase {
         XCTAssertEqual(config.suppressTokens, [258883, 258882])
     }
 
+    func testDecodesDiffusionGemmaDenoisingDefaults() throws {
+        let json = """
+        {
+          "max_new_tokens": 256,
+          "max_denoising_steps": 48,
+          "t_min": 0.4,
+          "t_max": 0.8,
+          "stability_threshold": 1,
+          "confidence_threshold": 0.005,
+          "pad_token_id": 0,
+          "eos_token_id": [1, 106, 50],
+          "sampler_config": {
+            "_cls_name": "EntropyBoundSamplerConfig",
+            "entropy_bound": 0.1
+          }
+        }
+        """
+
+        let config = try JSONDecoder.json5().decode(
+            GenerationConfigFile.self, from: Data(json.utf8))
+
+        XCTAssertEqual(config.maxNewTokens, 256)
+        XCTAssertEqual(config.maxDenoisingSteps, 48)
+        XCTAssertEqual(config.tMin, 0.4)
+        XCTAssertEqual(config.tMax, 0.8)
+        XCTAssertEqual(config.stabilityThreshold, 1)
+        XCTAssertEqual(config.confidenceThreshold, 0.005)
+        XCTAssertEqual(config.eosTokenIds?.values, [1, 106, 50])
+        XCTAssertEqual(config.samplerConfig?.className, "EntropyBoundSamplerConfig")
+        XCTAssertEqual(config.samplerConfig?.entropyBound, 0.1)
+    }
+
     func testResolvedEOSTokenIdsFallsBackToNestedTextConfig() throws {
         let json = """
         {

@@ -180,11 +180,12 @@ public struct Gemma4TextConfiguration: Codable, Sendable {
         useDoubleWideMlp =
             try container.decodeIfPresent(Bool.self, forKey: .useDoubleWideMlp) ?? false
 
-        enableMoeBlock =
-            try container.decodeIfPresent(Bool.self, forKey: .enableMoeBlock) ?? false
         moeIntermediateSize =
             try container.decodeIfPresent(Int.self, forKey: .moeIntermediateSize) ?? 0
         numExperts = try container.decodeIfPresent(Int.self, forKey: .numExperts) ?? 0
+        enableMoeBlock =
+            try container.decodeIfPresent(Bool.self, forKey: .enableMoeBlock)
+            ?? (moeIntermediateSize > 0 || numExperts > 0)
         topKExperts = RuntimeMoETopKOverride.effectiveTopK(
             currentTopK: try container.decodeIfPresent(Int.self, forKey: .topKExperts) ?? 0,
             modelType: modelType,
