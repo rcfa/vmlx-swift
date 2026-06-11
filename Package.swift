@@ -320,6 +320,8 @@ let package = Package(
         .executable(name: "ANEProbe", targets: ["ANEProbe"]),
         .executable(name: "OmniAudioLatencyBench", targets: ["OmniAudioLatencyBench"]),
         .executable(name: "OmniAudioChunkStabilityBench", targets: ["OmniAudioChunkStabilityBench"]),
+        .executable(name: "DistributedPeerSmoke", targets: ["DistributedPeerSmoke"]),
+        .executable(name: "Qwen35TPProofRunner", targets: ["Qwen35TPProofRunner"]),
         .executable(name: "mlxpress", targets: ["MLXPressCLI"]),
         .executable(name: "mlxpress-selfcheck", targets: ["MLXPressSelfCheck"]),
     ],
@@ -503,7 +505,7 @@ let package = Package(
         ),
         .target(
             name: "MLXDistributedJACCL",
-            dependencies: ["MLXDistributedCore", "MLX"],
+            dependencies: ["MLXDistributedCore", "CmlxDistributedShim", "MLX"],
             path: "Libraries/MLXDistributedJACCL",
             exclude: ["README.md"]
         ),
@@ -641,6 +643,28 @@ let package = Package(
                 "VMLXTokenizers",
             ],
             path: "tools/TPRankWorker"
+        ),
+        .executableTarget(
+            name: "DistributedPeerSmoke",
+            dependencies: [
+                "MLXDistributedCore",
+                "MLXDistributedTransport",
+                "MLXDistributedJACCL",
+            ],
+            path: "tools/DistributedPeerSmoke"
+        ),
+        .executableTarget(
+            name: "Qwen35TPProofRunner",
+            dependencies: [
+                "MLX",
+                "MLXNN",
+                "MLXLMCommon",
+                "MLXLLM",
+                "MLXHuggingFace",
+                "MLXDistributedTP",
+                "VMLXTokenizers",
+            ],
+            path: "tools/Qwen35TPProofRunner"
         ),
         .executableTarget(
             name: "ANEProbe",
