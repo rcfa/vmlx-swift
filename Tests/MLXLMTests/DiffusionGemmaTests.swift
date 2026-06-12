@@ -322,6 +322,107 @@ func testDiffusionGemmaEncoderDecoderForward() async throws {
     #expect(cache[1].offset == 14)
 }
 
+// MARK: - BlockDiffusionTokenIterator (Task 5)
+
+@Test(.serialized)
+func testBlockDiffusionTokenIteratorEndToEnd() async throws {
+    let mlxTestLock = lockSerializedMLXTest()
+    defer { mlxTestLock.unlock() }
+
+    let config = try tinyDiffusionGemmaConfiguration()
+    let model = DiffusionGemmaModel(config)
+
+    var parameters = GenerateParameters()
+    parameters.maxTokens = 16
+
+    let prompt = LMInput(
+        text: .init(tokens: MLXArray([10, 11, 12, 13, 14].map { Int32($0) })))
+    var iterator = try BlockDiffusionTokenIterator(
+        input: prompt,
+        model: model,
+        parameters: parameters,
+        options: model.blockDiffusionDefaults)
+
+    var emitted: [Int] = []
+    while let token = iterator.next() {
+        emitted.append(token)
+    }
+
+    // At least one token; never beyond maxTokens; everything within vocab.
+    #expect(!emitted.isEmpty)
+    #expect(emitted.count <= 16)
+    #expect(emitted.allSatisfy { $0 >= 0 && $0 < 64 })
+    #expect(iterator.tokenCount == emitted.count)
+
+    // Denoising loop budget: at most maxDenoisingSteps per canvas, and the
+    // canvas cycle ran at least once.
+    #expect(iterator.denoisingForwardCount >= 1)
+    #expect(iterator.denoisingForwardCount <= 48 * 2)
+
+    // Cache holds the prompt plus any committed canvases (the final canvas
+    // is only encoded when another cycle runs): 5, 5+8, or 5+16.
+    let offset = iterator.cache[0].offset
+    #expect(offset == 5 || offset == 13 || offset == 21)
+    #expect(iterator.cache[1].offset == offset)
+}
+
+@Test(.serialized)
+func testARTokenIteratorRejectsDiffusionModel() async throws {
+    let mlxTestLock = lockSerializedMLXTest()
+    defer { mlxTestLock.unlock() }
+
+    let config = try tinyDiffusionGemmaConfiguration()
+    let model = DiffusionGemmaModel(config)
+    let prompt = LMInput(
+        text: .init(tokens: MLXArray([10, 11, 12].map { Int32($0) })))
+
+    // The AR TokenIterator must fail loudly (model.prepare throws) instead
+    // of silently next-token decoding a diffusion model.
+    #expect(throws: BlockDiffusionModelError.self) {
+        _ = try TokenIterator(
+            input: prompt, model: model, parameters: GenerateParameters())
+    }
+}
+
+// MARK: - Factory registration (Task 6)
+
+@Test(.serialized)
+func testFactoryRegistersDiffusionGemma() async throws {
+    let configData = """
+        {
+          "model_type": "diffusion_gemma",
+          "canvas_length": 8,
+          "eos_token_id": [1, 7],
+          "text_config": {
+            "model_type": "diffusion_gemma_text",
+            "vocab_size": 64,
+            "hidden_size": 8,
+            "intermediate_size": 16,
+            "moe_intermediate_size": 8,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "num_global_key_value_heads": 1,
+            "head_dim": 4,
+            "global_head_dim": 4,
+            "num_experts": 4,
+            "top_k_experts": 2,
+            "sliding_window": 4,
+            "layer_types": ["sliding_attention", "full_attention"],
+            "rms_norm_eps": 1e-6,
+            "pad_token_id": 0
+          }
+        }
+        """.data(using: .utf8)!
+
+    let modelTypeName = try await MLXMetalTestLock.withLock {
+        let model = try await LLMTypeRegistry.shared.createModel(
+            configuration: configData, modelType: "diffusion_gemma")
+        return String(describing: type(of: model))
+    }
+    #expect(modelTypeName.contains("DiffusionGemma"))
+}
+
 // MARK: - generation_config.json diffusion fields (Task 4)
 
 @Test

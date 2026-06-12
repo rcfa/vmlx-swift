@@ -2680,6 +2680,34 @@ public func generate(
             toolSchemas: input.toolSchemas)
         return stream
     }
+    // Native block-diffusion model dispatch (e.g. diffusion_gemma). These
+    // models generate whole canvases via denoising and CANNOT be driven by
+    // the autoregressive TokenIterator — their prepare() throws to keep any
+    // other route from silently producing AR garbage. Diffusion sampling
+    // parameters come from the bundle's generation_config.json, never from
+    // user temperature/top-p; GenerateParameters.maxTokens still caps
+    // output length.
+    if let diffusionModel = context.model as? any BlockDiffusionModel {
+        let options = diffusionModel.blockDiffusionDefaults
+            .resolving(generationConfig: context.configuration.generationDefaults)
+        let iterator = try BlockDiffusionTokenIterator(
+            input: input,
+            model: diffusionModel,
+            cache: cache,
+            parameters: parameters,
+            options: options,
+            cacheCoordinator: cacheCoordinator)
+        let (stream, _) = generateTask(
+            promptTokenCount: input.text.tokens.size,
+            modelConfiguration: context.configuration,
+            tokenizer: context.tokenizer,
+            iterator: iterator,
+            wiredMemoryTicket: wiredMemoryTicket,
+            extraStopStrings: parameters.extraStopStrings,
+            promptTail: promptTail,
+            toolSchemas: input.toolSchemas)
+        return stream
+    }
     // Block-diffusion speculative decoding dispatch. When
     // parameters.draftStrategy is .dflash or .ddtree AND the target
     // model conforms to HiddenStateCaptureModel + TokenEmbedderModel,
