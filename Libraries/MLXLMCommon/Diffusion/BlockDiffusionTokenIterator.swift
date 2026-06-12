@@ -62,6 +62,8 @@ public struct BlockDiffusionTokenIterator: TokenIteratorProtocol {
     private(set) var denoisingForwardCount = 0
     private(set) var encoderForwardCount = 0
     private var denoiseTime: TimeInterval = 0
+    private var decoderForwardTime: TimeInterval = 0
+    private var samplerTime: TimeInterval = 0
     private var prefixCacheRestoredTokens = 0
     private let iteratorStartTime = Date.timeIntervalSinceReferenceDate
 
@@ -248,8 +250,14 @@ public struct BlockDiffusionTokenIterator: TokenIteratorProtocol {
 
         // 3. Denoising loop (reverse diffusion: curStep counts down).
         for curStep in stride(from: options.maxDenoisingSteps, through: 1, by: -1) {
+            let forwardStart = Date.timeIntervalSinceReferenceDate
             let logits = model.decoderForward(
                 canvas: canvas, cache: cache, selfConditioningLogits: selfConditioning)
+            // Materializing here splits decoder-forward time from the
+            // sampler pipeline in the stats line; both stay on-GPU.
+            MLX.eval(logits)
+            decoderForwardTime += Date.timeIntervalSinceReferenceDate - forwardStart
+            let samplerStart = Date.timeIntervalSinceReferenceDate
 
             let temperature = blockDiffusionTemperature(
                 curStep: curStep, maxSteps: options.maxDenoisingSteps,
@@ -273,6 +281,7 @@ public struct BlockDiffusionTokenIterator: TokenIteratorProtocol {
             let meanEntropy = entropy.mean()
             MLX.eval(canvas, argmaxCanvas, meanEntropy)
             argmaxIds = argmaxCanvas[0].asArray(Int32.self)
+            samplerTime += Date.timeIntervalSinceReferenceDate - samplerStart
             if stopper.shouldStop(
                 argmaxCanvas: argmaxIds, meanEntropy: meanEntropy.item(Float.self))
             {
@@ -355,7 +364,8 @@ public struct BlockDiffusionTokenIterator: TokenIteratorProtocol {
             format:
                 "[BlockDiffusion] canvases=%d denoisingForwards=%d avgStepsPerCanvas=%.1f "
                 + "emittedTokens=%d tokensPerForward=%.2f encoderForwards=%d "
-                + "prefixCacheRestoredTokens=%d prefillSec=%.3f denoiseSec=%.3f wallSec=%.3f "
+                + "prefixCacheRestoredTokens=%d prefillSec=%.3f denoiseSec=%.3f "
+                + "decoderFwdSec=%.3f samplerSec=%.3f wallSec=%.3f "
                 + "cacheMode=simple+rotating(window) maxDenoisingSteps=%d entropyBound=%.3f\n",
             canvasesEmitted,
             denoisingForwardCount,
@@ -366,6 +376,8 @@ public struct BlockDiffusionTokenIterator: TokenIteratorProtocol {
             prefixCacheRestoredTokens,
             promptPrefillTime,
             denoiseTime,
+            decoderForwardTime,
+            samplerTime,
             wall,
             options.maxDenoisingSteps,
             options.entropyBound)
