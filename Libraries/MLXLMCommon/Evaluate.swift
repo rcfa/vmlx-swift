@@ -1596,7 +1596,7 @@ public struct TokenIterator: TokenIteratorProtocol {
         }
         self.promptPrefillTime = try measure {
             try MLXPressGenerationProfile.time("prompt.prepare_total") {
-                try PrefillProgressReporter.$current.withValue(modelPrepareProgressHandler) {
+                try PrefillProgressReporter.withHandler(modelPrepareProgressHandler) {
                     try prepare(
                         input: inputForPrepare,
                         windowSize: effectivePrefillWindow(
@@ -1780,21 +1780,29 @@ public struct TokenIterator: TokenIteratorProtocol {
         case .none where kvBits != nil:
             return
         case .none:
-            if cache.allSatisfy({ $0 is KVCacheSimple }) {
-                // KVCacheSimple -> CompilableKVCache (static buffer, graph-visible
-                // offset). Plain KVCacheSimple reads `offset` as an Int, which compile
-                // captures at trace-build time and then reuses for later tokens.
-                promoted = cache.map { layer in
-                    CompilableKVCache(from: layer, maxLength: maxCacheLength) as KVCache
+            // Promote per layer so hybrid sliding/full topologies compile too.
+            // Gemma4-class models mix KVCacheSimple (full-attention layers)
+            // and RotatingKVCache (sliding-window layers) in one cache array;
+            // requiring a homogeneous cache type silently disabled compiled
+            // decode for exactly the families that need it most. Each layer's
+            // cache is independent in the traced graph, so promotion is
+            // per-layer:
+            //   KVCacheSimple   -> CompilableKVCache (static buffer,
+            //                      graph-visible offset; plain KVCacheSimple
+            //                      reads `offset` as an Int, which compile
+            //                      captures at trace-build time and then
+            //                      reuses for later tokens)
+            //   RotatingKVCache -> CompilableRotatingKVCache
+            let allPromotable = cache.allSatisfy { layer in
+                layer is KVCacheSimple
+                    || (layer is RotatingKVCache && !(layer is CompilableRotatingKVCache))
+            }
+            guard allPromotable else { return }
+            promoted = cache.map { layer in
+                if let rotating = layer as? RotatingKVCache {
+                    return CompilableRotatingKVCache(from: rotating) as KVCache
                 }
-            } else if cache.allSatisfy({
-                $0 is RotatingKVCache && !($0 is CompilableRotatingKVCache)
-            }) {
-                promoted = cache.map { layer in
-                    CompilableRotatingKVCache(from: layer as! RotatingKVCache) as KVCache
-                }
-            } else {
-                return
+                return CompilableKVCache(from: layer, maxLength: maxCacheLength) as KVCache
             }
         }
         MLX.eval(promoted)
@@ -1806,11 +1814,18 @@ public struct TokenIterator: TokenIteratorProtocol {
         self.compiledForward = compile(
             inputs: cacheRef, outputs: cacheRef
         ) { (args: [MLXArray]) -> [MLXArray] in
-            let result = capturedModel(
-                LMInput.Text(tokens: args[0])[text: .newAxis],
-                cache: cacheRef.isEmpty ? nil : cacheRef,
-                state: nil)
-            return [result.logits]
+            // The closure body only runs while MLX records the trace
+            // (replays reuse the recorded graph), so this flag exactly
+            // brackets trace-time execution. Model forwards consult it to
+            // skip mid-graph `eval` scheduling aids that are illegal
+            // inside compile transforms.
+            CompiledDecodeTrace.withActive {
+                let result = capturedModel(
+                    LMInput.Text(tokens: args[0])[text: .newAxis],
+                    cache: cacheRef.isEmpty ? nil : cacheRef,
+                    state: nil)
+                return [result.logits]
+            }
         }
     }
 

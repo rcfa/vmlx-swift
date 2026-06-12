@@ -20,6 +20,13 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
     public var multimodal: VMLXServerMultimodalSettings
     public var mtp: VMLXServerMTPSettings
     public var memorySafety: VMLXMemorySafetySettings
+    /// Optional so existing server-runtime.json files decode unchanged.
+    /// `effectivePerformance` resolves nil to defaults.
+    public var performance: VMLXServerPerformanceSettings?
+
+    public var effectivePerformance: VMLXServerPerformanceSettings {
+        performance ?? .init()
+    }
 
     public init(
         network: VMLXServerNetworkSettings = .init(),
@@ -30,7 +37,8 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
         tools: VMLXServerToolSettings = .init(),
         multimodal: VMLXServerMultimodalSettings = .init(),
         mtp: VMLXServerMTPSettings = .init(),
-        memorySafety: VMLXMemorySafetySettings = .init()
+        memorySafety: VMLXMemorySafetySettings = .init(),
+        performance: VMLXServerPerformanceSettings? = nil
     ) {
         self.network = network
         self.concurrency = concurrency
@@ -41,6 +49,7 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
         self.multimodal = multimodal
         self.mtp = mtp
         self.memorySafety = memorySafety
+        self.performance = performance
     }
 
     public func validationIssues(
@@ -889,6 +898,59 @@ public struct VMLXServerCacheSettings: Codable, Sendable, Equatable {
                 return .none
             }
             return .turboQuant(keyBits: keyBits, valueBits: valueBits)
+        }
+    }
+}
+
+/// Decode-throughput settings the host wires to its server settings panel.
+///
+/// Optional on ``VMLXServerRuntimeSettings`` so pre-existing
+/// `server-runtime.json` files decode unchanged (nil = all defaults).
+public struct VMLXServerPerformanceSettings: Codable, Sendable, Equatable {
+    /// Load-time codec for tied LM heads that ship UNQUANTIZED in an
+    /// otherwise-quantized bundle (Gemma4 QAT ships the 262k-vocab tied
+    /// embedding fp16; `asLinear` then streams the full fp16 table per
+    /// decoded token — ~1.07 GB/token on E2B). llama.cpp ships the
+    /// equivalent GGUF output head quantized (Q6_K-class), which is the
+    /// documented baseline this engine is compared against.
+    ///
+    /// `fp16Passthrough` (default) changes nothing. Quantized codecs are
+    /// applied only when the bundle itself is quantized AND the head has
+    /// no quantization sidecars of its own — a pre-quantized head always
+    /// loads as shipped.
+    public var tiedHeadCodec: VMLXTiedHeadCodec
+    /// Experimental MLX compiled decode. Measured +25% decode on Gemma4
+    /// E2B QAT (132.5 -> 165.3 tok/s, M5 Max, 2026-06-12). Off by
+    /// default pending the PR #1173 model-switch corruption root cause;
+    /// hosts surface this as an explicit experimental toggle.
+    public var compiledDecode: Bool
+
+    public init(
+        tiedHeadCodec: VMLXTiedHeadCodec = .fp16Passthrough,
+        compiledDecode: Bool = false
+    ) {
+        self.tiedHeadCodec = tiedHeadCodec
+        self.compiledDecode = compiledDecode
+    }
+}
+
+public enum VMLXTiedHeadCodec: String, Codable, Sendable, Equatable, CaseIterable {
+    /// Load the head exactly as shipped (default).
+    case fp16Passthrough = "fp16_passthrough"
+    /// Quantize an unquantized tied head at load: 8-bit affine, gs=64.
+    case q8
+    /// 6-bit affine, gs=64 — bandwidth/quality point closest to the
+    /// llama.cpp Q6_K output head used by the documented GGUF baselines.
+    case q6
+    /// 4-bit affine, gs=64 — fastest, largest numeric delta.
+    case q4
+
+    public var quantization: (bits: Int, groupSize: Int)? {
+        switch self {
+        case .fp16Passthrough: return nil
+        case .q8: return (8, 64)
+        case .q6: return (6, 64)
+        case .q4: return (4, 64)
         }
     }
 }
