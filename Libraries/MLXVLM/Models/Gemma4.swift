@@ -1206,7 +1206,28 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
         }
 
         let paddedCache = padCache(cache)
-        let out = languageModel(llmTokens, inputEmbedding: emb, cache: paddedCache)
+        let prefillStepSize = windowSize ?? 512
+        let tokenCount = emb.dim(1)
+        let out: MLXArray
+        if prefillStepSize > 0, tokenCount > prefillStepSize {
+            var offset = 0
+            while offset + prefillStepSize < tokenCount {
+                let end = offset + prefillStepSize
+                let tokenChunk = llmTokens[0..., offset ..< end]
+                let embeddingChunk = emb[0..., offset ..< end, 0...]
+                _ = languageModel(tokenChunk, inputEmbedding: embeddingChunk, cache: paddedCache)
+                MLX.eval(cache)
+                PrefillProgressReporter.reportCompletedUnits(end)
+                offset = end
+                MLX.Memory.clearCache()
+            }
+            out = languageModel(
+                llmTokens[0..., offset...],
+                inputEmbedding: emb[0..., offset..., 0...],
+                cache: paddedCache)
+        } else {
+            out = languageModel(llmTokens, inputEmbedding: emb, cache: paddedCache)
+        }
         return .logits(.init(logits: out))
     }
 
