@@ -28,3 +28,28 @@ public enum CompiledDecodeTrace {
         return try body()
     }
 }
+
+/// Process-level tied-head quantization policy, set by the host (Osaurus)
+/// from `VMLXServerPerformanceSettings.tiedHeadCodec` before model load.
+/// Same host-set-static pattern as `NativeMTPActivation` /
+/// `JangPressActivation`. The loader applies it only to bundles that are
+/// themselves quantized and whose tied head ships without quantization
+/// sidecars; `VMLX_QUANT_TIED_HEAD_BITS` env remains a bench override.
+public enum TiedHeadQuantizationPolicy {
+    public struct Quantization: Sendable, Equatable {
+        public var bits: Int
+        public var groupSize: Int
+        public init(bits: Int, groupSize: Int = 64) {
+            self.bits = bits
+            self.groupSize = groupSize
+        }
+    }
+
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var _current: Quantization?
+
+    public static var current: Quantization? {
+        get { lock.withLock { _current } }
+        set { lock.withLock { _current = newValue } }
+    }
+}
