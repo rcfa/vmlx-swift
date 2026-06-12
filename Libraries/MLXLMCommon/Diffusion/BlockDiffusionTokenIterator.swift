@@ -52,6 +52,9 @@ public struct BlockDiffusionTokenIterator: TokenIteratorProtocol {
     /// Finalized canvas awaiting its encoder append (run lazily at the start
     /// of the next cycle so the final canvas is never encoded needlessly).
     private var pendingEncoderCanvas: [Int32]?
+    /// Number of generated tokens already committed to the encoder cache
+    /// (whole prior canvases plus any end-of-turn tail commit).
+    private var committedGeneratedTokens = 0
     private var stopper: StableConfidentStopper
     private var statsReported = false
 
@@ -99,7 +102,11 @@ public struct BlockDiffusionTokenIterator: TokenIteratorProtocol {
         var tokensToEncode = promptTokenIds
         if let coordinator = cacheCoordinator,
             !input.requiresPostPrepareCacheKey,
-            !input.hasMediaContent
+            !input.hasMediaContent,
+            // Only consult the prefix cache when starting from an empty
+            // cache — a live multi-turn cache (ChatSession) already holds
+            // prior turns and must not be overwritten.
+            self.cache.allSatisfy({ $0.offset == 0 })
         {
             switch coordinator.fetch(tokens: promptTokenIds, mediaSalt: mediaSalt) {
             case .hit(let matchedTokens, let remainingTokens, _, let blocks, _, let diskArrays):
@@ -159,12 +166,14 @@ public struct BlockDiffusionTokenIterator: TokenIteratorProtocol {
 
     public mutating func next() -> Int? {
         if let maxTokens, tokenCount >= maxTokens {
+            commitEmittedTailToCache()
             reportStatsOnce()
             return nil
         }
 
         while pendingIndex >= pendingTokens.count {
             if finished || canvasesEmitted >= maxNewCanvases {
+                commitEmittedTailToCache()
                 reportStatsOnce()
                 return nil
             }
@@ -177,6 +186,32 @@ public struct BlockDiffusionTokenIterator: TokenIteratorProtocol {
         return token
     }
 
+    /// End-of-generation cache contract: the encoder cache must hold the
+    /// prompt plus exactly the emitted reply (minus a trailing EOS, matching
+    /// the AR iterator where the final sampled token is never fed back).
+    /// Canvas cycles only commit FULL prior canvases, so the final canvas —
+    /// and any EOS/maxTokens truncation — leaves a tail to encode here.
+    /// Without this, multi-turn sessions reusing the live cache would lose
+    /// the end of the assistant's reply.
+    private mutating func commitEmittedTailToCache() {
+        let emittedCount = Swift.min(tokenCount, pendingTokens.count)
+        var kept = Array(pendingTokens.prefix(emittedCount))
+        if let last = kept.last, options.eosTokenIds.contains(last) {
+            kept.removeLast()
+        }
+        guard kept.count > committedGeneratedTokens else {
+            pendingEncoderCanvas = nil
+            return
+        }
+        let delta = kept[committedGeneratedTokens...].map { Int32($0) }
+        let tokens = MLXArray(delta).expandedDimensions(axis: 0)
+        model.encoderForward(tokens, cache: cache)
+        encoderForwardCount += 1
+        MLX.eval(cache)
+        committedGeneratedTokens = kept.count
+        pendingEncoderCanvas = nil
+    }
+
     // MARK: - Canvas cycle
 
     private mutating func runCanvasCycle() {
@@ -186,6 +221,7 @@ public struct BlockDiffusionTokenIterator: TokenIteratorProtocol {
             model.encoderForward(tokens, cache: cache)
             encoderForwardCount += 1
             MLX.eval(cache)
+            committedGeneratedTokens += previous.count
             pendingEncoderCanvas = nil
         }
 

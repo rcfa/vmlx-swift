@@ -910,6 +910,12 @@ public func reasoningStampFromModelType(_ modelType: String?) -> String {
         return "harmony"
     }
 
+    // DiffusionGemma shares the Gemma-4 chat template family and emits the
+    // same `<|channel>thought\n…<channel|>` reasoning envelope.
+    if compact.hasPrefix("diffusiongemma") {
+        return "harmony"
+    }
+
     // GPT-OSS native Harmony envelope (`<|start|>`, `<|channel|>`,
     // `<|end|>`, `<|return|>`, `<|message|>`). Without this stamp the
     // markers leak into the user-visible chunk stream because the

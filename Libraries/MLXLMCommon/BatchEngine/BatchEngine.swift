@@ -537,6 +537,22 @@ public actor BatchEngine {
                 parameters: parameters,
                 promptTail: promptTail)
         }
+        // Block-diffusion models (e.g. diffusion_gemma) generate whole
+        // canvases via denoising and cannot share batched decode slots.
+        // They run as an exclusive solo path; the batched path would fail
+        // loudly anyway via the model's throwing prepare() guard.
+        if context.model is any BlockDiffusionModel {
+            guard canStartExclusiveSoloPath else {
+                Self.logger.error(
+                    "Rejected BatchEngine.generate block-diffusion request: block diffusion is an exclusive solo path until batched canvas scheduling lands."
+                )
+                return cancelledGenerationStream(promptTokenCount: input.text.tokens.size)
+            }
+            return startSoloFastPath(
+                input: input,
+                parameters: parameters,
+                promptTail: promptTail)
+        }
         if canStartSoloFastPath {
             return startSoloFastPath(
                 input: input,
@@ -885,7 +901,25 @@ public actor BatchEngine {
         let sourceStream: AsyncStream<Generation>
         let generationTask: Task<Void, Never>
         do {
-            if let strategy = soloParameters.draftStrategy,
+            if let diffusionModel = context.model as? any BlockDiffusionModel {
+                let options = diffusionModel.blockDiffusionDefaults
+                    .resolving(generationConfig: context.configuration.generationDefaults)
+                let iterator = try BlockDiffusionTokenIterator(
+                    input: input,
+                    model: diffusionModel,
+                    cache: nil,
+                    parameters: soloParameters,
+                    options: options,
+                    cacheCoordinator: cacheCoordinator)
+                (sourceStream, generationTask) = generateTask(
+                    promptTokenCount: promptTokenCount,
+                    modelConfiguration: context.configuration,
+                    tokenizer: context.tokenizer,
+                    iterator: iterator,
+                    extraStopStrings: soloParameters.extraStopStrings,
+                    promptTail: promptTail,
+                    toolSchemas: toolSchemas)
+            } else if let strategy = soloParameters.draftStrategy,
                 case .nativeMTP(depth: let depth, verifierMode: _) = strategy,
                 soloParameters.canUseNativeMTP(for: input)
             {

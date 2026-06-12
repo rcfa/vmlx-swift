@@ -359,10 +359,16 @@ func testBlockDiffusionTokenIteratorEndToEnd() async throws {
     #expect(iterator.denoisingForwardCount >= 1)
     #expect(iterator.denoisingForwardCount <= 48 * 2)
 
-    // Cache holds the prompt plus any committed canvases (the final canvas
-    // is only encoded when another cycle runs): 5, 5+8, or 5+16.
+    // End-of-turn cache contract: the encoder cache holds the prompt plus
+    // exactly the emitted reply, minus a trailing EOS (mirrors the AR
+    // iterator, whose final sampled token never re-enters the cache). This
+    // is what makes multi-turn live-cache reuse coherent.
+    var keptTokens = emitted
+    if let last = keptTokens.last, [1, 7].contains(last) {
+        keptTokens.removeLast()
+    }
     let offset = iterator.cache[0].offset
-    #expect(offset == 5 || offset == 13 || offset == 21)
+    #expect(offset == 5 + keptTokens.count)
     #expect(iterator.cache[1].offset == offset)
 }
 
