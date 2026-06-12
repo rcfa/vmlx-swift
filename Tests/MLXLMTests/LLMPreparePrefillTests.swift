@@ -122,7 +122,7 @@ final class LLMPreparePrefillTests: XCTestCase {
 
         let tokens = MLXArray((0..<totalLen).map { Int32($0 % 64) })[.newAxis, 0...]
         let input = LMInput(text: .init(tokens: tokens))
-        _ = try PrefillProgressReporter.$current.withValue({ recorder.append($0) }) {
+        _ = try PrefillProgressReporter.withHandler({ recorder.append($0) }) {
             try model.prepare(input, cache: cache, windowSize: step)
         }
 
