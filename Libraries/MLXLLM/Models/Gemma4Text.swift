@@ -684,9 +684,20 @@ public class Gemma4Model: Module {
         let flatShape = prefixShape + [
             config.numHiddenLayers * config.hiddenSizePerLayerInput,
         ]
-        eval(proj)
+        // Materializing the projection here is load-bearing for decode
+        // throughput: without these evals the solo decode path drops from
+        // ~120 tok/s to ~42 tok/s on E2B QAT (measured 2026-06-12, M5 Max,
+        // greedy parity identical). Inside a compiled trace they are both
+        // unnecessary (the traced graph materializes once) and illegal
+        // (eval during compile transforms is a fatal error), so skip them
+        // while tracing.
+        if !CompiledDecodeTrace.isActive {
+            eval(proj)
+        }
         proj = perLayerProjectionNorm(proj.reshaped(layerShape))
-        eval(proj)
+        if !CompiledDecodeTrace.isActive {
+            eval(proj)
+        }
         proj = proj.reshaped(flatShape)
 
         guard let perLayerInputs else { return proj }

@@ -679,6 +679,35 @@ public func loadWeights(
     weights.removeAll(keepingCapacity: false)
     MLX.Memory.clearCache()
 
+    // VMLX_QUANT_TIED_HEAD_BITS=<bits> (experiment gate): quantize a plain
+    // fp16/bf16 `embed_tokens` at load time. Tied-embedding families
+    // (Gemma4 QAT) ship the decoder quantized but the 262k-vocab embedding
+    // unquantized; `asLinear` then streams the full fp16 table per decoded
+    // token (E2B: ~1.07 GB/token), which dominates decode bandwidth.
+    // llama.cpp ships the equivalent output head quantized (Q6_K-class) in
+    // the GGUF baselines this engine is compared against.
+    if let bitsRaw = ProcessInfo.processInfo.environment["VMLX_QUANT_TIED_HEAD_BITS"],
+        let headBits = Int(bitsRaw), headBits > 0
+    {
+        let headGroupSize =
+            ProcessInfo.processInfo.environment["VMLX_QUANT_TIED_HEAD_GS"].flatMap(Int.init) ?? 64
+        var headUpdates: [(String, Module)] = []
+        for (path, mod) in model.namedModules() {
+            guard path.hasSuffix("embed_tokens"), type(of: mod) == Embedding.self,
+                let emb = mod as? Embedding
+            else { continue }
+            headUpdates.append(
+                (path, QuantizedEmbedding(emb, groupSize: headGroupSize, bits: headBits)))
+        }
+        if !headUpdates.isEmpty {
+            try model.update(modules: ModuleChildren.unflattened(headUpdates), verify: .none)
+            MLX.eval(model)
+            MLX.Memory.clearCache()
+            FileHandle.standardError.write(Data(
+                "[Load] quantized tied embedding head bits=\(headBits) gs=\(headGroupSize) paths=\(headUpdates.map(\.0))\n".utf8))
+        }
+    }
+
     // Convert float16/float32 parameters to bfloat16 to prevent AsType cascades.
     // float16 causes AsType when mixed with internal float32 ops (softmax, RMSNorm).
     // bfloat16 shares float32's exponent range, so promotion is cheaper/eliminated.

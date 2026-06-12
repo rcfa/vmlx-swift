@@ -725,7 +725,14 @@ private class TextAttn: Module {
             else { q = rope(q, offset: off) }
             cK = sharedKV.keys; cV = sharedKV.values
         } else {
-            off = cache?.offset ?? 0
+            // Reading `cache.offset` (Int) forces a host readback; inside a
+            // compiled-decode trace the Compilable* caches keep the offset
+            // graph-visible and `.item()` is illegal. The Int is only used
+            // for the rope fallback (graph offsets take precedence via
+            // applyRotaryPosition/sharedOffsetArray) and the intermediates
+            // bookkeeping, where shared-KV consumers also prefer the
+            // graph offset under trace.
+            off = CompiledDecodeTrace.isActive ? 0 : (cache?.offset ?? 0)
             var k = kP(x).reshaped(B, L, nKV, hD)
             let v: MLXArray
             if useKEqV { v = rmsNormNoScale(k, eps: eps) } else if let vP { v = rmsNormNoScale(vP(x).reshaped(B, L, nKV, hD), eps: eps) } else { v = rmsNormNoScale(k, eps: eps) }
@@ -911,9 +918,18 @@ private class TextModel: Module {
         let layerShape = prefixShape + [cfg.numHiddenLayers, cfg.hiddenSizePerLayerInput]
         let flatShape = prefixShape + [cfg.numHiddenLayers * cfg.hiddenSizePerLayerInput]
         var p = plProj(h) * perLayerProjectionScale
-        eval(p)
+        // Load-bearing scheduling evals (same contract as
+        // Gemma4Text.projectPerLayerInputs): without them solo decode drops
+        // ~3x on E2B QAT. Skip while building a compiled-decode trace, where
+        // eval is illegal and the recorded graph materializes shared
+        // subexpressions once.
+        if !CompiledDecodeTrace.isActive {
+            eval(p)
+        }
         p = plNorm(p.reshaped(layerShape))
-        eval(p)
+        if !CompiledDecodeTrace.isActive {
+            eval(p)
+        }
         p = p.reshaped(flatShape)
         guard let pli else { return p }
         return ((p + pli) * pow(Float(2.0), Float(-0.5))).reshaped(flatShape)
