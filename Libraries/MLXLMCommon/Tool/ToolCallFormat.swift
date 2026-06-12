@@ -323,6 +323,12 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         if compact.hasPrefix("gemma4") {
             return .gemma4
         }
+
+        // DiffusionGemma reuses the Gemma-4 chat template family:
+        // `<|tool_call>call:name{...}<tool_call|>` envelopes.
+        if compact.hasPrefix("diffusiongemma") {
+            return .gemma4
+        }
         if compact.hasPrefix("gemma3n") {
             return nil
         }
