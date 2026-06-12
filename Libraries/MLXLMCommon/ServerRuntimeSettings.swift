@@ -77,6 +77,17 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
                 field: "concurrency.maxConcurrentSequences",
                 message: "Max concurrent sequences must be positive."))
         }
+        if let diffusionSteps = generation.diffusionMaxDenoisingSteps {
+            if diffusionSteps < 1 {
+                issues.append(.error(
+                    field: "generation.diffusionMaxDenoisingSteps",
+                    message: "Diffusion denoising steps must be at least 1. Use nil for the bundle default."))
+            } else if diffusionSteps < 12 {
+                issues.append(.warning(
+                    field: "generation.diffusionMaxDenoisingSteps",
+                    message: "Diffusion budgets below 12 steps measurably break coherency on diffusiongemma-26B-A4B (8 steps produces word-salad spans)."))
+            }
+        }
         if let prefillBatchSize = concurrency.prefillBatchSize,
            prefillBatchSize <= 0 {
             issues.append(.error(
@@ -997,6 +1008,15 @@ public struct VMLXServerGenerationDefaults: Codable, Sendable, Equatable {
     public var minP: Double?
     public var repetitionPenalty: Double?
 
+    /// Block-diffusion speed/quality budget (denoising steps per canvas)
+    /// applied to ``BlockDiffusionModel`` generation via
+    /// `GenerateParameters.diffusionMaxDenoisingSteps`. `nil` keeps the
+    /// bundle's `generation_config.json` value. Measured on
+    /// diffusiongemma-26B-A4B MXFP4 (M5 Max): 48 ≈ 37 tok/s,
+    /// 16 ≈ 74 tok/s still coherent, 8 breaks coherency. Ignored by
+    /// autoregressive models.
+    public var diffusionMaxDenoisingSteps: Int?
+
     public init(
         streamInterval: Int? = 1,
         maxTokens: Int? = nil,
@@ -1004,7 +1024,8 @@ public struct VMLXServerGenerationDefaults: Codable, Sendable, Equatable {
         topP: Double? = nil,
         topK: Int? = nil,
         minP: Double? = nil,
-        repetitionPenalty: Double? = nil
+        repetitionPenalty: Double? = nil,
+        diffusionMaxDenoisingSteps: Int? = nil
     ) {
         self.streamInterval = streamInterval
         self.maxTokens = maxTokens
@@ -1013,6 +1034,7 @@ public struct VMLXServerGenerationDefaults: Codable, Sendable, Equatable {
         self.topK = topK
         self.minP = minP
         self.repetitionPenalty = repetitionPenalty
+        self.diffusionMaxDenoisingSteps = diffusionMaxDenoisingSteps
     }
 }
 
