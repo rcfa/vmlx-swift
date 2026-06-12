@@ -923,6 +923,13 @@ public actor BatchEngine {
         context.jangPressRuntime.recordPromptTokenActivity(
             input.text.tokens.reshaped(-1).asArray(Int.self))
 
+        let (outStream, continuation) = AsyncStream<Generation>.makeStream()
+        continuation.yield(.prefillProgress(PrefillProgress(
+            stage: .queued,
+            completedUnitCount: 0,
+            totalUnitCount: promptTokenCount,
+            detail: "solo")))
+
         let sourceStream: AsyncStream<Generation>
         let generationTask: Task<Void, Never>
         do {
@@ -955,7 +962,10 @@ public actor BatchEngine {
                     cache: nil,
                     parameters: soloParameters,
                     cacheCoordinator: cacheCoordinator,
-                    disableDiskBackedRequiredToolRestore: disableDiskBackedRequiredToolRestore)
+                    disableDiskBackedRequiredToolRestore: disableDiskBackedRequiredToolRestore,
+                    prefillProgressHandler: { progress in
+                        continuation.yield(.prefillProgress(progress))
+                    })
                 (sourceStream, generationTask) = generateTask(
                     promptTokenCount: promptTokenCount,
                     modelConfiguration: context.configuration,
@@ -969,13 +979,20 @@ public actor BatchEngine {
             Self.logger.error(
                 "Solo fast path setup failed: \(error.localizedDescription, privacy: .public)"
             )
-            return cancelledGenerationStream(promptTokenCount: promptTokenCount)
+            continuation.yield(.info(GenerateCompletionInfo(
+                promptTokenCount: promptTokenCount,
+                generationTokenCount: 0,
+                promptTime: 0,
+                generationTime: 0,
+                stopReason: .cancelled
+            )))
+            continuation.finish()
+            return outStream
         }
 
         soloFastPathID = fastPathID
         soloFastPathTask = generationTask
 
-        let (outStream, continuation) = AsyncStream<Generation>.makeStream()
         continuation.onTermination = { @Sendable _ in
             generationTask.cancel()
         }

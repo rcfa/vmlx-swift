@@ -858,6 +858,35 @@ class BatchEngineIntegrationTests: XCTestCase {
         XCTAssertFalse(finalSoloActive)
     }
 
+    func testGenerateSoloFastPathEmitsPrefillProgress() async throws {
+        let engine = makeSlowPrefillEngine(
+            prefillDelayMicroseconds: 20_000,
+            maxBatchSize: 1)
+
+        let stream = await engine.generate(
+            input: LMInput(tokens: MLXArray(Int32(1) ..< Int32(5))),
+            parameters: GenerateParameters(maxTokens: 2, temperature: 0)
+        )
+
+        var progress = [PrefillProgress]()
+        var sawChunkOrInfo = false
+        for await generation in stream {
+            switch generation {
+            case .prefillProgress(let p):
+                XCTAssertFalse(sawChunkOrInfo, "prefill progress must arrive before output/info")
+                progress.append(p)
+            case .chunk, .reasoning, .toolCall, .info:
+                sawChunkOrInfo = true
+            }
+        }
+
+        XCTAssertEqual(progress.first?.stage, .queued)
+        XCTAssertTrue(progress.contains { $0.stage == .prefill })
+        XCTAssertEqual(progress.last?.stage, .complete)
+        XCTAssertEqual(progress.last?.completedUnitCount, 4)
+        XCTAssertEqual(progress.last?.totalUnitCount, 4)
+    }
+
     /// If a raw `submit(...)` arrives while the direct B=1 `generate(...)`
     /// path owns the model, it must queue without starting the actor decode
     /// loop. Starting both would create two concurrent MLX paths over the same

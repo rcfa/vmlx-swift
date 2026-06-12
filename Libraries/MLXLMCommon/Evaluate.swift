@@ -1049,6 +1049,43 @@ private enum MLXPressGenerationProfile {
 /// Port of `generate_step()` from https://github.com/ml-explore/mlx-examples/blob/main/llms/mlx_lm/utils.py
 ///
 /// Note: this uses `asyncEval()` and there may be an async evaluation running after a call to `next()`.
+private final class SoloPrefillProgressAccumulator: @unchecked Sendable {
+    private let handler: @Sendable (PrefillProgress) -> Void
+    private let completedBeforePrefill: Int
+    private let totalPromptUnits: Int
+    private let lock = NSLock()
+    private var lastReportedCompleted: Int
+
+    init(
+        handler: @escaping @Sendable (PrefillProgress) -> Void,
+        completedBeforePrefill: Int,
+        totalPromptUnits: Int
+    ) {
+        self.handler = handler
+        self.completedBeforePrefill = completedBeforePrefill
+        self.totalPromptUnits = totalPromptUnits
+        self.lastReportedCompleted = completedBeforePrefill
+    }
+
+    func report(completedInPrepare: Int) {
+        let completed = Swift.min(
+            totalPromptUnits,
+            completedBeforePrefill + Swift.max(0, completedInPrepare))
+        lock.lock()
+        guard completed > lastReportedCompleted else {
+            lock.unlock()
+            return
+        }
+        lastReportedCompleted = completed
+        lock.unlock()
+        handler(PrefillProgress(
+            stage: .prefill,
+            completedUnitCount: completed,
+            totalUnitCount: totalPromptUnits,
+            detail: "chunk"))
+    }
+}
+
 public struct TokenIterator: TokenIteratorProtocol {
 
     private static let logger = Logger(subsystem: "vmlx", category: "TokenIterator")
@@ -1216,7 +1253,8 @@ public struct TokenIterator: TokenIteratorProtocol {
         input: LMInput, model: any LanguageModel, cache: [KVCache]? = nil,
         parameters: GenerateParameters,
         cacheCoordinator: CacheCoordinator? = nil,
-        disableDiskBackedRequiredToolRestore: Bool = false
+        disableDiskBackedRequiredToolRestore: Bool = false,
+        prefillProgressHandler: (@Sendable (PrefillProgress) -> Void)? = nil
     ) throws {
         _ = try AccelerationRuntime.resolveTextDecode(parameters.accelerationMode)
 
@@ -1536,15 +1574,42 @@ public struct TokenIterator: TokenIteratorProtocol {
         }
 
         // Prefill: either full input (cache miss) or remaining tokens (cache hit).
+        let remainingPromptUnits = Swift.max(0, inputForPrepare.text.tokens.size)
+        let completedBeforePrefill = Swift.max(0, promptTokenCount - remainingPromptUnits)
+        prefillProgressHandler?(PrefillProgress(
+            stage: .prefill,
+            completedUnitCount: completedBeforePrefill,
+            totalUnitCount: promptTokenCount,
+            detail: "running"))
+
+        let modelPrepareProgressHandler: PrefillProgressReporter.Handler?
+        if let prefillProgressHandler {
+            let progressAccumulator = SoloPrefillProgressAccumulator(
+                handler: prefillProgressHandler,
+                completedBeforePrefill: completedBeforePrefill,
+                totalPromptUnits: promptTokenCount)
+            modelPrepareProgressHandler = { completedInPrepare in
+                progressAccumulator.report(completedInPrepare: completedInPrepare)
+            }
+        } else {
+            modelPrepareProgressHandler = nil
+        }
         self.promptPrefillTime = try measure {
             try MLXPressGenerationProfile.time("prompt.prepare_total") {
-                try prepare(
-                    input: inputForPrepare,
-                    windowSize: effectivePrefillWindow(
-                        requested: effectiveParameters.prefillStepSize,
-                        input: inputForPrepare))
+                try PrefillProgressReporter.$current.withValue(modelPrepareProgressHandler) {
+                    try prepare(
+                        input: inputForPrepare,
+                        windowSize: effectivePrefillWindow(
+                            requested: effectiveParameters.prefillStepSize,
+                            input: inputForPrepare))
+                }
             }
         }
+        prefillProgressHandler?(PrefillProgress(
+            stage: .complete,
+            completedUnitCount: promptTokenCount,
+            totalUnitCount: promptTokenCount,
+            detail: "decode_ready"))
         self.promptCacheSnapshot = makePromptBoundaryCacheSnapshot(from: self.cache)
 
         if effectiveParameters.enableCompiledDecode && !Self.compiledDecodeDenied(for: model) {
