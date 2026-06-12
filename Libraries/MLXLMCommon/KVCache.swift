@@ -414,6 +414,23 @@ public class KVCacheSimple: BaseKVCache, CustomDebugStringConvertible {
         return (returnedKeys, returnedValues)
     }
 
+    /// Read the cached keys/values trimmed to the valid `offset` without
+    /// mutating cache state. Returns `nil` when nothing has been cached yet.
+    ///
+    /// Counterpart of `RotatingKVCache.temporallyOrderedKV()` for the simple
+    /// cache, used by consumers that attend over the cached context as a
+    /// contiguous block (e.g. the block-diffusion decoder).
+    public func readKV() -> (keys: MLXArray, values: MLXArray)? {
+        guard let keys = self.keys, let values = self.values else { return nil }
+        if offset < keys.dim(2) {
+            return (
+                keys[.ellipsis, ..<offset, 0...],
+                values[.ellipsis, ..<offset, 0...]
+            )
+        }
+        return (keys, values)
+    }
+
     public override var state: [MLXArray] {
         get {
             guard let keys = self.keys, let values = self.values else { return [] }
@@ -701,6 +718,28 @@ public class RotatingKVCache: BaseKVCache, CustomDebugStringConvertible {
         offset -= trimmed
         idx -= trimmed
         return trimmed
+    }
+
+    /// Read the cached keys/values in temporal order without mutating
+    /// rotation state (`offset`/`idx` are untouched).
+    ///
+    /// `update(keys:values:)` returns the raw ring buffer once the cache has
+    /// wrapped, which is only valid for causal single-token attention where
+    /// the mask hides the seam. Consumers that attend over the cached context
+    /// as a contiguous block — e.g. the block-diffusion decoder reading the
+    /// encoder cache — need the entries in temporal order. Returns `nil`
+    /// when nothing has been cached yet.
+    public func temporallyOrderedKV() -> (keys: MLXArray, values: MLXArray)? {
+        guard let keys = self.keys, let values = self.values else { return nil }
+        let orderedKeys = temporalOrder(keys)
+        let orderedValues = temporalOrder(values)
+        if offset < orderedKeys.dim(2) {
+            return (
+                orderedKeys[.ellipsis, ..<offset, 0...],
+                orderedValues[.ellipsis, ..<offset, 0...]
+            )
+        }
+        return (orderedKeys, orderedValues)
     }
 
     /// Optimized mask creation for rotating cache with offset capping
