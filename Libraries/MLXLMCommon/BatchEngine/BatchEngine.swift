@@ -52,6 +52,43 @@ private func cancelledGenerationStream(
     return stream
 }
 
+private final class PrefillProgressAccumulator: @unchecked Sendable {
+    private let continuation: AsyncStream<BatchGeneration>.Continuation
+    private let completedBeforePrefill: Int
+    private let totalPromptUnits: Int
+    private let lock = NSLock()
+    private var lastReportedCompleted: Int
+
+    init(
+        continuation: AsyncStream<BatchGeneration>.Continuation,
+        completedBeforePrefill: Int,
+        totalPromptUnits: Int
+    ) {
+        self.continuation = continuation
+        self.completedBeforePrefill = completedBeforePrefill
+        self.totalPromptUnits = totalPromptUnits
+        self.lastReportedCompleted = completedBeforePrefill
+    }
+
+    func report(completedInPrepare: Int) {
+        let completed = min(
+            totalPromptUnits,
+            completedBeforePrefill + max(0, completedInPrepare))
+        lock.lock()
+        guard completed > lastReportedCompleted else {
+            lock.unlock()
+            return
+        }
+        lastReportedCompleted = completed
+        lock.unlock()
+        continuation.yield(.prefillProgress(PrefillProgress(
+            stage: .prefill,
+            completedUnitCount: completed,
+            totalUnitCount: totalPromptUnits,
+            detail: "chunk")))
+    }
+}
+
 private func debugLogReasoningPromptTail(
     modelName: String,
     promptTail: String?,
@@ -621,6 +658,8 @@ public actor BatchEngine {
                     emitChunkThroughStop(text)
                 case .reasoning:
                     continuation.yield(event)
+                case .prefillProgress:
+                    continuation.yield(event)
                 case .toolCall:
                     continuation.yield(event)
                 case .info:
@@ -716,6 +755,8 @@ public actor BatchEngine {
 
             for await event in tokenStream {
                 switch event {
+                case .prefillProgress(let progress):
+                    continuation.yield(.prefillProgress(progress))
                 case .token(let id):
                     generatedTokenCount += 1
                     detokenizer.append(token: id)
@@ -882,6 +923,13 @@ public actor BatchEngine {
         context.jangPressRuntime.recordPromptTokenActivity(
             input.text.tokens.reshaped(-1).asArray(Int.self))
 
+        let (outStream, continuation) = AsyncStream<Generation>.makeStream()
+        continuation.yield(.prefillProgress(PrefillProgress(
+            stage: .queued,
+            completedUnitCount: 0,
+            totalUnitCount: promptTokenCount,
+            detail: "solo")))
+
         let sourceStream: AsyncStream<Generation>
         let generationTask: Task<Void, Never>
         do {
@@ -914,7 +962,10 @@ public actor BatchEngine {
                     cache: nil,
                     parameters: soloParameters,
                     cacheCoordinator: cacheCoordinator,
-                    disableDiskBackedRequiredToolRestore: disableDiskBackedRequiredToolRestore)
+                    disableDiskBackedRequiredToolRestore: disableDiskBackedRequiredToolRestore,
+                    prefillProgressHandler: { progress in
+                        continuation.yield(.prefillProgress(progress))
+                    })
                 (sourceStream, generationTask) = generateTask(
                     promptTokenCount: promptTokenCount,
                     modelConfiguration: context.configuration,
@@ -928,13 +979,20 @@ public actor BatchEngine {
             Self.logger.error(
                 "Solo fast path setup failed: \(error.localizedDescription, privacy: .public)"
             )
-            return cancelledGenerationStream(promptTokenCount: promptTokenCount)
+            continuation.yield(.info(GenerateCompletionInfo(
+                promptTokenCount: promptTokenCount,
+                generationTokenCount: 0,
+                promptTime: 0,
+                generationTime: 0,
+                stopReason: .cancelled
+            )))
+            continuation.finish()
+            return outStream
         }
 
         soloFastPathID = fastPathID
         soloFastPathTask = generationTask
 
-        let (outStream, continuation) = AsyncStream<Generation>.makeStream()
         continuation.onTermination = { @Sendable _ in
             generationTask.cancel()
         }
@@ -1239,6 +1297,11 @@ public actor BatchEngine {
             }
 
             let slot = BatchSlot(from: request, cache: cache, stopTokenIDs: stopTokenIDs)
+            slot.continuation.yield(.prefillProgress(PrefillProgress(
+                stage: .queued,
+                completedUnitCount: 0,
+                totalUnitCount: slot.promptTokenCount,
+                detail: "admitted")))
             activeSlots.append(slot)
             activeCountHighWatermark = max(activeCountHighWatermark, activeSlots.count)
         }
@@ -1302,6 +1365,12 @@ public actor BatchEngine {
     /// After prefill, samples the first decode token and transitions the slot to `.decode`.
     private func stepPrefill(slotIndex: Int) {
         var slot = activeSlots[slotIndex]
+        let totalPromptUnits = max(0, slot.promptTokenCount)
+        slot.continuation.yield(.prefillProgress(PrefillProgress(
+            stage: .cacheLookup,
+            completedUnitCount: 0,
+            totalUnitCount: totalPromptUnits,
+            detail: cacheCoordinator == nil ? "disabled" : "checking")))
 
         // Check multi-tier cache for a prefix match before running full prefill.
         // On cache hit, restore KV state and only prefill remaining tokens.
@@ -1363,6 +1432,11 @@ public actor BatchEngine {
                                 restoreSSMStates(ssm, into: slot.cache)
                             }
                             restored = true
+                            slot.continuation.yield(.prefillProgress(PrefillProgress(
+                                stage: .cacheRestore,
+                                completedUnitCount: min(restoredTokens, totalPromptUnits),
+                                totalUnitCount: totalPromptUnits,
+                                detail: detail.rawValue)))
                             Self.logger.info(
                                 "Cache \(detail.rawValue) hit for slot \(slot.id): restored \(restoredTokens) tokens, prefilling \(remaining.count) remaining"
                             )
@@ -1399,6 +1473,11 @@ public actor BatchEngine {
                             // commits before prefill encoding starts.
                             MLX.eval(slot.cache)
                             restored = true
+                            slot.continuation.yield(.prefillProgress(PrefillProgress(
+                                stage: .cacheRestore,
+                                completedUnitCount: min(diskRestored, totalPromptUnits),
+                                totalUnitCount: totalPromptUnits,
+                                detail: detail.rawValue)))
                             Self.logger.info(
                                 "Cache \(detail.rawValue) hit for slot \(slot.id): restored \(diskRestored) tokens from disk, prefilling \(remaining.count) remaining"
                             )
@@ -1570,16 +1649,33 @@ public actor BatchEngine {
     ) {
         var slot = initialSlot ?? activeSlots[slotIndex]
 
+        let totalPromptUnits = max(0, slot.promptTokenCount)
+        let remainingPromptUnits = max(0, inputForPrepare.text.tokens.size)
+        slot.continuation.yield(.prefillProgress(PrefillProgress(
+            stage: .prefill,
+            completedUnitCount: max(0, totalPromptUnits - remainingPromptUnits),
+            totalUnitCount: totalPromptUnits,
+            detail: "running")))
+
         // Prefill: either full input (cache miss) or remaining tokens (cache hit).
         let prepareResult: PrepareResult
         do {
-            prepareResult = try context.model.prepare(
-                inputForPrepare,
-                cache: slot.cache,
-                windowSize: effectivePrefillWindow(
-                    requested: slot.prefillStepSize,
-                    input: inputForPrepare,
-                    cache: slot.cache))
+            let completedBeforePrefill = max(0, totalPromptUnits - remainingPromptUnits)
+            let progressAccumulator = PrefillProgressAccumulator(
+                continuation: slot.continuation,
+                completedBeforePrefill: completedBeforePrefill,
+                totalPromptUnits: totalPromptUnits)
+            prepareResult = try PrefillProgressReporter.$current.withValue({
+                progressAccumulator.report(completedInPrepare: $0)
+            }) {
+                try context.model.prepare(
+                    inputForPrepare,
+                    cache: slot.cache,
+                    windowSize: effectivePrefillWindow(
+                        requested: slot.prefillStepSize,
+                        input: inputForPrepare,
+                        cache: slot.cache))
+            }
         } catch {
             // Prefill failed (e.g., invalid input) — finish with cancellation
             finishSlot(slot, reason: .cancelled)
@@ -1587,6 +1683,12 @@ public actor BatchEngine {
             activeSlots[slotIndex] = slot
             return
         }
+
+        slot.continuation.yield(.prefillProgress(PrefillProgress(
+            stage: .complete,
+            completedUnitCount: totalPromptUnits,
+            totalUnitCount: totalPromptUnits,
+            detail: "decode_ready")))
 
         // Extract the first generated token from the prepare result
         let firstToken: MLXArray
