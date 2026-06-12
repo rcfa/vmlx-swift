@@ -10,6 +10,7 @@ import Foundation
 import MLX
 import Testing
 
+@testable import MLXLLM
 @testable import MLXLMCommon
 
 // MARK: - Ordered KV read APIs (Task 1)
@@ -157,6 +158,168 @@ func testStableConfidentStopper() {
     #expect(stopper.shouldStop(argmaxCanvas: canvasB, meanEntropy: 0.5) == false)
     // Stable and confident → stop.
     #expect(stopper.shouldStop(argmaxCanvas: canvasB, meanEntropy: 0.0001) == true)
+}
+
+// MARK: - DiffusionGemma model family (Task 3)
+
+/// Tiny configuration that exercises every diffusion code path: one sliding
+/// + one full-attention layer, MoE routing, K=V full attention, canvas of 8.
+private func tinyDiffusionGemmaConfiguration() throws -> DiffusionGemmaConfiguration {
+    let json = """
+        {
+          "model_type": "diffusion_gemma",
+          "canvas_length": 8,
+          "eos_token_id": [1, 7],
+          "image_token_id": 60,
+          "text_config": {
+            "model_type": "diffusion_gemma_text",
+            "vocab_size": 64,
+            "hidden_size": 8,
+            "intermediate_size": 16,
+            "moe_intermediate_size": 8,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "num_global_key_value_heads": 1,
+            "head_dim": 4,
+            "global_head_dim": 4,
+            "num_experts": 4,
+            "top_k_experts": 2,
+            "sliding_window": 4,
+            "layer_types": ["sliding_attention", "full_attention"],
+            "final_logit_softcapping": 30.0,
+            "rms_norm_eps": 1e-6,
+            "pad_token_id": 0,
+            "rope_parameters": {
+              "sliding_attention": {"rope_type": "default", "rope_theta": 10000.0},
+              "full_attention": {
+                "rope_type": "proportional",
+                "partial_rotary_factor": 0.25,
+                "rope_theta": 1000000.0
+              }
+            }
+          }
+        }
+        """
+    return try JSONDecoder().decode(
+        DiffusionGemmaConfiguration.self, from: Data(json.utf8))
+}
+
+@Test(.serialized)
+func testDiffusionGemmaCacheTopologyAndDefaults() async throws {
+    let mlxTestLock = lockSerializedMLXTest()
+    defer { mlxTestLock.unlock() }
+
+    let config = try tinyDiffusionGemmaConfiguration()
+    let model = DiffusionGemmaModel(config)
+
+    let cache = model.newCache(parameters: nil)
+    #expect(cache.count == 2)
+    let sliding = try #require(cache[0] as? RotatingKVCache)
+    #expect(sliding.maxSize == 4)
+    #expect(cache[1] is KVCacheSimple)
+
+    let defaults = model.blockDiffusionDefaults
+    #expect(defaults.canvasLength == 8)
+    #expect(defaults.eosTokenIds == Set([1, 7]))
+    #expect(defaults.padTokenId == 0)
+    #expect(model.diffusionVocabularySize == 64)
+}
+
+@Test(.serialized)
+func testDiffusionGemmaPrepareThrowsARGuard() async throws {
+    let mlxTestLock = lockSerializedMLXTest()
+    defer { mlxTestLock.unlock() }
+
+    let config = try tinyDiffusionGemmaConfiguration()
+    let model = DiffusionGemmaModel(config)
+    let input = LMInput(text: .init(tokens: MLXArray([1, 2, 3].map { Int32($0) })))
+
+    #expect(throws: BlockDiffusionModelError.self) {
+        _ = try model.prepare(input, cache: model.newCache(parameters: nil), windowSize: 512)
+    }
+}
+
+@Test(.serialized)
+func testDiffusionGemmaSanitize() async throws {
+    let mlxTestLock = lockSerializedMLXTest()
+    defer { mlxTestLock.unlock() }
+
+    let weights: [String: MLXArray] = [
+        // Fused experts (E=4, out=2*8, in=8) → split into gate/up halves.
+        "model.decoder.layers.0.experts.gate_up_proj.weight": MLXArray.zeros([4, 16, 8]),
+        "model.decoder.layers.0.experts.gate_up_proj.scales": MLXArray.zeros([4, 16, 2]),
+        "model.decoder.layers.0.experts.down_proj.weight": MLXArray.zeros([4, 8, 8]),
+        // Encoder side: keep scalars, drop vision tower / embedder.
+        "model.encoder.language_model.layers.0.layer_scalar": MLXArray.ones([1]),
+        "model.encoder.vision_tower.patch_embedder.input_proj.weight": MLXArray.zeros([4, 4]),
+        "model.encoder.embed_vision.embedding_projection.weight": MLXArray.zeros([4, 4]),
+        // Ordinary decoder weight passes through unchanged.
+        "model.decoder.layers.0.self_attn.q_proj.weight": MLXArray.zeros([8, 8]),
+    ]
+
+    let config = try tinyDiffusionGemmaConfiguration()
+    let model = DiffusionGemmaModel(config)
+    let sanitized = model.sanitize(weights: weights)
+
+    let gate = try #require(
+        sanitized["model.decoder.layers.0.experts.switch_glu.gate_proj.weight"])
+    #expect(gate.shape == [4, 8, 8])
+    let up = try #require(
+        sanitized["model.decoder.layers.0.experts.switch_glu.up_proj.weight"])
+    #expect(up.shape == [4, 8, 8])
+    let gateScales = try #require(
+        sanitized["model.decoder.layers.0.experts.switch_glu.gate_proj.scales"])
+    #expect(gateScales.shape == [4, 8, 2])
+    #expect(sanitized["model.decoder.layers.0.experts.switch_glu.down_proj.weight"] != nil)
+    #expect(sanitized["model.decoder.layers.0.experts.gate_up_proj.weight"] == nil)
+    #expect(sanitized["model.decoder.layers.0.experts.down_proj.weight"] == nil)
+
+    #expect(sanitized["model.encoder.language_model.layers.0.layer_scalar"] != nil)
+    #expect(
+        sanitized["model.encoder.vision_tower.patch_embedder.input_proj.weight"] == nil)
+    #expect(
+        sanitized["model.encoder.embed_vision.embedding_projection.weight"] == nil)
+    #expect(sanitized["model.decoder.layers.0.self_attn.q_proj.weight"] != nil)
+}
+
+@Test(.serialized)
+func testDiffusionGemmaEncoderDecoderForward() async throws {
+    let mlxTestLock = lockSerializedMLXTest()
+    defer { mlxTestLock.unlock() }
+
+    let config = try tinyDiffusionGemmaConfiguration()
+    let model = DiffusionGemmaModel(config)
+    let cache = model.newCache(parameters: nil)
+
+    // Encoder prefill: 6 tokens > sliding window 4, so the rotating cache
+    // wraps and the decoder read path must reorder it.
+    let prompt = MLXArray([3, 4, 5, 6, 7, 8].map { Int32($0) }).expandedDimensions(axis: 0)
+    model.encoderForward(prompt, cache: cache)
+    #expect(cache[0].offset == 6)
+    #expect(cache[1].offset == 6)
+
+    // Decoder forward returns [1, C, V] and must NOT mutate the cache.
+    let canvas = MLXArray((0 ..< 8).map { Int32($0 % 64) }).expandedDimensions(axis: 0)
+    let logits = model.decoderForward(
+        canvas: canvas, cache: cache, selfConditioningLogits: nil)
+    #expect(logits.shape == [1, 8, 64])
+    // Softcap bound holds (forces materialization of the graph).
+    #expect(abs(logits).max().item(Float.self) <= 30.0)
+    #expect(cache[0].offset == 6)
+    #expect(cache[1].offset == 6)
+
+    // Self-conditioning must influence the logits.
+    let conditioned = model.decoderForward(
+        canvas: canvas, cache: cache, selfConditioningLogits: logits)
+    #expect(conditioned.shape == [1, 8, 64])
+    let difference = abs(conditioned - logits).max().item(Float.self)
+    #expect(difference > 1e-4)
+
+    // A second encoder append (the finalized canvas) advances the cache.
+    model.encoderForward(canvas, cache: cache)
+    #expect(cache[0].offset == 14)
+    #expect(cache[1].offset == 14)
 }
 
 // MARK: - generation_config.json diffusion fields (Task 4)
