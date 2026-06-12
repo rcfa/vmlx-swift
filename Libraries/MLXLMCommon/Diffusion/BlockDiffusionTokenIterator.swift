@@ -99,6 +99,17 @@ public struct BlockDiffusionTokenIterator: TokenIteratorProtocol {
         // trim-and-replay because the decoder reads the cache directly —
         // the prompt-boundary state is exactly the state the canvas loop
         // wants.
+        //
+        // Rotating sliding-window layers cannot round-trip through paged KV
+        // blocks (ring/rotation metadata is disk-serialized via LayerKind),
+        // so the coordinator must skip the paged tier and serve hits from
+        // the disk tier — same contract as the AR iterators.
+        if let coordinator = cacheCoordinator,
+            !coordinator.isPagedIncompatible,
+            cacheRequiresDiskBackedCoordinatorRestore(self.cache)
+        {
+            coordinator.setPagedIncompatible(true)
+        }
         var tokensToEncode = promptTokenIds
         if let coordinator = cacheCoordinator,
             !input.requiresPostPrepareCacheKey,
@@ -303,8 +314,16 @@ public struct BlockDiffusionTokenIterator: TokenIteratorProtocol {
         }
 
         let cacheSnapshot = promptCacheSnapshot.map { $0.copy() }
-        MLX.eval(cacheSnapshot)
-        let perLayerData = extractLayerData(from: cacheSnapshot)
+        let requiresDiskBackedRestore =
+            cacheRequiresDiskBackedCoordinatorRestore(cacheSnapshot)
+        if !requiresDiskBackedRestore {
+            MLX.eval(cacheSnapshot)
+        }
+        // Rotating layers only round-trip through the disk tier (LayerKind
+        // serialization); paged KV blocks cannot represent them, so skip
+        // the paged store for that topology — same as the AR iterators.
+        let perLayerData =
+            requiresDiskBackedRestore ? [] : extractLayerData(from: cacheSnapshot)
         let diskStoreCache = makeDiskStoreCache(
             fromPromptBoundary: cacheSnapshot,
             parameters: cacheInitParameters)
