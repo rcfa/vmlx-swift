@@ -3,6 +3,30 @@
 See `~/AGENTS.md` for the global Codex environment, wiki protocol, hard rules,
 machine context, and useful commands.
 
+## Active Focus: Gemma 4 QAT Correctness Checkpoint
+
+Until this lane is merged and consumed by Osaurus, focus only on the Gemma 4
+QAT MXFP4/JANG_4M correctness checkpoint:
+
+- Default model loading must not enable the paged RAM KV cache. Paged RAM cache
+  may still be exercised by explicit benchmark or regression-test settings, but
+  ordinary single-batch chat/server loads should start with it off.
+- Gemma JANG_4M and MXFP4 QAT bundles must load and run through the real
+  Osaurus/vMLX runtime path with bundle-driven generation config, parser/tool
+  fixes, no protocol marker leakage, and no prompt or sampler masking.
+- Cache claims must match telemetry. If the runtime reports rotating KV plus
+  disk-backed restore and `turbo_quant_kv_layer_count=0`, do not claim a
+  TurboQuant-KV-layer topology; report the effective KV mode, prefix/paged/L2
+  counters, and disk-backed restore state exactly.
+- Add real prefill progress telemetry so Osaurus can show prompt-processing
+  percentage during long first-token waits. Progress must come from runtime
+  prefill/cache/media stages, not from a UI timer guess.
+- Defer raw speed benchmarking and Gemma4 audio support until after the
+  correctness PR. Do not load or benchmark BF16/source Gemma bundles for this
+  checkpoint.
+- Keep progress and remaining proof in the repo docs before claiming the PR is
+  merge-ready. This branch is not a broad model-runtime cleanup lane.
+
 ## MLXPress Non-Negotiables
 
 For any MLXPress, JANGTQ, cache-stack, model-runtime, or Osaurus-facing work,
