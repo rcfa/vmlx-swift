@@ -620,6 +620,27 @@ struct Bench {
             try await runBatchEngineDiskRestore(modelPath: modelPath, maxNew: maxNew)
             return
         }
+
+        // BENCH_SOLO_DISK_RESTORE=1: disk (L2/SSD) round-trip through
+        // `BatchEngine.generate` — the solo fast path. This is the
+        // disk-persistence row for exclusive-solo models (block diffusion,
+        // native MTP) that cannot run on the batched `submit` path the
+        // iter-35 bench uses.
+        if (env["BENCH_SOLO_DISK_RESTORE"] ?? "0") == "1" {
+            try await runSoloDiskRestore(modelPath: modelPath, maxNew: maxNew)
+            return
+        }
+
+        // BENCH_SOLO_LONGFORM=1: single long-form generation through
+        // `BatchEngine.generate` (solo path) with the real chat template.
+        // For block-diffusion models the [BlockDiffusion] stderr line
+        // reports canvases / denoising forwards / tokens-per-forward —
+        // the honest long-form throughput metric. BENCH_PROMPT overrides
+        // the default essay prompt.
+        if (env["BENCH_SOLO_LONGFORM"] ?? "0") == "1" {
+            try await runSoloLongform(modelPath: modelPath, maxNew: maxNew)
+            return
+        }
         if (env["BENCH_GROWING_CHAT_CACHE"] ?? "0") == "1" {
             do {
                 try await runGrowingChatCacheReuse(modelPath: modelPath, maxNew: maxNew)
@@ -2200,6 +2221,180 @@ func runBatchEngineCacheHit(modelPath: String, maxNew: Int) async throws {
 /// This is the single strongest "does it survive process restart?"
 /// property. Paged (RAM) coordinator state disappears at process exit;
 /// only the disk tier persists.
+/// Disk (L2) round-trip through `BatchEngine.generate` — the solo fast
+/// path used by exclusive-solo models (block diffusion, native MTP).
+/// Session 1 generates and stores at the prompt boundary; the coordinator
+/// is dropped and a FRESH one is built on the same disk dir; the probe
+/// must hit the disk tier and session 2 must generate normally.
+/// Single long-form generation through the BatchEngine solo path with the
+/// real chat template. Reports wall/decode tok/s from the stream timing;
+/// block-diffusion models additionally print their [BlockDiffusion] stats
+/// line (canvases, denoising forwards, tokens-per-forward) on stderr.
+func runSoloLongform(modelPath: String, maxNew: Int) async throws {
+    let modelDir = URL(fileURLWithPath: modelPath)
+    print("\n=== Solo long-form generation ===")
+    let loadStart = CFAbsoluteTimeGetCurrent()
+    let context = try await loadBenchModelContext(from: modelDir)
+    print(String(format: "Load: %.2fs", CFAbsoluteTimeGetCurrent() - loadStart))
+    print("Model: \(type(of: context.model))")
+
+    let prompt = ProcessInfo.processInfo.environment["BENCH_PROMPT"]
+        ?? "Write a detailed multi-paragraph essay (at least 500 words) about the history of the Internet, from ARPANET to the modern web. Include specific milestones and dates."
+    var params = GenerateParameters(
+        maxTokens: maxNew, temperature: 0, prefillStepSize: 512)
+    // Speed/quality slider probe: override the bundle's denoising budget
+    // per request, the same way an app-level setting would.
+    if let stepsRaw = ProcessInfo.processInfo.environment["BENCH_DIFFUSION_STEPS"],
+        let steps = Int(stepsRaw)
+    {
+        params.diffusionMaxDenoisingSteps = steps
+        print("  diffusionMaxDenoisingSteps override: \(steps)")
+    }
+
+    let input = try await context.processor.prepare(input: UserInput(prompt: prompt))
+    let promptTokens = input.text.tokens.size
+    nonisolated(unsafe) let ctx = context
+    let engine = BatchEngine(context: ctx, maxBatchSize: 1)
+    nonisolated(unsafe) let sendable = input
+
+    var text = ""
+    var generationTokens = 0
+    var firstChunkAt: Double? = nil
+    let t0 = CFAbsoluteTimeGetCurrent()
+    let stream = await engine.generate(input: sendable, parameters: params)
+    for await event in stream {
+        switch event {
+        case .chunk(let chunk):
+            if firstChunkAt == nil { firstChunkAt = CFAbsoluteTimeGetCurrent() - t0 }
+            text += chunk
+        case .info(let info):
+            generationTokens = info.generationTokenCount
+        default:
+            break
+        }
+    }
+    let wall = CFAbsoluteTimeGetCurrent() - t0
+    await engine.shutdown()
+
+    let charCount = text.count
+    print(String(format:
+        "  prompt=%d genTokens=%d wall=%.2fs TTFT=%.2fs wallTokPerSec=%.1f chars=%d",
+        promptTokens, generationTokens, wall, firstChunkAt ?? 0,
+        Double(generationTokens) / max(wall, 0.001), charCount))
+    let preview = text.count > 700 ? String(text.prefix(700)) + "…" : text
+    print("  TEXT:\n\(preview)")
+    print("\n=== Solo long-form done ===")
+}
+
+func runSoloDiskRestore(modelPath: String, maxNew: Int) async throws {
+    let modelDir = URL(fileURLWithPath: modelPath)
+    print("\n=== Solo-path disk-restore verification ===")
+    let loadStart = CFAbsoluteTimeGetCurrent()
+    let context = try await loadBenchModelContext(from: modelDir)
+    print(String(format: "Load: %.2fs", CFAbsoluteTimeGetCurrent() - loadStart))
+    print("Model: \(type(of: context.model))")
+
+    let diskDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("vmlx-bench-solo-disk-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: diskDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: diskDir) }
+
+    func makeCoordinator() -> CacheCoordinator {
+        var cfg = CacheCoordinatorConfig()
+        cfg.usePagedCache = true
+        cfg.enableDiskCache = true
+        cfg.diskCacheDir = diskDir
+        cfg.pagedBlockSize = 64
+        cfg.maxCacheBlocks = 512
+        cfg.modelKey = modelDir.lastPathComponent
+        return CacheCoordinator(config: cfg)
+    }
+
+    let params = GenerateParameters(
+        maxTokens: maxNew, temperature: 0, prefillStepSize: 512)
+
+    let basePrompt = String(repeating: """
+        You are a careful assistant. Facts to remember across turns: \
+        the sky is blue, grass is green, roses are red, oceans are \
+        deep, fire is hot. Answer concisely and precisely.
+        """, count: 3) + " Q: What is the colour of the sky?"
+
+    let turn1Input = try await context.processor.prepare(
+        input: UserInput(prompt: basePrompt))
+    let promptTokens = turn1Input.text.tokens.reshaped(-1).asArray(Int.self)
+
+    func runSession(
+        engine: BatchEngine, input: consuming sending LMInput, label: String
+    ) async -> Int {
+        var text = ""
+        var generated = 0
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let stream = await engine.generate(input: input, parameters: params)
+        for await event in stream {
+            switch event {
+            case .chunk(let chunk):
+                text += chunk
+                generated += 1
+            default:
+                break
+            }
+        }
+        let wall = CFAbsoluteTimeGetCurrent() - t0
+        let preview = text.count > 160 ? String(text.prefix(160)) + "..." : text
+        print(String(format: "  %@: chunks=%d wall=%.2fs", label, generated, wall))
+    print("    TEXT: \"\(preview)\"")
+        return generated
+    }
+
+    // --- Session 1: cold, writes the prompt boundary to disk -----------
+    nonisolated(unsafe) let ctx1 = context
+    let coordA = makeCoordinator()
+    let engineA = BatchEngine(context: ctx1, maxBatchSize: 1, cacheCoordinator: coordA)
+    nonisolated(unsafe) let in1 = turn1Input
+    let chunks1 = await runSession(engine: engineA, input: in1, label: "Session 1 (cold)")
+    await engineA.shutdown()
+    await Task.yield()
+
+    if chunks1 == 0 {
+        fputs("[SoloDiskRestore] FAIL: session 1 produced no output.\n", stderr)
+        exit(1)
+    }
+
+    // --- Session 2: fresh coordinator on the same disk dir -------------
+    let coordB = makeCoordinator()
+    let tokens2 = MLXArray(promptTokens.map { Int32($0) })[.newAxis, .ellipsis]
+    let turn2Input = LMInput(
+        text: LMInput.Text(tokens: tokens2), image: nil, video: nil,
+        cacheScopeSalt: turn1Input.cacheScopeSalt)
+    let mediaSalt2 = computeCacheSalt(for: turn2Input, parameters: params)
+
+    switch coordB.fetch(tokens: promptTokens, mediaSalt: mediaSalt2) {
+    case .hit(let matched, _, let detail, let blocks, _, let disk):
+        coordB.release(blocks: blocks)
+        print("  Coord B probe: HIT (\(detail.rawValue), matched=\(matched)/\(promptTokens.count), diskArrays=\(disk != nil ? "yes" : "no"))")
+        if detail != .disk {
+            fputs("[SoloDiskRestore] FAIL: probe hit \(detail.rawValue), not disk.\n", stderr)
+            exit(1)
+        }
+    case .miss:
+        fputs("[SoloDiskRestore] FAIL: fresh coordinator at same disk dir returned .miss.\n", stderr)
+        exit(1)
+    }
+
+    nonisolated(unsafe) let ctx2 = context
+    let engineB = BatchEngine(context: ctx2, maxBatchSize: 1, cacheCoordinator: coordB)
+    nonisolated(unsafe) let in2 = turn2Input
+    let chunks2 = await runSession(engine: engineB, input: in2, label: "Session 2 (warm from disk)")
+    await engineB.shutdown()
+
+    if chunks2 == 0 {
+        fputs("[SoloDiskRestore] FAIL: session 2 produced no output after disk hit.\n", stderr)
+        exit(1)
+    }
+    print("  OK — disk tier round-tripped across coordinator instances on the solo path.")
+    print("\n=== Solo-path disk-restore done ===")
+}
+
 func runBatchEngineDiskRestore(modelPath: String, maxNew: Int) async throws {
     let modelDir = URL(fileURLWithPath: modelPath)
     print("\n=== BatchEngine disk-restore verification (iter 35) ===")

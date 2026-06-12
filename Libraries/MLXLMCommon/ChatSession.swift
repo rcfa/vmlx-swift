@@ -430,19 +430,42 @@ public final class ChatSession {
                             .withToolSchemas(tools)
                         messages.removeAll()
 
-                        // generate output
-                        let iterator = try TokenIterator(
-                            input: input, model: model, cache: kvCache,
-                            parameters: generateParameters,
-                            cacheCoordinator: cacheCoordinator)
-
-                        let (stream, task) = MLXLMCommon.generateTask(
-                            promptTokenCount: input.text.tokens.size,
-                            modelConfiguration: modelConfiguration,
-                            tokenizer: tokenizer,
-                            iterator: iterator,
-                            toolSchemas: input.toolSchemas
-                        )
+                        // generate output — block-diffusion models (e.g.
+                        // diffusion_gemma) use their dedicated iterator; the
+                        // AR TokenIterator path would throw via the model's
+                        // prepare() guard.
+                        let stream: AsyncStream<Generation>
+                        let task: Task<Void, Never>
+                        if let diffusionModel = model as? any BlockDiffusionModel {
+                            let options = diffusionModel.blockDiffusionDefaults
+                                .resolving(
+                                    generationConfig: modelConfiguration.generationDefaults)
+                                .overriding(parameters: generateParameters)
+                            let iterator = try BlockDiffusionTokenIterator(
+                                input: input, model: diffusionModel, cache: kvCache,
+                                parameters: generateParameters,
+                                options: options,
+                                cacheCoordinator: cacheCoordinator)
+                            (stream, task) = MLXLMCommon.generateTask(
+                                promptTokenCount: input.text.tokens.size,
+                                modelConfiguration: modelConfiguration,
+                                tokenizer: tokenizer,
+                                iterator: iterator,
+                                toolSchemas: input.toolSchemas
+                            )
+                        } else {
+                            let iterator = try TokenIterator(
+                                input: input, model: model, cache: kvCache,
+                                parameters: generateParameters,
+                                cacheCoordinator: cacheCoordinator)
+                            (stream, task) = MLXLMCommon.generateTask(
+                                promptTokenCount: input.text.tokens.size,
+                                modelConfiguration: modelConfiguration,
+                                tokenizer: tokenizer,
+                                iterator: iterator,
+                                toolSchemas: input.toolSchemas
+                            )
+                        }
 
                         var pendingToolCalls: [ToolCall] = []
 

@@ -323,6 +323,12 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         if compact.hasPrefix("gemma4") {
             return .gemma4
         }
+
+        // DiffusionGemma reuses the Gemma-4 chat template family:
+        // `<|tool_call>call:name{...}<tool_call|>` envelopes.
+        if compact.hasPrefix("diffusiongemma") {
+            return .gemma4
+        }
         if compact.hasPrefix("gemma3n") {
             return nil
         }
@@ -590,6 +596,10 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
         case "gemma":
             return .gemma
         case "gemma4", "gemma4_unified", "gemma4_unified_text":
+            return .gemma4
+        // DiffusionGemma reuses the Gemma-4 chat template family:
+        // `<|tool_call>call:name{...}<tool_call|>` envelopes.
+        case "diffusion_gemma", "diffusion_gemma_text":
             return .gemma4
         // Mistral 4 — `[TOOL_CALLS] … [ARGS] …` JSON delimiters.
         case "mistral", "mistral4":

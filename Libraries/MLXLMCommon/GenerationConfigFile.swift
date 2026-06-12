@@ -18,6 +18,29 @@ public struct GenerationConfigFile: Codable, Equatable, Sendable {
     public var doSample: Bool?
     public var suppressTokens: [Int]?
 
+    // Block-diffusion fields (DiffusionGemma). HF serializes the sampler
+    // config as a nested object with a `_cls_name` discriminator; only the
+    // payload values are decoded here.
+    public var maxDenoisingSteps: Int?
+    public var tMin: Float?
+    public var tMax: Float?
+    public var stabilityThreshold: Int?
+    public var confidenceThreshold: Float?
+    public var padTokenId: Int?
+    public var samplerConfig: SamplerConfig?
+
+    public struct SamplerConfig: Codable, Equatable, Sendable {
+        public var entropyBound: Float?
+
+        public init(entropyBound: Float? = nil) {
+            self.entropyBound = entropyBound
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case entropyBound = "entropy_bound"
+        }
+    }
+
     public init(
         eosTokenIds: IntOrIntArray? = nil,
         maxNewTokens: Int? = nil,
@@ -27,7 +50,14 @@ public struct GenerationConfigFile: Codable, Equatable, Sendable {
         minP: Float? = nil,
         repetitionPenalty: Float? = nil,
         doSample: Bool? = nil,
-        suppressTokens: [Int]? = nil
+        suppressTokens: [Int]? = nil,
+        maxDenoisingSteps: Int? = nil,
+        tMin: Float? = nil,
+        tMax: Float? = nil,
+        stabilityThreshold: Int? = nil,
+        confidenceThreshold: Float? = nil,
+        padTokenId: Int? = nil,
+        samplerConfig: SamplerConfig? = nil
     ) {
         self.eosTokenIds = eosTokenIds
         self.maxNewTokens = maxNewTokens
@@ -38,6 +68,13 @@ public struct GenerationConfigFile: Codable, Equatable, Sendable {
         self.repetitionPenalty = repetitionPenalty
         self.doSample = doSample
         self.suppressTokens = suppressTokens
+        self.maxDenoisingSteps = maxDenoisingSteps
+        self.tMin = tMin
+        self.tMax = tMax
+        self.stabilityThreshold = stabilityThreshold
+        self.confidenceThreshold = confidenceThreshold
+        self.padTokenId = padTokenId
+        self.samplerConfig = samplerConfig
     }
 
     enum CodingKeys: String, CodingKey {
@@ -50,6 +87,13 @@ public struct GenerationConfigFile: Codable, Equatable, Sendable {
         case repetitionPenalty = "repetition_penalty"
         case doSample = "do_sample"
         case suppressTokens = "suppress_tokens"
+        case maxDenoisingSteps = "max_denoising_steps"
+        case tMin = "t_min"
+        case tMax = "t_max"
+        case stabilityThreshold = "stability_threshold"
+        case confidenceThreshold = "confidence_threshold"
+        case padTokenId = "pad_token_id"
+        case samplerConfig = "sampler_config"
     }
 }
 

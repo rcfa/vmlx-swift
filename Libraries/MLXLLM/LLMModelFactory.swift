@@ -36,6 +36,9 @@ public enum LLMTypeRegistry {
             "gemma4_text": create(Gemma4TextConfiguration.self, Gemma4TextModel.init),
             "gemma4_unified": create(Gemma4TextConfiguration.self, Gemma4TextModel.init),
             "gemma4_unified_text": create(Gemma4TextConfiguration.self, Gemma4TextModel.init),
+            // Block-diffusion family — generation runs through
+            // BlockDiffusionTokenIterator, never the AR TokenIterator.
+            "diffusion_gemma": create(DiffusionGemmaConfiguration.self, DiffusionGemmaModel.init),
             "qwen2": create(Qwen2Configuration.self, Qwen2Model.init),
             "qwen3": create(Qwen3Configuration.self, Qwen3Model.init),
             "qwen3_moe": create(Qwen3MoEConfiguration.self, Qwen3MoEModel.init),
