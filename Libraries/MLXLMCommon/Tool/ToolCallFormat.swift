@@ -184,6 +184,16 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
 
     // MARK: - Factory Methods
 
+    /// Whether this format wraps tool calls in literal control markers that
+    /// would leak as visible text if not stripped. Used to decide whether a
+    /// strip-only ``ToolCallProcessor`` is needed when a request offers no
+    /// tools but the model may still emit tool-call syntax (e.g. a
+    /// hallucinated call under thinking). Inline/JSON formats have no
+    /// dedicated control markers, so they are excluded.
+    public var hasTaggedToolMarkers: Bool {
+        createParser().startTag != nil
+    }
+
     /// Create the appropriate parser for this format.
     /// - Returns: A parser instance configured for this format
     public func createParser() -> any ToolCallParser {

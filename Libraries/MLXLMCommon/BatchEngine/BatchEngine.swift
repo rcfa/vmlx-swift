@@ -629,9 +629,21 @@ public actor BatchEngine {
         Task {
             var detokenizer = NaiveStreamingDetokenizer(tokenizer: tokenizer)
             let activeToolSchemas = toolSchemas?.isEmpty == false ? toolSchemas : nil
-            let toolCallProcessor = activeToolSchemas.map {
-                ToolCallProcessor(format: toolCallFormat, tools: $0)
-            }
+            let toolCallProcessor: ToolCallProcessor? = {
+                if let activeToolSchemas {
+                    return ToolCallProcessor(format: toolCallFormat, tools: activeToolSchemas)
+                }
+                // No tools offered: still strip tool-call control markers for
+                // tagged formats so a model that emits tool-call syntax anyway
+                // (e.g. a hallucinated call under thinking) cannot leak literal
+                // `<|tool_call>`/`call:` markers into visible text. Strip-only
+                // mode discards the fabricated call since none was requested.
+                if toolCallFormat.hasTaggedToolMarkers {
+                    return ToolCallProcessor(
+                        format: toolCallFormat, tools: nil, stripOnly: true)
+                }
+                return nil
+            }()
             var reasoningParser = ReasoningParser.forPrompt(
                 stampName: reasoningParserName,
                 promptTail: promptTail)
