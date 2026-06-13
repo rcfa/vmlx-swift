@@ -40,6 +40,13 @@ public struct BlockDiffusionTokenIterator: TokenIteratorProtocol {
     public var tokenCount = 0
     public var promptPrefillTime: TimeInterval = 0
     public var promptTokenIds: [Int]
+    /// Conversation-stable prompt boundaries from the processor — prefixes a
+    /// FUTURE request will actually contain. Chat templates append
+    /// generation-control tokens (e.g. the Gemma thought stub
+    /// `<|channel>thought\n<channel|>`) to the active turn but omit them when
+    /// the turn is re-rendered as history, so the full prompt boundary can
+    /// never extension-match; these boundaries can.
+    let cachePrefixTokenCounts: [Int]
 
     var promptCacheSnapshot: [KVCache]?
     private let cacheInitParameters: GenerateParameters
@@ -85,6 +92,7 @@ public struct BlockDiffusionTokenIterator: TokenIteratorProtocol {
         self.cache = cache ?? model.newCache(parameters: parameters)
         self.cacheCoordinator = cacheCoordinator
         self.promptTokenIds = promptTokenIds
+        self.cachePrefixTokenCounts = input.cachePrefixTokenCounts
         self.cacheInitParameters = parameters
         self.mediaSalt = computeCacheSalt(for: input, parameters: parameters)
         self.stopper = StableConfidentStopper(
@@ -342,6 +350,34 @@ public struct BlockDiffusionTokenIterator: TokenIteratorProtocol {
             ssmStates: nil,
             cache: diskStoreCache,
             mediaSalt: mediaSalt)
+
+        // History boundaries: store the conversation-stable prefixes so the
+        // NEXT request (which re-renders this turn without the generation
+        // suffix) can extension-hit. Rotating caches are only trimmable
+        // before their window wraps; when trimming is unavailable the
+        // boundary store is skipped gracefully.
+        for boundary in Set(cachePrefixTokenCounts).sorted()
+        where boundary > 0 && boundary < promptTokenIds.count {
+            let trimCount = promptTokenIds.count - boundary
+            let boundarySnapshot = promptCacheSnapshot.map { $0.copy() }
+            guard canTrimPromptCache(boundarySnapshot),
+                trimPromptCache(boundarySnapshot, numTokens: trimCount) == trimCount
+            else { continue }
+            MLX.eval(boundarySnapshot)
+            let boundaryTokens = Array(promptTokenIds.prefix(boundary))
+            let boundaryPerLayer =
+                cacheRequiresDiskBackedCoordinatorRestore(boundarySnapshot)
+                ? [] : extractLayerData(from: boundarySnapshot)
+            let boundaryDiskCache = makeDiskStoreCache(
+                fromPromptBoundary: boundarySnapshot,
+                parameters: cacheInitParameters)
+            coordinator.storeAfterGeneration(
+                promptTokens: boundaryTokens,
+                perLayerData: boundaryPerLayer,
+                ssmStates: nil,
+                cache: boundaryDiskCache,
+                mediaSalt: mediaSalt)
+        }
 
         reportStatsOnce()
     }
