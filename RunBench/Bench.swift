@@ -631,6 +631,18 @@ struct Bench {
             return
         }
 
+        // BENCH_PREFIX_AUDIT=1: render a turn-1 prompt (generation form)
+        // and a turn-2 prompt (completed assistant turn + next user) through
+        // the bundle's real chat template and report the first token where
+        // turn 2 diverges from turn 1's prompt. If divergence < turn-1
+        // length, prefix/disk cache extension hits are impossible for
+        // multi-turn chats of this template — that's a template-shape
+        // fact, not a cache bug.
+        if (env["BENCH_PREFIX_AUDIT"] ?? "0") == "1" {
+            try await runPrefixAudit(modelPath: modelPath)
+            return
+        }
+
         // BENCH_SOLO_LONGFORM=1: single long-form generation through
         // `BatchEngine.generate` (solo path) with the real chat template.
         // For block-diffusion models the [BlockDiffusion] stderr line
@@ -2271,6 +2283,49 @@ func runSoloLongform(modelPath: String, maxNew: Int) async throws {
     print("\n=== Solo long-form done ===")
 }
 
+func runPrefixAudit(modelPath: String) async throws {
+    let modelDir = URL(fileURLWithPath: modelPath)
+    print("\n=== Chat-template prefix audit ===")
+    let context = try await loadBenchModelContext(from: modelDir)
+
+    let system = "You are a precise local assistant. Keep answers short."
+    let user1 = "What color is grass?"
+    let reply1 = "Grass is green."
+    let user2 = "And what do lemons taste like?"
+
+    let turn1 = try await context.processor.prepare(
+        input: UserInput(chat: [
+            .system(system), .user(user1),
+        ]))
+    let turn2 = try await context.processor.prepare(
+        input: UserInput(chat: [
+            .system(system), .user(user1),
+            .assistant(reply1), .user(user2),
+        ]))
+
+    let t1 = turn1.text.tokens.reshaped(-1).asArray(Int.self)
+    let t2 = turn2.text.tokens.reshaped(-1).asArray(Int.self)
+    var divergence = 0
+    while divergence < min(t1.count, t2.count), t1[divergence] == t2[divergence] {
+        divergence += 1
+    }
+    print("  turn1 tokens: \(t1.count), turn2 tokens: \(t2.count)")
+    print("  first divergence at index \(divergence) (turn1 len \(t1.count))")
+    if divergence < t1.count {
+        let from = max(0, divergence - 6)
+        let t1Slice = Array(t1[from ..< min(t1.count, divergence + 6)])
+        let t2Slice = Array(t2[from ..< min(t2.count, divergence + 6)])
+        print("  turn1[\(from)...]: \(t1Slice)")
+        print("  turn2[\(from)...]: \(t2Slice)")
+        print("  turn1 tail decoded: \(context.tokenizer.decode(tokenIds: Array(t1[divergence...])).debugDescription)")
+        print("  turn2 same-range decoded: \(context.tokenizer.decode(tokenIds: Array(t2[divergence ..< min(t2.count, divergence + 24)])).debugDescription)")
+        print("  VERDICT: turn 2 diverges BEFORE the stored turn-1 boundary — extension hits impossible at this divergence point.")
+    } else {
+        print("  VERDICT: turn 2 extends turn 1 exactly — extension hits should land.")
+    }
+    print("\n=== Prefix audit done ===")
+}
+
 func runSoloDiskRestore(modelPath: String, maxNew: Int) async throws {
     let modelDir = URL(fileURLWithPath: modelPath)
     print("\n=== Solo-path disk-restore verification ===")
@@ -2364,6 +2419,17 @@ func runSoloDiskRestore(modelPath: String, maxNew: Int) async throws {
     case .miss:
         fputs("[SoloDiskRestore] FAIL: fresh coordinator at same disk dir returned .miss.\n", stderr)
         exit(1)
+    }
+
+    // Extension probe: a turn-2-style prompt (stored prefix + new tokens)
+    // must boundary-match the stored prompt boundary on the disk tier.
+    let extendedTokens = promptTokens + Array(repeating: 42, count: 20)
+    switch coordB.fetch(tokens: extendedTokens, mediaSalt: mediaSalt2) {
+    case .hit(let matched, let remaining, let detail, let blocks, _, _):
+        coordB.release(blocks: blocks)
+        print("  Coord B EXTENSION probe: HIT (\(detail.rawValue), matched=\(matched), remaining=\(remaining.count))")
+    case .miss:
+        print("  Coord B EXTENSION probe: MISS — boundary probing did not match the stored prefix")
     }
 
     nonisolated(unsafe) let ctx2 = context
