@@ -28,6 +28,13 @@ public class ToolCallProcessor {
 
     private let parser: any ToolCallParser
     private let tools: [[String: any Sendable]]?
+    /// When true, the processor still detects and strips tool-call control
+    /// markers from visible text, but never surfaces extracted tool calls.
+    /// Used when the model emits tool-call syntax (e.g. a hallucinated call
+    /// under thinking) while the request offered no tools — the markers are
+    /// template control tokens that must not leak, but no tool was requested
+    /// so none is reported.
+    private let stripOnly: Bool
     public let parsesToolCallsFromReasoningChannel: Bool
     public let usesTaggedOnlyReasoningExtraction: Bool
     public let preservesReasoningTextAroundToolCalls: Bool
@@ -39,6 +46,19 @@ public class ToolCallProcessor {
 
     /// The tool calls extracted during processing.
     public var toolCalls: [ToolCall] = []
+
+    /// Record extracted tool calls unless running strip-only (markers are
+    /// stripped from visible text either way; in strip-only mode the call
+    /// itself is discarded because no tools were offered).
+    private func recordToolCall(_ call: ToolCall) {
+        guard !stripOnly else { return }
+        toolCalls.append(call)
+    }
+
+    private func recordToolCalls(_ calls: [ToolCall]) {
+        guard !stripOnly else { return }
+        toolCalls.append(contentsOf: calls)
+    }
 
     // MARK: - State Enum
 
@@ -72,9 +92,14 @@ public class ToolCallProcessor {
     /// - Parameters:
     ///   - format: The tool call format to use (defaults to `.json` for standard JSON format)
     ///   - tools: Optional tool schemas for type-aware parsing
-    public init(format: ToolCallFormat = .json, tools: [[String: any Sendable]]? = nil) {
+    public init(
+        format: ToolCallFormat = .json,
+        tools: [[String: any Sendable]]? = nil,
+        stripOnly: Bool = false
+    ) {
         self.parser = format.createParser()
         self.tools = tools
+        self.stripOnly = stripOnly
         self.parsesToolCallsFromReasoningChannel = format.parsesToolCallsFromReasoningChannel
         self.usesTaggedOnlyReasoningExtraction = format.usesTaggedOnlyReasoningExtraction
         self.preservesReasoningTextAroundToolCalls =
@@ -144,7 +169,7 @@ public class ToolCallProcessor {
         }
 
         let parsed = parser.parseEOS(toolCallBuffer, tools: tools)
-        toolCalls.append(contentsOf: parsed)
+        recordToolCalls(parsed)
         let suppressUnparsedInlineToolIntent =
             parsed.isEmpty
             && state == .collectingInlineToolCall
@@ -199,7 +224,7 @@ public class ToolCallProcessor {
                 if inlineToolCallComplete(toolCallBuffer),
                     let toolCall = parser.parse(content: toolCallBuffer, tools: tools)
                 {
-                    toolCalls.append(toolCall)
+                    recordToolCall(toolCall)
                     toolCallBuffer = ""
                     state = .normal
                     suppressingTextAfterInlineToolCall = true
@@ -222,7 +247,7 @@ public class ToolCallProcessor {
                 if inlineToolCallComplete(toolCallBuffer),
                     let toolCall = parser.parse(content: toolCallBuffer, tools: tools)
                 {
-                    toolCalls.append(toolCall)
+                    recordToolCall(toolCall)
                     toolCallBuffer = ""
                     state = .normal
                     suppressingTextAfterInlineToolCall = true
@@ -243,7 +268,7 @@ public class ToolCallProcessor {
                 state = .collectingInlineToolCall
 
                 if let toolCall = parser.parse(content: toolCallBuffer, tools: tools) {
-                    toolCalls.append(toolCall)
+                    recordToolCall(toolCall)
                     toolCallBuffer = ""
                     state = .normal
                     suppressingTextAfterInlineToolCall = true
@@ -264,7 +289,7 @@ public class ToolCallProcessor {
                 state = .collectingInlineToolCall
 
                 if let toolCall = parser.parse(content: toolCallBuffer, tools: tools) {
-                    toolCalls.append(toolCall)
+                    recordToolCall(toolCall)
                     toolCallBuffer = ""
                     state = .normal
                     suppressingTextAfterInlineToolCall = true
@@ -287,7 +312,7 @@ public class ToolCallProcessor {
                 if requestToolXMLCallComplete(toolCallBuffer),
                     let toolCall = parser.parse(content: toolCallBuffer, tools: tools)
                 {
-                    toolCalls.append(toolCall)
+                    recordToolCall(toolCall)
                     toolCallBuffer = ""
                     state = .normal
                     suppressingTextAfterInlineToolCall = true
@@ -308,7 +333,7 @@ public class ToolCallProcessor {
                 state = .collectingInlineToolCall
 
                 if let toolCall = parser.parse(content: toolCallBuffer, tools: tools) {
-                    toolCalls.append(toolCall)
+                    recordToolCall(toolCall)
                     toolCallBuffer = ""
                     state = .normal
                     suppressingTextAfterInlineToolCall = true
@@ -331,7 +356,7 @@ public class ToolCallProcessor {
                 if bareNameKeyValueCallComplete(toolCallBuffer),
                     let toolCall = parser.parse(content: toolCallBuffer, tools: tools)
                 {
-                    toolCalls.append(toolCall)
+                    recordToolCall(toolCall)
                     toolCallBuffer = ""
                     state = .normal
                     suppressingTextAfterInlineToolCall = true
@@ -354,7 +379,7 @@ public class ToolCallProcessor {
                 state = .collectingInlineToolCall
 
                 if let toolCall = parser.parse(content: toolCallBuffer, tools: tools) {
-                    toolCalls.append(toolCall)
+                    recordToolCall(toolCall)
                     toolCallBuffer = ""
                     state = .normal
                     return visibleInlineLeading(leading)
@@ -381,7 +406,7 @@ public class ToolCallProcessor {
             if shouldAttemptInlineToolParse(toolCallBuffer),
                 let toolCall = parser.parse(content: toolCallBuffer, tools: tools)
             {
-                toolCalls.append(toolCall)
+                recordToolCall(toolCall)
                 toolCallBuffer = ""
                 state = .normal
                 if inlineToolCallKind == .actionJSON
@@ -1307,7 +1332,7 @@ public class ToolCallProcessor {
                     if shouldAttemptInlineToolParse(toolCallBuffer),
                        let toolCall = parser.parse(content: toolCallBuffer, tools: tools)
                     {
-                        toolCalls.append(toolCall)
+                        recordToolCall(toolCall)
                         toolCallBuffer = ""
                         state = .normal
                         suppressingTextAfterInlineToolCall = true
@@ -1329,7 +1354,7 @@ public class ToolCallProcessor {
                     if shouldAttemptInlineToolParse(toolCallBuffer),
                        let toolCall = parser.parse(content: toolCallBuffer, tools: tools)
                     {
-                        toolCalls.append(toolCall)
+                        recordToolCall(toolCall)
                         toolCallBuffer = ""
                         state = .normal
                         suppressingTextAfterInlineToolCall = true
@@ -1491,7 +1516,7 @@ public class ToolCallProcessor {
                 // Parse the completed wrapper. Some formats, including Hy3 /
                 // Hunyuan, can carry multiple calls inside one outer block.
                 let parsed = parser.parseEOS(toolCallBuffer, tools: tools)
-                toolCalls.append(contentsOf: parsed)
+                recordToolCalls(parsed)
 
                 state = .normal
                 toolCallBuffer = ""
