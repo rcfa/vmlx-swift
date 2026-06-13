@@ -1292,7 +1292,11 @@ public class ToolCallProcessor {
     }
 
     private func visibleInlineLeading(_ leading: String) -> String? {
-        leading.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : leading
+        // Emit leading text verbatim. Returning nil only for *empty* leading
+        // (never for whitespace-only) keeps ordinary prose byte-exact: a chunk
+        // like " {" must not lose its leading space when the brace triggers a
+        // (possibly false) inline tool-call probe.
+        leading.isEmpty ? nil : leading
     }
 
     /// Process chunk for tagged formats.
@@ -1342,7 +1346,7 @@ public class ToolCallProcessor {
                 if let fragmentIndex = partialInlineBareNameJSONToolCallStart(in: candidate) {
                     let leading = String(candidate[..<fragmentIndex])
                     leadingTextBeforeToolCall = String(candidate[fragmentIndex...])
-                    return visibleInlineLeading(leading)
+                    return leading.isEmpty ? nil : leading
                 }
                 if let callIndex = firstBareCallToolCallStart(in: candidate) {
                     let leading = String(candidate[..<callIndex])
@@ -1364,7 +1368,18 @@ public class ToolCallProcessor {
                 if let fragmentIndex = partialBareCallToolCallStart(in: candidate) {
                     let leading = String(candidate[..<fragmentIndex])
                     leadingTextBeforeToolCall = String(candidate[fragmentIndex...])
-                    return visibleInlineLeading(leading)
+                    return leading.isEmpty ? nil : leading
+                }
+                // A previously buffered bare-call fragment (a trailing "c"/
+                // "ca"/"cal"/"call" that looked like the start of `call:`) did
+                // not continue into a tool call. Flush the held text together
+                // with this chunk, in order, so ordinary prose is never dropped
+                // or reordered. Gemma is the only family with bare-call
+                // fallback and it never enables inline-JSON fallback, so no
+                // later stage would otherwise consume this candidate.
+                if !leadingTextBeforeToolCall.isEmpty {
+                    leadingTextBeforeToolCall = ""
+                    return candidate.isEmpty ? nil : candidate
                 }
             case .collectingInlineToolCall:
                 break
