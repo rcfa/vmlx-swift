@@ -13,10 +13,12 @@ contract osaurus implements server-side and the UI builds against.
 > Status: the engine is real. `z-image-turbo` and `flux1-schnell` are
 > live-proven for 4-bit and 8-bit text-to-image; `qwen-image` is live-proven for
 > 4-bit and 6-bit text-to-image (public mflux 8-bit not found). `qwen-image-edit` q4 and q5 are live-proven for
-> text-image edit after the VL-grid conditioning fix; expose only the proven
-> q4/q5 paths for normal testing, keep q3 blocked because its text-encoder index
-> references missing `text_encoder/3.safetensors`, keep q6 blocked until its
-> local bundle is complete, and hide mask/inpaint controls until wired.
+> single-image and multi-image text-image edit after the VL-grid conditioning
+> fix; expose only the proven q4/q5 paths for normal testing, keep q3 blocked
+> because its text-encoder index references missing `text_encoder/3.safetensors`,
+> keep q6 blocked until its local bundle is complete, and hide mask/inpaint
+> controls for qwen-edit. The mflux qwen-edit reference supports one or more
+> source images, but does not expose a qwen mask/inpaint path.
 > Ideogram has a complete local fp8 mirror bundle staged from
 > `cocktailpeanut/ideogram-4-fp8`, and the scanner reports it as loadable
 > scaffold. The shared source can now load Ideogram's
@@ -33,6 +35,15 @@ contract osaurus implements server-side and the UI builds against.
 > Artifact root: `docs/local/vmlx-flux-probes/2026-06-16-current-main-*`;
 > viewed contact sheet:
 > `docs/local/vmlx-flux-outputs/2026-06-16-current-main-contact-sheet.png`.
+> Multi-image qwen-edit proof: branch `codex/qwen-edit-multi-image` adds
+> ordered `ImageEditRequest.sourceImages`. q4 artifact:
+> `docs/local/vmlx-flux-probes/2026-06-16-qwen-edit-q4-multi-image-live/Qwen-Image-Edit-mflux-q4-load.json`;
+> q5 artifact:
+> `docs/local/vmlx-flux-probes/2026-06-16-qwen-edit-q5-multi-image-live/Qwen-Image-Edit-mflux-q5-load.json`;
+> internal q5 shape proof:
+> `docs/local/vmlx-flux-probes/2026-06-16-qwen-edit-q5-multi-image-shape-proof/Qwen-Image-Edit-mflux-q5-load.json`;
+> viewed contact sheet:
+> `docs/local/vmlx-flux-outputs/2026-06-16-qwen-edit-multi-image-contact-sheet.png`.
 > The HTTP surface below is the **proposed contract** for the osaurus team to
 > expose; design it once, wire all models through it.
 
@@ -44,7 +55,7 @@ contract osaurus implements server-side and the UI builds against.
 |---|---|---|
 | `GET  /v1/images/models` | List installed image models + defaults + capabilities | `MLXStudioModelStore.scan()` + `ModelRegistry` |
 | `POST /v1/images/generations` | text → image | `FluxEngine.generate` |
-| `POST /v1/images/edits` | image (+mask) + prompt → image | `FluxEngine.edit` |
+| `POST /v1/images/edits` | image(s) (+mask where supported) + prompt → image | `FluxEngine.edit` |
 | `POST /v1/images/upscale` | low-res → high-res | `FluxEngine.upscale` |
 | `POST /v1/images/cancel` | cancel an in-flight job | cancels the consuming `Task` |
 
@@ -73,6 +84,7 @@ The UI should NOT hard-code model names or limits — fetch them. Response:
         "upscale": false,
         "negative_prompt": true,           // show/hide negative field
         "mask": false,                     // show/hide mask tool
+        "multiple_source_images": false,   // show/hide multi-reference upload
         "lora": false
       },
       "defaults": { "steps": 4, "guidance": 0.0 },   // pre-fill the form
@@ -98,7 +110,8 @@ Notes for UI:
   `Qwen-Image-Edit-mflux-q5` are implemented/testable; q3/q6 remain partial or
   blocked until complete local bundles are staged and proven.
 - Use `capabilities` to show/hide fields. e.g. `negative_prompt:false` → hide the
-  negative box; `mask:false` → no mask tool.
+  negative box; `mask:false` → no mask tool;
+  `multiple_source_images:true` → allow ordered multi-reference upload.
 - Pre-fill `steps`/`guidance` from `defaults`; clamp sliders with `limits`.
 
 ---
@@ -150,13 +163,18 @@ Notes for UI:
 
 ---
 
-## 3. `POST /v1/images/edits` — image + prompt (+ optional mask)
+## 3. `POST /v1/images/edits` — image(s) + prompt (+ optional mask for models that support it)
 
 ```jsonc
 {
   "model": "Qwen-Image-Edit-mflux-q4",
   "prompt": "make the apple green",
   "image": "data:image/png;base64,....",   // REQUIRED. source image (b64 or URL)
+  "images": [
+    "data:image/png;base64,....",
+    "file:///Users/me/reference-shirt.png"
+  ],                                      // optional ordered list. If present,
+                                          // server maps this to sourceImages.
   "mask":  "data:image/png;base64,....",   // optional. white=edit, black=keep
   "strength": 0.75,               // 0..1 — how far to deviate from the source
                                   //   (0 = barely change, 1 = ignore source)
@@ -169,12 +187,24 @@ Notes for UI:
   "stream": true
 }
 ```
-Maps to `ImageEditRequest` (`sourceImage`, `mask`, `strength`, ...). Only models
+Maps to `ImageEditRequest` (`sourceImage` legacy single-image compatibility,
+`sourceImages` ordered multi-image list, `mask`, `strength`, ...). Only models
 with `capabilities.image_edit:true` accept this; else 400 `wrong model kind`.
+For qwen-edit, send either `image` or `images`; if both are present, prefer
+`images` and preserve order. The qwen-edit runtime uses the last source image for
+the mflux aspect-ratio sizing plan and all source images for Qwen-VL prompt
+features plus VAE conditioning latents.
+
 Current live-proven targets are `Qwen-Image-Edit-mflux-q4` and
-`Qwen-Image-Edit-mflux-q5` without masks; reject a non-null `mask` with 501 or
-hide the control until mask/inpaint wiring lands. The engine currently enforces
-this for Qwen edit by emitting a failed event before the edit pipeline loads;
+`Qwen-Image-Edit-mflux-q5` without masks. Both accept ordered multi-image
+inputs through `sourceImages`. q4 multi-image proof has turn 1/3 SHA
+`e43910a505ab090bfbd4ec3a00f6e58fcd97df65c6b61e6b973754511bc740be` and turn 2
+SHA `16ecc1fec4bdff1e5aecb9c0875569b2bebed53a81c686bf23e806faa6e2b893`; q5
+multi-image proof has turn 1/3 SHA
+`ec2e49d6f300849cb46940b793670bee007f4aae8f04e97a31289670758519c9` and turn 2
+SHA `8dfacb52aa81c6e0a8a6827c4377f27bc5d9396e39a4f8662a47db93798b767a`.
+Reject a non-null `mask` with 501 or hide the control for qwen-edit. The engine
+currently enforces this by emitting a failed event before the edit pipeline loads;
 `QwenImageEditSupportTests.testQwenImageEditRejectsMaskBeforePipelineLoad`
 covers that contract, and `vmlxflux-probe --edit --mask-image <png>` records the
 same failed-event behavior against staged local bundles.
