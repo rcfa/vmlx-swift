@@ -10,9 +10,18 @@ determinate progress bar so users always see "step N / M" and never a stuck spin
 field below maps to an engine request/event — see the mapping notes. This is the
 contract osaurus implements server-side and the UI builds against.
 
-> Status: the engine is real and `z-image-turbo` is live-proven (text→image, CFG,
-> seeds, 256²–1024²). The HTTP surface below is the **proposed contract** for the
-> osaurus team to expose; design it once, wire all models through it.
+> Status: the engine is real. `z-image-turbo` and `flux1-schnell` are
+> live-proven for 4-bit and 8-bit text-to-image; `qwen-image` is live-proven for
+> 4-bit and 6-bit text-to-image (public mflux 8-bit not found). `qwen-image-edit` q4 and q5 are live-proven for
+> text-image edit after the VL-grid conditioning fix; expose only the proven
+> q4/q5 paths for normal testing, keep q3 blocked because its text-encoder index
+> references missing `text_encoder/3.safetensors`, keep q6 blocked until its
+> local bundle is complete, and hide mask/inpaint controls until wired.
+> Ideogram is metadata-visible on HF but not downloadable for the current account
+> yet (`Access denied. This repository requires approval.`), so keep it disabled
+> until a local bundle exists and live load/generation proof is captured.
+> The HTTP surface below is the **proposed contract** for the osaurus team to
+> expose; design it once, wire all models through it.
 
 ---
 
@@ -69,6 +78,12 @@ The UI should NOT hard-code model names or limits — fetch them. Response:
 Notes for UI:
 - `ready:false` → show the model greyed with a "Download required" CTA (no silent
   downloads — the user must stage weights first).
+- `native_runtime_status != native_pipeline_implemented` → disable normal user
+  actions and show the blocker text. `native_pipeline_partial` is an internal
+  diagnostic state, not a release-ready user model. For qwen-image-edit, the
+  status is variant-specific: `Qwen-Image-Edit-mflux-q4` and
+  `Qwen-Image-Edit-mflux-q5` are implemented/testable; q3/q6 remain partial or
+  blocked until complete local bundles are staged and proven.
 - Use `capabilities` to show/hide fields. e.g. `negative_prompt:false` → hide the
   negative box; `mask:false` → no mask tool.
 - Pre-fill `steps`/`guidance` from `defaults`; clamp sliders with `limits`.
@@ -126,7 +141,7 @@ Notes for UI:
 
 ```jsonc
 {
-  "model": "qwen-image-edit",
+  "model": "Qwen-Image-Edit-mflux-q4",
   "prompt": "make the apple green",
   "image": "data:image/png;base64,....",   // REQUIRED. source image (b64 or URL)
   "mask":  "data:image/png;base64,....",   // optional. white=edit, black=keep
@@ -141,8 +156,15 @@ Notes for UI:
   "stream": true
 }
 ```
-Maps to `ImageEditRequest` (`sourceImage`, `mask`, `strength`, …). Only models with
-`capabilities.image_edit:true` accept this; else 400 `wrong model kind`.
+Maps to `ImageEditRequest` (`sourceImage`, `mask`, `strength`, ...). Only models
+with `capabilities.image_edit:true` accept this; else 400 `wrong model kind`.
+Current live-proven targets are `Qwen-Image-Edit-mflux-q4` and
+`Qwen-Image-Edit-mflux-q5` without masks; reject a non-null `mask` with 501 or
+hide the control until mask/inpaint wiring lands. The engine currently enforces
+this for Qwen edit by emitting a failed event before the edit pipeline loads;
+`QwenImageEditSupportTests.testQwenImageEditRejectsMaskBeforePipelineLoad`
+covers that contract, and `vmlxflux-probe --edit --mask-image <png>` records the
+same failed-event behavior against staged local bundles.
 
 ---
 
@@ -240,4 +262,4 @@ step boundary, emits `cancelled`). UI: wire to a Stop button next to the progres
   `notImplemented`→501, `failed(hfAuth:true)`→402-style "token needed".
 
 See `OSAURUS_VMLX_FLUX_INTEGRATION_SPEC.md` for the full engine API + per-model
-status, and `QWEN_IMAGE_PORT_PLAN.md` for bringing qwen-image-edit online.
+status, and `QWEN_IMAGE_PORT_PLAN.md` for qwen-image/qwen-image-edit port notes.

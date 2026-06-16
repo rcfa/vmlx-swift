@@ -4,6 +4,7 @@ public enum LocalFluxComponent: String, CaseIterable, Codable, Sendable {
     case root
     case tokenizer
     case transformer
+    case unconditionalTransformer
     case scheduler
     case textEncoder
     case vae
@@ -55,10 +56,15 @@ public struct MLXStudioModelStore: Sendable {
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         )
-        return try entries.compactMap { url in
+        return try entries.flatMap { url -> [LocalFluxModel] in
             let values = try url.resourceValues(forKeys: [.isDirectoryKey])
-            guard values.isDirectory == true else { return nil }
-            return try Self.inspect(directory: url)
+            guard values.isDirectory == true else { return [] }
+            let parent = try Self.inspect(directory: url)
+            let variants = try Self.nestedQuantVariants(in: url, parent: parent)
+            if !variants.isEmpty && parent.readiness != .loadableScaffold {
+                return variants
+            }
+            return variants.isEmpty ? [parent] : [parent] + variants
         }
         .sorted { $0.directoryName.localizedStandardCompare($1.directoryName) == .orderedAscending }
     }
@@ -66,6 +72,16 @@ public struct MLXStudioModelStore: Sendable {
     public func resolve(name: String) throws -> LocalFluxModel? {
         let requestedDirectory = Self.normalizedName(name)
         let models = try scan()
+        // 1. Literal, case-insensitive directory-name match FIRST — this preserves the
+        //    `-4bit`/`-8bit` quant suffix so requesting an exact bundle (e.g.
+        //    "FLUX.1-schnell-mflux-8bit") never collapses onto a different-quant sibling
+        //    ("...-4bit"), which `normalizedName` would do (it strips the bit suffix).
+        if let literal = models.first(where: {
+            $0.directoryName.compare(name, options: .caseInsensitive) == .orderedSame
+        }) {
+            return literal
+        }
+        // 2. Normalized exact match (quant-insensitive, separator-insensitive).
         if let exact = models.first(where: {
             Self.normalizedName($0.directoryName) == requestedDirectory
         }) {
@@ -84,8 +100,18 @@ public struct MLXStudioModelStore: Sendable {
     }
 
     public static func inspect(directory: URL) throws -> LocalFluxModel {
-        let name = directory.lastPathComponent
-        let canonical = canonicalName(for: name)
+        try inspect(directory: directory, directoryName: directory.lastPathComponent)
+    }
+
+    private static func inspect(
+        directory: URL,
+        directoryName: String,
+        canonicalName canonicalOverride: String? = nil,
+        quantizationBits quantizationOverride: Int? = nil
+    ) throws -> LocalFluxModel {
+        let name = directoryName
+        let canonical = canonicalOverride
+            ?? canonicalName(for: name)
             ?? ModelRegistry.lookupFuzzy(name: name)?.name
         let entry = canonical.flatMap { ModelRegistry.lookup(name: $0) }
         let components = try detectComponents(in: directory)
@@ -93,7 +119,8 @@ public struct MLXStudioModelStore: Sendable {
         let hasModelIndex = FileManager.default.fileExists(
             atPath: directory.appendingPathComponent("model_index.json").path
         )
-        let reasons = blockedReasons(
+        let reasons = try blockedReasons(
+            directory: directory,
             canonicalName: canonical,
             components: components,
             safetensorCount: safetensors.count
@@ -112,7 +139,7 @@ public struct MLXStudioModelStore: Sendable {
             canonicalName: canonical,
             displayName: entry?.displayName ?? displayName(forCanonicalName: canonical) ?? name,
             kind: entry?.kind ?? defaultKind(forCanonicalName: canonical),
-            quantizationBits: quantizationBits(in: name),
+            quantizationBits: quantizationOverride ?? quantizationBits(in: name),
             components: components,
             safetensorCount: safetensors.count,
             totalBytes: safetensors.bytes,
@@ -129,6 +156,9 @@ public struct MLXStudioModelStore: Sendable {
         }
         if key.contains("qwen-image") || key.contains("qwenimage") {
             return key.contains("edit") ? "qwen-image-edit" : "qwen-image"
+        }
+        if key.contains("ideogram") {
+            return "ideogram"
         }
         if key.contains("flux2") || key.contains("flux-2") {
             return key.contains("edit") ? "flux2-klein-edit" : "flux2-klein"
@@ -181,7 +211,36 @@ public struct MLXStudioModelStore: Sendable {
                 return bits
             }
         }
+        for part in parts where part.hasPrefix("q") {
+            let digits = part.dropFirst()
+            if let bits = Int(digits) {
+                return bits
+            }
+        }
         return nil
+    }
+
+    private static func nestedQuantVariants(
+        in directory: URL,
+        parent: LocalFluxModel
+    ) throws -> [LocalFluxModel] {
+        let fm = FileManager.default
+        let children = try fm.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+        return try children.compactMap { child in
+            let values = try child.resourceValues(forKeys: [.isDirectoryKey])
+            guard values.isDirectory == true else { return nil }
+            guard let bits = quantizationBits(in: child.lastPathComponent) else { return nil }
+            let variantName = "\(parent.directoryName)-\(child.lastPathComponent)"
+            return try inspect(
+                directory: child,
+                directoryName: variantName,
+                canonicalName: parent.canonicalName,
+                quantizationBits: bits)
+        }
     }
 
     private static func detectComponents(in directory: URL) throws -> Set<LocalFluxComponent> {
@@ -193,6 +252,7 @@ public struct MLXStudioModelStore: Sendable {
         let componentDirs: [(LocalFluxComponent, String)] = [
             (.tokenizer, "tokenizer"),
             (.transformer, "transformer"),
+            (.unconditionalTransformer, "unconditional_transformer"),
             (.scheduler, "scheduler"),
             (.textEncoder, "text_encoder"),
             (.vae, "vae"),
@@ -248,11 +308,64 @@ public struct MLXStudioModelStore: Sendable {
         return (count, bytes)
     }
 
+    private static func missingIndexedSafetensorFiles(in directory: URL) throws -> [String] {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        var missing: [String] = []
+        var seen: Set<String> = []
+        for case let indexURL as URL in enumerator
+            where indexURL.lastPathComponent.hasSuffix(".safetensors.index.json")
+        {
+            let data = try Data(contentsOf: indexURL)
+            guard
+                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let weightMap = json["weight_map"] as? [String: String]
+            else { continue }
+            let base = indexURL.deletingLastPathComponent()
+            for fileName in Set(weightMap.values).sorted() {
+                let shard = base.appendingPathComponent(fileName)
+                guard !fm.fileExists(atPath: shard.path) else { continue }
+                let relative = relativePath(for: shard, under: directory)
+                if seen.insert(relative).inserted {
+                    missing.append("missing indexed shard \(relative)")
+                }
+            }
+        }
+        return missing.sorted()
+    }
+
+    private static func relativePath(for child: URL, under directory: URL) -> String {
+        let candidates = [
+            (directory.path, child.path),
+            (directory.standardizedFileURL.path, child.standardizedFileURL.path),
+            (directory.resolvingSymlinksInPath().path, child.resolvingSymlinksInPath().path),
+        ]
+        for (rootPath, childPath) in candidates {
+            let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+            if childPath.hasPrefix(prefix) {
+                return String(childPath.dropFirst(prefix.count))
+            }
+        }
+        let rootName = directory.lastPathComponent
+        let components = child.pathComponents
+        if let rootIndex = components.lastIndex(of: rootName),
+           rootIndex + 1 < components.endIndex
+        {
+            return components[(rootIndex + 1)...].joined(separator: "/")
+        }
+        return child.lastPathComponent
+    }
+
     private static func blockedReasons(
+        directory: URL,
         canonicalName: String?,
         components: Set<LocalFluxComponent>,
         safetensorCount: Int
-    ) -> [String] {
+    ) throws -> [String] {
         guard canonicalName != nil else {
             return safetensorCount == 0 ? ["no safetensors found"] : ["unknown flux-family model"]
         }
@@ -260,11 +373,21 @@ public struct MLXStudioModelStore: Sendable {
         if safetensorCount == 0 {
             reasons.append("no safetensors found")
         }
-        for component in [LocalFluxComponent.transformer, .textEncoder, .vae, .tokenizer] {
+        var requiredComponents: [LocalFluxComponent] = [
+            .transformer,
+            .textEncoder,
+            .vae,
+            .tokenizer,
+        ]
+        if canonicalName == "ideogram" {
+            requiredComponents.append(.unconditionalTransformer)
+        }
+        for component in requiredComponents {
             if !components.contains(component) {
                 reasons.append("missing \(component.rawValue)")
             }
         }
+        reasons.append(contentsOf: try missingIndexedSafetensorFiles(in: directory))
         return reasons
     }
 
