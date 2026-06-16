@@ -12,8 +12,10 @@ Osaurus monorepo worktree, `qwen-image-mflux-4bit` also has fresh load proof at
 `qwen-image-edit` is still `PARTIAL`: q4 load, prompt-image token expansion,
 Qwen2.5-VL image encode, VAE conditioning, first edit transformer velocity, and
 ImageEditor scheduler/decode/PNG plumbing are live-proven, but the viewed edit
-outputs are noise-like. Do not expose it as a normal user model until coherent
-edited-image proof exists.
+outputs do not yet follow edit prompts reliably. Earlier rows were noise-like;
+the current apple-blue proof reconstructs/crops the red source apple instead of
+applying the requested blue edit. Do not expose it as a normal user model until
+coherent edited-image proof exists.
 
 The sections below are the grounded port notes and transcription record. Older
 "next" checkboxes may describe the sequence that produced the current native

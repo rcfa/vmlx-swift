@@ -13,8 +13,10 @@ contract osaurus implements server-side and the UI builds against.
 > Status: the engine is real. `z-image-turbo` and `flux1-schnell` are
 > live-proven for 4-bit and 8-bit text-to-image; `qwen-image` is live-proven for
 > 4-bit text-to-image. `qwen-image-edit` has q4 load/edit-loop/PNG plumbing
-> proof, but viewed outputs are noise-like, so expose it only as partial or
-> internal/diagnostic until coherent edited-image proof exists. The HTTP surface
+> proof, but viewed outputs do not yet follow edit prompts reliably: earlier rows
+> were noise-like, and the current apple-blue proof reconstructs/crops the red
+> source apple instead of applying the requested blue edit. Expose it only as
+> partial or internal/diagnostic until coherent edited-image proof exists. The HTTP surface
 > below is the **proposed contract** for the osaurus team to expose; design it
 > once, wire all models through it.
 
