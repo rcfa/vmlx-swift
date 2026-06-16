@@ -310,7 +310,7 @@ their 4-bit linears through scale tensors at load time inside the model.
 | seedvr2 | scaffold | registered | upscale arch (different family). |
 | wan-2.1 / wan-2.2 | scaffold | full pipeline scaffolded (WanVAE3D + WanDiT + MP4 writer) with random weights. | real weight key-map, real Conv3d (currently a Conv2d shim), windowed attention for >3-4s clips. |
 
-**Qwen-image-edit multi-image addendum (2026-06-16):** current main includes
+**Qwen-image-edit multi-image addendum (2026-06-16):** vMLX source includes
 ordered `ImageEditRequest.sourceImages` and the probe accepts repeated
 `--source-image`. Source trace: mflux qwen-edit
 accepts `image_paths: list[str]`, computes sizing from `image_paths[-1]`, and
@@ -396,7 +396,7 @@ shape-changing green-pear prompts; q5 is the cleaner edit row. Staged Ideogram
 fp8 is live-proven for typography and clean object icons; official `ideogram-ai/*`
 access and nf4 remain separate blockers.
 
-Current-main refresh after Ideogram fp8 source wiring: `vmlx-origin/main`
+Runtime-proof refresh after Ideogram fp8 source wiring: `vmlx-origin/main`
 `e0f3ccff7ae78a6b3e8ccc4989825f582d1b7ee5` was rebuilt and live-probed from
 `/Users/eric/vmlx-swift-fluxwt`. Fresh artifacts:
 `docs/local/vmlx-flux-probes/2026-06-16-current-e0f-load-matrix/`,
@@ -569,7 +569,7 @@ seeds, and the CFG path. z-image-turbo is **production-compatible** — the May-
    examples; q4 is weaker on shape-changing edits. Keep qwen mask controls
    hidden unless upstream mflux adds a real qwen mask path or a separate
    fill/inpaint model is wired; do not fake masks with post-blends.
-4. Full-precision z-image/flux-schnell: stage weights, run the same current-main
-   probe matrix, and visually inspect outputs before promotion.
+4. Full-precision z-image/flux-schnell: stage weights, run the same proof
+   matrix pattern, and visually inspect outputs before promotion.
 5. LoRA loader hook (`supportsLoRA`), img2img/controlnet conditioning.
 6. `numImages > 1` batching; webp/jpeg writers; preview-decode cadence.
