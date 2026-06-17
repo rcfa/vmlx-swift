@@ -185,12 +185,18 @@ class BPETokenizer: PreTrainedTokenizerModel, @unchecked Sendable {
     /// (e.g. compact tool JSON), which a naive per-round rescan tokenizes in
     /// seconds.
     ///
-    /// Merges happen in rank order, and a pair formed by a merge always
-    /// outranks the merge that created its components, so popping the
-    /// globally-lowest `(rank, leftIndex)` reproduces the canonical BPE result
-    /// ("merge all occurrences of the min-rank pair per round, left to right").
-    /// Stale heap entries (a node consumed by an earlier merge, or whose pair
-    /// rank no longer matches the candidate) are skipped on pop.
+    /// Merges happen in canonical rank-rounds: within a round every
+    /// non-overlapping occurrence of the current min-rank pair is merged (left
+    /// to right) before any pair created by those merges is admitted. This
+    /// matters because SentencePiece tokenizers (Gemma/Llama) give whitespace
+    /// runs non-monotonic ranks — a merged pair can outrank its own components
+    /// (e.g. rank(\t\t,\t) < rank(\t,\t)) — so popping the global min after
+    /// every single merge would let a freshly-formed pair preempt the round's
+    /// remaining merges and diverge from canonical output on any tab/space/
+    /// newline run. Because the heap is keyed `(rank, leftIndex)`, same-rank
+    /// occurrences pop in left-to-right order for free. Stale heap entries (a
+    /// node consumed by an earlier merge, or whose pair rank no longer matches
+    /// the candidate) are skipped on pop.
     func bpe(token: String) -> String {
         let parts0 = Array(token).map { String($0) }
         let n = parts0.count
@@ -250,26 +256,43 @@ class BPETokenizer: PreTrainedTokenizerModel, @unchecked Sendable {
 
         for i in 0..<n where next[i] >= 0 { push(i) }
 
-        while let cand = pop() {
-            let l = cand.left
-            guard alive[l] else { continue }
-            let r = next[l]
-            guard r >= 0, alive[r] else { continue }
-            // Skip stale entries: the live pair at this node must still carry the
-            // rank this candidate was queued with.
-            guard let curRank = bpeRanks[BytePair(parts[l], parts[r])], curRank == cand.rank
-            else { continue }
+        // Adjacencies created during a round, pushed only once the round ends so
+        // a new lower-rank pair cannot preempt the round's remaining merges.
+        var pending: [Int] = []
+        while let head = pop() {
+            let roundRank = head.rank
+            var cand: (rank: Int, left: Int)? = head
+            pending.removeAll(keepingCapacity: true)
+            repeat {
+                let l = cand!.left
+                if alive[l] {
+                    let r = next[l]
+                    // Skip stale entries: the live pair at this node must still
+                    // carry the round's rank.
+                    if r >= 0, alive[r],
+                        let curRank = bpeRanks[BytePair(parts[l], parts[r])], curRank == roundRank
+                    {
+                        // Merge r into l; r leaves the list.
+                        parts[l] = parts[l] + parts[r]
+                        alive[r] = false
+                        let rn = next[r]
+                        next[l] = rn
+                        if rn >= 0 { prev[rn] = l }
 
-            // Merge r into l; r leaves the list.
-            parts[l] = parts[l] + parts[r]
-            alive[r] = false
-            let rn = next[r]
-            next[l] = rn
-            if rn >= 0 { prev[rn] = l }
+                        // Defer adjacencies created by this merge to the next round.
+                        pending.append(prev[l])
+                        pending.append(l)
+                    }
+                }
+                // Drain remaining same-rank occurrences (they sit at the heap top).
+                if let top = heap.first, top.rank == roundRank {
+                    cand = pop()
+                } else {
+                    cand = nil
+                }
+            } while cand != nil
 
-            // New adjacencies created by the merge.
-            push(prev[l])
-            push(l)
+            for left in pending { push(left) }
         }
 
         // Walk the surviving list from the head (node 0 is never consumed —
