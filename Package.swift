@@ -766,6 +766,7 @@ let package = Package(
                 "MLXOptimizers",
                 "VMLXJinja",
                 "VMLXTokenizers",
+                "VMLXHub",
                 "MLXLMCommon",
                 "MLXLLM",
                 "MLXVLM",
