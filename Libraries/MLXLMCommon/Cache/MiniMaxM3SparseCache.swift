@@ -31,7 +31,7 @@
 
 import Foundation
 import MLX
-import MLXFast
+import MLXNN
 
 public final class MiniMaxM3SparseCache: KVCache {
 
@@ -58,6 +58,9 @@ public final class MiniMaxM3SparseCache: KVCache {
     public var offset: Int { kv.offset }
     public var maxSize: Int? { nil }
     public var isTrimmable: Bool { true }
+
+    /// Compile-traceable inner state — the same 3-lane view as `state`.
+    public func innerState() -> [MLXArray] { state }
 
     /// Standard GQA K/V append. The attention forward calls this BEFORE
     /// `updateIndex` (upstream ordering), so after both appends `idxKeys`'
