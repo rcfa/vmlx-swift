@@ -41,6 +41,17 @@
   The proof runner now raises the soft file-descriptor limit before the
   all-model matrix because loading all 14 heavyweight MLX bundles in one
   process can exceed macOS's default `ulimit -n 256`.
+  For larger remote RAM runs, `scripts/vmlx-image-extended-stress.sh` layers on
+  repeated matrix loads, wide/tall/large-square dimensions, qwen edit
+  multi-image chaining, mask rejection, qwen prompt/conditioning/VL/denoise
+  diagnostics, and per-row `/usr/bin/time -l` resource logs. 2026-06-18
+  extended source-side stress on `erics-m5-max.local` passed with
+  `failed_rows=0` at
+  `docs/local/vmlx-flux-probes/20260618-image-extended2/extended-stress-summary.json`;
+  viewed contact sheet:
+  `docs/local/vmlx-flux-outputs/20260618-image-extended2/extended-stress-contact-sheet.png`.
+  Treat this as the source-side stress gate before an Osaurus bridge stress
+  run, not as a replacement for the app-side MetalGate/HTTP/UI proof.
   qwen-edit q3 is loadable after staging `q3/text_encoder/3.safetensors`, but
   remains hidden because its viewed 20-step edit output is high-noise and not a
   clean prompt-following edit. qwen masks are intentionally hidden because the
@@ -323,13 +334,13 @@ their 4-bit linears through scale tensors at load time inside the model.
 
 | Canonical | Native runtime status | What's real | What's missing |
 |---|---|---|---|
-| **z-image-turbo** | `native_pipeline_implemented` | Full native port: Qwen-style text encoder, patchify+caption-concat DiT, real `AutoencoderKL` VAE decode, real 4/8-bit weight decode, PNG out. 2026-06-18 stress proof covers 4-bit and 8-bit at `docs/local/vmlx-flux-probes/20260618-image-stress2/current-proof-summary.json`; both rows passed 3-turn completion, deterministic repeat, prompt sensitivity, and viewed coherent apple/mountain outputs. | 1024px tuning; full precision not staged/proven. |
-| **qwen-image** | `native_pipeline_implemented` | Full native pipeline `QwenImageNative.swift`: Qwen2.5 LM text encoder (GQA), 60-layer MM-DiT, 3D causal-conv VAE, mflux guidance-rescaled CFG. 2026-06-18 stress proof covers 4-bit and 8-bit at `docs/local/vmlx-flux-probes/20260618-image-stress2/current-proof-summary.json`; both rows passed 3-turn completion, deterministic repeat, prompt sensitivity, and viewed coherent apple/mountain outputs. Retained 6-bit proof remains from the earlier 103be artifact. | Full not staged/proven. Current fixes include mflux-compatible Qwen scheduler sigmas, keyed seed noise, profiled RGB reads for edit conditioning parity, VAE channels-last handling, raw-sigma timestep use, and quantized text-encoder embedding/linear loading. |
-| qwen-image-edit | `native_pipeline_implemented` for `Qwen-Image-Edit-mflux-q4`, `Qwen-Image-Edit-mflux-q5`, `Qwen-Image-Edit-mflux-q6`, and `Qwen-Image-Edit-mflux-q8`; `native_pipeline_partial` for q3 | q4/q5/q6/q8 scan as loadable local bundles. 2026-06-18 stress proof covers q4/q5/q8 at `docs/local/vmlx-flux-probes/20260618-image-stress2/current-proof-summary.json`; all three passed completion, deterministic repeat, and prompt sensitivity. q5/q8 viewed as clean prompt-following blue-apple/green-pear edits; q4 remains visibly noisy but deterministic/prompt-sensitive. q6 remains clean from the earlier staged-shard artifact. q3 loads after staging `q3/text_encoder/3.safetensors`, but viewed output is high-noise, so it stays hidden. Non-null qwen masks are rejected before the edit pipeline loads and covered by `QwenImageEditSupportTests.testQwenImageEditRejectsMaskBeforePipelineLoad`. | q3 should stay hidden until a real coherent edit row exists; qwen mask/inpaint is unsupported by the current mflux reference; q5 can show a square table/composition patch on some source/edit prompts; broader Osaurus HTTP/UI production matrix still pending. |
+| **z-image-turbo** | `native_pipeline_implemented` | Full native port: Qwen-style text encoder, patchify+caption-concat DiT, real `AutoencoderKL` VAE decode, real 4/8-bit weight decode, PNG out. 2026-06-18 stress proof covers 4-bit and 8-bit at `docs/local/vmlx-flux-probes/20260618-image-stress2/current-proof-summary.json`; both rows passed 3-turn completion, deterministic repeat, prompt sensitivity, and viewed coherent apple/mountain outputs. Extended stress adds 4-bit wide and 8-bit large-square rows at `docs/local/vmlx-flux-probes/20260618-image-extended2/extended-stress-summary.json`; both passed and the contact sheet was coherent. | 1024px tuning; full precision not staged/proven. |
+| **qwen-image** | `native_pipeline_implemented` | Full native pipeline `QwenImageNative.swift`: Qwen2.5 LM text encoder (GQA), 60-layer MM-DiT, 3D causal-conv VAE, mflux guidance-rescaled CFG. 2026-06-18 stress proof covers 4-bit and 8-bit at `docs/local/vmlx-flux-probes/20260618-image-stress2/current-proof-summary.json`; both rows passed 3-turn completion, deterministic repeat, prompt sensitivity, and viewed coherent apple/mountain outputs. Extended stress covers qwen-image 8-bit square+wide source generation and qwen-image 6-bit tall generation at `docs/local/vmlx-flux-probes/20260618-image-extended2/extended-stress-summary.json`; all passed and viewed coherent. | Full not staged/proven. Current fixes include mflux-compatible Qwen scheduler sigmas, keyed seed noise, profiled RGB reads for edit conditioning parity, VAE channels-last handling, raw-sigma timestep use, and quantized text-encoder embedding/linear loading. |
+| qwen-image-edit | `native_pipeline_implemented` for `Qwen-Image-Edit-mflux-q4`, `Qwen-Image-Edit-mflux-q5`, `Qwen-Image-Edit-mflux-q6`, and `Qwen-Image-Edit-mflux-q8`; `native_pipeline_partial` for q3 | q4/q5/q6/q8 scan as loadable local bundles. 2026-06-18 stress proof covers q4/q5/q8 at `docs/local/vmlx-flux-probes/20260618-image-stress2/current-proof-summary.json`; all three passed completion, deterministic repeat, and prompt sensitivity. Extended stress covers q8 single-image, q8 multi-image, q5 multi-image, unsupported-mask rejection, and q8 prompt/conditioning/VL/denoise diagnostics at `docs/local/vmlx-flux-probes/20260618-image-extended2/extended-stress-summary.json`; all rows passed. q8 viewed as clean prompt-following in both single- and multi-image rows. q5 multi-image remains usable but still shows the known composition/patch artifact in the viewed contact sheet. q4 remains visibly noisy but deterministic/prompt-sensitive. q6 remains clean from the earlier staged-shard artifact. q3 loads after staging `q3/text_encoder/3.safetensors`, but viewed output is high-noise, so it stays hidden. Non-null qwen masks are rejected before the edit pipeline loads and covered by `QwenImageEditSupportTests.testQwenImageEditRejectsMaskBeforePipelineLoad` plus the extended stress mask row. | q3 should stay hidden until a real coherent edit row exists; qwen mask/inpaint is unsupported by the current mflux reference; q5 can show a square table/composition patch on some source/edit prompts; broader Osaurus HTTP/UI production matrix still pending. |
 | flux2-klein / flux2-klein-edit | `not_implemented` | Bundle scans + loads; `FluxDiTConfig.flux2Klein` preset exists. | T5 (single-encoder) port + weight key-map + 3-axis RoPE. |
-| **flux1-schnell** | `native_pipeline_implemented` | Full native pipeline `Flux1Native.swift`: T5-XXL + CLIP-L encoders, full DiT, AutoencoderKL VAE, mflux decode. 2026-06-18 stress proof covers 4-bit and 8-bit at `docs/local/vmlx-flux-probes/20260618-image-stress2/current-proof-summary.json`; both rows passed completion, deterministic repeat, prompt sensitivity, and viewed coherent apple/mountain outputs. | tokenizer.json must be staged (mflux ships slow tokenizers; convert; see port plan). Full precision pending. |
+| **flux1-schnell** | `native_pipeline_implemented` | Full native pipeline `Flux1Native.swift`: T5-XXL + CLIP-L encoders, full DiT, AutoencoderKL VAE, mflux decode. 2026-06-18 stress proof covers 4-bit and 8-bit at `docs/local/vmlx-flux-probes/20260618-image-stress2/current-proof-summary.json`; both rows passed completion, deterministic repeat, prompt sensitivity, and viewed coherent apple/mountain outputs. Extended stress covers 4-bit tall and 8-bit wide rows at `docs/local/vmlx-flux-probes/20260618-image-extended2/extended-stress-summary.json`; both passed and viewed coherent. | tokenizer.json must be staged (mflux ships slow tokenizers; convert; see port plan). Full precision pending. |
 | flux1-dev/kontext/fill | `not_implemented` | dev = schnell + guidance embedder (small add); kontext/fill = edit variants. | wire guidance + edit conditioning on the working schnell pipeline. |
-| **ideogram** (Ideogram 4) | `native_pipeline_implemented` for staged fp8 and NF4 mirrors | Strong text/typography renderer. Complete mirror bundles are staged at `~/.mlxstudio/models/image/ideogram-4-fp8` and `~/.mlxstudio/models/image/ideogram-4-nf4`. Native source runs Qwen3 text encoder, conditional and unconditional 34-layer MM-DiT, fp8 `weight_scale` linears or bitsandbytes NF4 linears, mflux default 20-step guidance schedule, Flux2 VAE decode, and PNG output. 2026-06-18 stress proof covers fp8/NF4 structured JSON-caption apple and mountain rows at `docs/local/vmlx-flux-probes/20260618-image-stress2/current-proof-summary.json`; both passed completion, deterministic repeat, prompt sensitivity, and viewed coherent outputs. | Expose staged fp8 and NF4 mirrors as JSON-caption-first. Plain prompts can reproduce mflux warning/failure behavior as gray/text-card outputs. Official `ideogram-ai/*` downloads remain approval-gated for the current account. Broader Osaurus HTTP/UI production matrix still pending. |
+| **ideogram** (Ideogram 4) | `native_pipeline_implemented` for staged fp8 and NF4 mirrors | Strong text/typography renderer. Complete mirror bundles are staged at `~/.mlxstudio/models/image/ideogram-4-fp8` and `~/.mlxstudio/models/image/ideogram-4-nf4`. Native source runs Qwen3 text encoder, conditional and unconditional 34-layer MM-DiT, fp8 `weight_scale` linears or bitsandbytes NF4 linears, mflux default 20-step guidance schedule, Flux2 VAE decode, and PNG output. 2026-06-18 stress proof covers fp8/NF4 structured JSON-caption apple and mountain rows at `docs/local/vmlx-flux-probes/20260618-image-stress2/current-proof-summary.json`; both passed completion, deterministic repeat, prompt sensitivity, and viewed coherent outputs. Extended stress covers fp8 wide JSON and NF4 tall JSON at `docs/local/vmlx-flux-probes/20260618-image-extended2/extended-stress-summary.json`; both passed, with the viewed contact sheet confirming JSON-caption-first behavior and retaining poster/text-card quirks. | Expose staged fp8 and NF4 mirrors as JSON-caption-first. Plain prompts can reproduce mflux warning/failure behavior as gray/text-card outputs. Official `ideogram-ai/*` downloads remain approval-gated for the current account. Broader Osaurus HTTP/UI production matrix still pending. |
 | seedvr2 | scaffold | registered | upscale arch (different family). |
 | wan-2.1 / wan-2.2 | scaffold | full pipeline scaffolded (WanVAE3D + WanDiT + MP4 writer) with random weights. | real weight key-map, real Conv3d (currently a Conv2d shim), windowed attention for >3-4s clips. |
 
@@ -410,6 +421,16 @@ prompt-sensitive, and coherent in the recorded artifacts. Proof summary:
 `docs/local/vmlx-flux-probes/20260618-image-stress2/current-proof-summary.json`.
 Viewed contact sheet:
 `docs/local/vmlx-flux-outputs/20260618-image-stress2/current-proof-turn-contact-sheet.png`.
+Extended source-side stress summary:
+`docs/local/vmlx-flux-probes/20260618-image-extended2/extended-stress-summary.json`
+(`status=passed`, `failed_rows=0`), with viewed contact sheet:
+`docs/local/vmlx-flux-outputs/20260618-image-extended2/extended-stress-contact-sheet.png`.
+Max RSS high-water marks from `/usr/bin/time -l`: qwen-edit q8 multi-image
+40.57 GB, qwen-edit q8 single-image 38.28 GB, qwen-edit q8 diagnostics
+37.44 GB, qwen-image 8-bit wide 29.57 GB, Ideogram fp8 wide 27.13 GB, Flux
+Schnell 8-bit wide 18.11 GB, Z-Image 8-bit 768-square 11.01 GB. These are
+source-side process max RSS numbers from the remote M5 Max run, not Osaurus
+Activity Monitor app-footprint gates.
 qwen-image 8-bit remains staged from `AbstractFramework/qwen-image-8bit` as
 `qwen-image-mflux-8bit`. qwen-image-edit q5/q8 are clean on the blue-apple and
 green-pear rows; q4 remains visibly noisier. q3 loads but remains hidden because
@@ -521,6 +542,21 @@ qwen-image 4/8-bit, qwen-image-edit q4/q8, and staged Ideogram fp8/NF4
 same-seed proof rows, writes repo-local ignored proof artifacts, and fails if
 a row does not complete or the SHA repeat/sensitivity checks fail. The script
 does not replace visual inspection or Osaurus HTTP/UI proof.
+
+Use `scripts/vmlx-image-extended-stress.sh` when the machine has enough RAM
+for a longer source-side run. It keeps the current-proof assertions but adds a
+second load-only matrix cycle, non-square and larger image dimensions,
+qwen-image source regeneration, qwen edit single/multi-image turns, explicit
+unsupported-mask rejection, qwen edit prompt/conditioning/VL/denoise
+diagnostics, and `/usr/bin/time -l` logs per row. The intended command on the
+remote M5 Max is:
+
+```
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+VMLINUX_IMAGE_MODEL_ROOT=$HOME/.mlxstudio/models/image \
+VMLINUX_IMAGE_EXTENDED_STAMP=YYYYMMDD-image-extended \
+scripts/vmlx-image-extended-stress.sh
+```
 
 `vmlxflux-probe` (built: `swift build --product vmlxflux-probe`):
 ```
