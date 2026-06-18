@@ -4,6 +4,16 @@ import vMLXFluxKit
 // Qwen-Image (gen) + Qwen-Image-Edit — Alibaba's image model family.
 // Python source: `mflux.models.qwen.variants.{txt2img.qwen_image, edit.qwen_image_edit}`.
 
+public enum QwenImageRequestPolicy {
+    public static let minimumSteps = 2
+
+    public static func validateSteps(_ steps: Int, label: String = "Qwen") throws {
+        guard steps >= minimumSteps else {
+            throw FluxError.invalidRequest("\(label) steps must be at least \(minimumSteps)")
+        }
+    }
+}
+
 public final class QwenImage: ImageGenerator, @unchecked Sendable {
     public static let _register: Void = {
         ModelRegistry.register(ModelEntry(
@@ -38,9 +48,7 @@ public final class QwenImage: ImageGenerator, @unchecked Sendable {
             Task { [weak self] in
                 guard let self else { continuation.finish(); return }
                 do {
-                    guard request.steps > 0 else {
-                        throw FluxError.invalidRequest("Qwen steps must be greater than zero")
-                    }
+                    try QwenImageRequestPolicy.validateSteps(request.steps)
                     let image = try self.pipeline.generate(
                         prompt: request.prompt, negativePrompt: request.negativePrompt,
                         width: request.width, height: request.height, steps: request.steps,
@@ -99,6 +107,7 @@ public final class QwenImageEdit: ImageEditor, @unchecked Sendable {
                     if request.mask != nil {
                         throw FluxError.notImplemented("QwenImageEdit masks are not wired yet")
                     }
+                    try QwenImageRequestPolicy.validateSteps(request.steps, label: "Qwen edit")
                     let pipeline = try QwenImageEditPipeline(modelPath: self.modelPath)
                     let image = try await pipeline.edit(
                         prompt: request.prompt,

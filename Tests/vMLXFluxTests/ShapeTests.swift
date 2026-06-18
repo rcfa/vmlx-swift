@@ -1,6 +1,7 @@
 import XCTest
 @testable import vMLXFlux
 @testable import vMLXFluxKit
+@testable import vMLXFluxModels
 @testable import vMLXFluxVideo
 
 /// Pure-Swift shape + math tests. We can't run tests that touch MLX
@@ -73,6 +74,24 @@ final class ShapeTests: XCTestCase {
         XCTAssertEqual(scheduler.sigmas[2], 0.45561380, accuracy: 0.000001)
         XCTAssertEqual(scheduler.sigmas[3], 0.02, accuracy: 0.000001)
         XCTAssertEqual(scheduler.sigmas[4], 0.0, accuracy: 0.000001)
+    }
+
+    func testQwenImageTerminalShiftDoesNotEmitNaNForOneStep() {
+        let scheduler = FlowMatchEulerScheduler.qwenImage(
+            steps: 1,
+            imageSeqLen: 1024)
+
+        XCTAssertEqual(scheduler.sigmas.count, 2)
+        XCTAssertTrue(scheduler.sigmas.allSatisfy(\.isFinite))
+        XCTAssertEqual(scheduler.sigmas[0], 1.0, accuracy: 0.000001)
+        XCTAssertEqual(scheduler.sigmas[1], 0.0, accuracy: 0.000001)
+    }
+
+    func testQwenImagePolicyRejectsOneStepRequests() {
+        XCTAssertThrowsError(try QwenImageRequestPolicy.validateSteps(1)) { error in
+            XCTAssertTrue(String(describing: error).contains("at least 2"))
+        }
+        XCTAssertNoThrow(try QwenImageRequestPolicy.validateSteps(2))
     }
 
     // MARK: - FluxDiTConfig presets

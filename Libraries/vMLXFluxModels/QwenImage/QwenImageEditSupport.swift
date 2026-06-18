@@ -63,9 +63,7 @@ public struct QwenImageEditPreprocessPlan: Sendable {
         guard sourceWidth > 0, sourceHeight > 0 else {
             throw FluxError.invalidRequest("Qwen edit source image dimensions must be positive")
         }
-        guard steps > 0 else {
-            throw FluxError.invalidRequest("Qwen edit steps must be greater than zero")
-        }
+        try QwenImageRequestPolicy.validateSteps(steps, label: "Qwen edit")
         guard guidance.isFinite else {
             throw FluxError.invalidRequest("Qwen edit guidance must be finite")
         }

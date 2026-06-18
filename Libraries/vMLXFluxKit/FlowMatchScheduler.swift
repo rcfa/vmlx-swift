@@ -71,9 +71,13 @@ public struct FlowMatchEulerScheduler: Sendable {
         }
         if let shiftTerminal, let last = shifted.last {
             let scale = (1.0 - last) / (1.0 - shiftTerminal)
-            self.sigmas = shifted.map { sigma in
-                1.0 - ((1.0 - sigma) / scale)
-            } + [0.0]
+            if scale.isFinite, scale > 0 {
+                self.sigmas = shifted.map { sigma in
+                    1.0 - ((1.0 - sigma) / scale)
+                } + [0.0]
+            } else {
+                self.sigmas = shifted + [0.0]
+            }
         } else {
             self.sigmas = shifted + [0.0]
         }

@@ -152,6 +152,14 @@ public enum ImageIO {
                 "image tensor must have 1 or 3 channels, got \(channels)")
         }
 
+        let finiteProbe = single.asType(.float32)
+        eval(finiteProbe)
+        let meanValue = mean(finiteProbe).item(Float.self)
+        let maxMagnitude = MLX.max(abs(finiteProbe)).item(Float.self)
+        guard meanValue.isFinite, maxMagnitude.isFinite else {
+            throw FluxError.invalidRequest("image tensor contains non-finite values")
+        }
+
         // Clamp to [0, 1], scale to [0, 255], cast to uint8.
         let clamped = clip(single, min: MLXArray(Float(0)), max: MLXArray(Float(1)))
         let scaled = clamped * MLXArray(Float(255))
