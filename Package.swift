@@ -816,6 +816,7 @@ let package = Package(
                 "DeepseekV4IndexerCausalTopKTests.swift",
                 "DeepseekV4ReasoningPolicyTests.swift",
                 "Gemma4ZyphraToolParserFocusedTests.swift",
+                "GemmaNestedObjectArgumentFocusedTests.swift",
                 "Gemma4ThoughtChannelParserFocusedTests.swift",
                 "Gemma3nTextSanitizeFocusedTests.swift",
                 "MediaCachePlaceholderTests.swift",
