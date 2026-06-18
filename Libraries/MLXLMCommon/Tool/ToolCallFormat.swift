@@ -366,6 +366,16 @@ public enum ToolCallFormat: String, Sendable, Codable, CaseIterable {
             return .nemotron
         }
 
+        // Qwen2 / Qwen2.5 family (qwen2, qwen2_5, qwen2_5_vl, …) — same XML
+        // `<tool_call>{"name","arguments"}</tool_call>` envelope as Qwen3.x.
+        // VibeThinker-3B ships `model_type=qwen2` with exactly that tool
+        // template, so config-only inference must map it to the XML-function
+        // parser rather than nil (which makes the app's capability gate report
+        // tool calling unsupported and block the request).
+        if normalized.hasPrefix("qwen2") || compact.hasPrefix("qwen2") {
+            return .xmlFunction
+        }
+
         // Qwen3.5 family (qwen3_5, qwen3_5_moe, etc.)
         if normalized.hasPrefix("qwen3_5") || compact.hasPrefix("qwen35") {
             return .xmlFunction

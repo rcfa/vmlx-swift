@@ -343,6 +343,19 @@ public enum ParserResolution {
                 .chatTemplate
             )
         }
+        // Template-native `<think>...</think>` envelope. This is the PRECISE
+        // reasoning signal: a reasoning-tuned bundle (e.g. VibeThinker, a
+        // qwen2-based thinker) carries the literal tag pair in its chat
+        // template, while its non-reasoning siblings (Qwen2.5-Instruct, also
+        // model_type `qwen2`) do not. The model_type heuristic below cannot
+        // separate them, so resolving here keeps `qwen2` OUT of the model_type
+        // allowlist (which would over-trigger and route plain answers into the
+        // think pane — the original reverse-allowlist bug). Explicit JANG
+        // stamps are already honoured above; Gemma's `<|think|>` mode marker
+        // has no `</think>` close form, so the harmony path is unaffected.
+        if templateDeclaresThinkEnvelope(chatTemplate) {
+            return (ReasoningParser.fromCapabilityName("qwen3"), .chatTemplate)
+        }
         // Heuristic: delegate to the canonical factory helper so this
         // stays byte-identical with `LLMModelFactory` / `VLMModelFactory`.
         // Historical note: this function previously carried its own
@@ -359,6 +372,16 @@ public enum ParserResolution {
             ReasoningParser.fromCapabilityName(stamp),
             .modelTypeHeuristic
         )
+    }
+
+    /// True when the chat template carries a literal `<think>...</think>`
+    /// reasoning envelope. This is the precise per-bundle reasoning signal that
+    /// distinguishes a reasoning-tuned model from a non-reasoning sibling that
+    /// shares its `model_type` (e.g. VibeThinker vs Qwen2.5-Instruct, both
+    /// `qwen2`). Mirrors osaurus `LocalReasoningCapability.analyze`.
+    static func templateDeclaresThinkEnvelope(_ chatTemplate: String?) -> Bool {
+        guard let chatTemplate else { return false }
+        return chatTemplate.contains("<think>") && chatTemplate.contains("</think>")
     }
 
     public static func shouldIgnoreReasoningStamp(
