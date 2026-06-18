@@ -124,8 +124,58 @@ public struct GemmaFunctionParser: ToolCallParser, Sendable {
             return parseArray(from: &text)
         }
 
+        if text.hasPrefix("{") {
+            return parseObject(from: &text)
+        }
+
         let value = takeRawValue(from: &text, terminators: [","])
         return decodeRawValue(value)
+    }
+
+    /// Parse a nested object value: `{key:value,k:<escape>str<escape>}`.
+    ///
+    /// Gemma emits nested object arguments (e.g. a `target:{mark:1}` field, or
+    /// any tool whose schema declares an `object` parameter) in the same
+    /// `key:value` body syntax as the top-level call. Without an explicit
+    /// object branch, `parseValue` fell through to `takeRawValue` /
+    /// `decodeRawValue`, which captured the brace span as an undecodable string
+    /// (`"{mark:1}"`) and lost the nested structure — so a tool expecting an
+    /// object received a string and rejected the call. Keys and scalar/escaped
+    /// values reuse the same decoding as the top level, so a nested object is
+    /// parsed identically (and recursively for objects/arrays inside it).
+    private func parseObject(from text: inout String) -> [String: any Sendable]? {
+        guard text.hasPrefix("{") else { return nil }
+        text = String(text.dropFirst())
+        var object: [String: any Sendable] = [:]
+
+        while true {
+            text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.hasPrefix("}") {
+                text = String(text.dropFirst())
+                return object
+            }
+            if text.isEmpty { return nil }
+
+            guard let colonIdx = text.firstIndex(of: ":") else { return nil }
+            let key = normalizeArgumentKey(
+                String(text[..<colonIdx])
+                    .trimmingCharacters(in: .whitespacesAndNewlines))
+            text = String(text[text.index(after: colonIdx)...])
+
+            guard let value = parseValue(from: &text) else { return nil }
+            object[key] = value
+
+            text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.hasPrefix(",") {
+                text = String(text.dropFirst())
+                continue
+            }
+            if text.hasPrefix("}") {
+                text = String(text.dropFirst())
+                return object
+            }
+            return nil
+        }
     }
 
     private func parseArray(from text: inout String) -> [any Sendable]? {
@@ -165,7 +215,10 @@ public struct GemmaFunctionParser: ToolCallParser, Sendable {
         var index = text.startIndex
         while index < text.endIndex {
             let character = text[index]
-            if terminators.contains(character) || character == "]" {
+            // `]` and `}` always terminate a raw scalar so an element inside a
+            // nested array/object (e.g. the `1` in `{mark:1}`) stops at the
+            // closing bracket rather than swallowing it into the value.
+            if terminators.contains(character) || character == "]" || character == "}" {
                 break
             }
             index = text.index(after: index)
