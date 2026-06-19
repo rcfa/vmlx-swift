@@ -266,9 +266,15 @@ public final class LagunaM1Model: Module, LLMModel, KVCacheDimensionProvider {
 
     public func callAsFunction(_ inputs: MLXArray, cache: [KVCache]?) -> MLXArray {
         var h = embedTokens(inputs)
+        FileHandle.standardError.write(Data(
+            "[LagunaM1Model] inputs=\(inputs.shape) h_embed=\(h.shape)\n".utf8))
         let mask = createAttentionMask(h: h, cache: cache?.first)
         for (i, layer) in layers.enumerated() {
             h = layer(h, mask: mask, cache: cache?[i])
+            if i <= 3 {
+                FileHandle.standardError.write(Data(
+                    "[LagunaM1Model] after layer \(i) h=\(h.shape)\n".utf8))
+            }
         }
         h = norm(h)
         if let lmHead {
