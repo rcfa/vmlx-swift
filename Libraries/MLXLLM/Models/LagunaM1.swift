@@ -194,11 +194,14 @@ private final class LagunaM1MoE: Module, UnaryLayer {
         // the gating weight is the UN-biased sigmoid score, renormalized over k.
         let logits = gate(x).asType(.float32)
         let scores = sigmoid(logits)
-        let inds = argPartition(
-            -(scores + eScoreCorrectionBias), kth: topK - 1, axis: -1
-        )[.ellipsis, ..<topK]
+        let part = argPartition(-(scores + eScoreCorrectionBias), kth: topK - 1, axis: -1)
+        FileHandle.standardError.write(Data(
+            "[LagunaM1MoE] x=\(x.shape) scores=\(scores.shape) part=\(part.shape) topK=\(topK)\n".utf8))
+        let inds = part[.ellipsis, ..<topK]
         var weights = MLX.takeAlong(scores, inds, axis: -1)
         weights = weights / (weights.sum(axis: -1, keepDims: true) + MLXArray(1e-20, dtype: weights.dtype))
+        FileHandle.standardError.write(Data(
+            "[LagunaM1MoE] inds=\(inds.shape) weights=\(weights.shape)\n".utf8))
 
         let y = (switchMLP(x, inds) * weights[.ellipsis, .newAxis].asType(x.dtype)).sum(axis: -2)
         // Routed contribution scaled; shared expert UNSCALED (HF order).
