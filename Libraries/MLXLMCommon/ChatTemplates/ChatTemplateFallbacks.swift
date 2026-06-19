@@ -658,13 +658,17 @@ value_1
     /// `<system>`, `<user>`, `<assistant>`, `</think>` for direct-answer
     /// mode, and `<think>` for reasoning mode.
     public static let lagunaMinimal: String = #"""
-{#- Do NOT emit the BOS (〈|EOS|〉) here. swift-transformers' applyChatTemplate
-    tokenizes the rendered template WITH special tokens added — the laguna
-    tokenizer's post-processor prepends BOS=2 — so emitting it here too yields a
-    DOUBLE BOS ([2,2,...]) that drives the model into emoji/punct garbage at low
-    repetition penalty. Let the tokenizer supply the single BOS. (HF
-    apply_chat_template avoids this via add_special_tokens=False; the swift path
-    doesn't, so the template must omit the literal BOS.) -#}
+{#- The template MUST emit the BOS (〈|EOS|〉) here. swift-transformers'
+    applyChatTemplate tokenizes the rendered template with add_special_tokens=false
+    (matching HF apply_chat_template), so the post-processor does NOT prepend a BOS
+    — the chat prompt has exactly the special tokens the template writes. Omitting
+    it leaves the prompt with ZERO BOS (first token becomes `<` = id 97 instead of
+    id 2), which is out-of-distribution and drives the model into punct/number
+    garbage. (Verified at the Swift layer: applyChatTemplate of this template
+    starts at id 97 without this line, id 2 with it. The `/v1/completions` path is
+    unaffected because encode(addSpecialTokens:true) adds the BOS itself — which is
+    what previously masked this bug.) -#}
+{{- "〈|EOS|〉" -}}
 {%- set enable_thinking = enable_thinking | default(false) -%}
 {%- set add_generation_prompt = add_generation_prompt | default(false) -%}
 {%- set system_message = "" -%}
