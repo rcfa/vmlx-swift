@@ -88,15 +88,16 @@ private final class LagunaM1Attention: Module {
                     dict["mscale"] = af
                     dict["attention_factor"] = nil
                 }
-                // `attention_factor` IS YaRN's final length scale (1.0 = none on
-                // M.1, so `_mscale` should be 1.0). This YarnRoPE instead RECOMPUTES
-                // mscale from the factor unless mscale == mscale_all_dim — and a
-                // non-1.0 `_mscale` triggers a fragile in-place subscript that
-                // crashed here. Pin mscale_all_dim = mscale → `_mscale = 1.0`,
-                // matching attention_factor and skipping that path.
-                if let ms = dict["mscale"] {
-                    dict["mscale_all_dim"] = ms
-                }
+                // Do NOT pin mscale_all_dim. The JANG reference runtime (mlx_lm
+                // YarnRoPE, proven coherent on this exact bundle) leaves
+                // mscale_all_dim at its default 0, giving
+                //   _mscale = yarnGetMscale(factor,1)/yarnGetMscale(factor,0) ≈ 1.416
+                // for factor=64 — a constant q/k length-scale the model was trained
+                // with (≈2x on attention logits). An earlier crash-dodge pinned
+                // mscale_all_dim = mscale → _mscale = 1.0, which REMOVED that scaling
+                // → ~2x-too-soft attention → coherent-start-then-word-salad. The
+                // YarnRoPE in-place crash is now fixed functionally in RoPEUtils, so
+                // the real _mscale applies. (mscale stays = attention_factor = 1.0.)
                 scalingCfg = dict.compactMapValues { $0 }
             }
         }
