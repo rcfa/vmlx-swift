@@ -118,10 +118,7 @@ private final class LagunaM1Attention: Module {
         _ x: MLXArray, mask: MLXFast.ScaledDotProductAttentionMaskMode, cache: KVCache?
     ) -> MLXArray {
         let (B, T) = (x.dim(0), x.dim(1))
-        let qRaw = qProj(x)
-        FileHandle.standardError.write(Data(
-            "[LagunaM1Attn] x=\(x.shape) qProj=\(qRaw.shape) kProj=\(kProj(x).shape) vProj=\(vProj(x).shape)\n".utf8))
-        var q = qRaw.reshaped(B, T, nHeads, headDim)
+        var q = qProj(x).reshaped(B, T, nHeads, headDim)
         var k = kProj(x).reshaped(B, T, nKVHeads, headDim)
         let v = vProj(x).reshaped(B, T, nKVHeads, headDim).transposed(0, 2, 1, 3)
         // Per-head q/k norm AFTER projection, BEFORE rope (reference order).
@@ -136,8 +133,6 @@ private final class LagunaM1Attention: Module {
         )
         .transposed(0, 2, 1, 3)
         .reshaped(B, T, nHeads * headDim)
-        FileHandle.standardError.write(Data(
-            "[LagunaM1Attn] q=\(q.shape) sdpaOut=\(out.shape)\n".utf8))
 
         if let g = gProj {
             // softplus (unbounded) — NOT sigmoid: HF reference amplifies rather
@@ -200,13 +195,9 @@ private final class LagunaM1MoE: Module, UnaryLayer {
         let logits = gate(x).asType(.float32)
         let scores = sigmoid(logits)
         let part = argPartition(-(scores + eScoreCorrectionBias), kth: topK - 1, axis: -1)
-        FileHandle.standardError.write(Data(
-            "[LagunaM1MoE] x=\(x.shape) scores=\(scores.shape) part=\(part.shape) topK=\(topK)\n".utf8))
         let inds = part[.ellipsis, ..<topK]
         var weights = MLX.takeAlong(scores, inds, axis: -1)
         weights = weights / (weights.sum(axis: -1, keepDims: true) + MLXArray(1e-20, dtype: weights.dtype))
-        FileHandle.standardError.write(Data(
-            "[LagunaM1MoE] inds=\(inds.shape) weights=\(weights.shape)\n".utf8))
 
         let y = (switchMLP(x, inds) * weights[.ellipsis, .newAxis].asType(x.dtype)).sum(axis: -2)
         // Routed contribution scaled; shared expert UNSCALED (HF order).
@@ -242,8 +233,6 @@ private final class LagunaM1Layer: Module {
         let attnOut = attention(normed, mask: mask, cache: cache)
         let h = x + attnOut
         let mlpOut = mlp(postAttentionLayerNorm(h))
-        FileHandle.standardError.write(Data(
-            "[LagunaM1Layer] x=\(x.shape) normed=\(normed.shape) attnOut=\(attnOut.shape) h=\(h.shape) mlpOut=\(mlpOut.shape)\n".utf8))
         return h + mlpOut
     }
 }
@@ -276,14 +265,10 @@ public final class LagunaM1Model: Module, LLMModel, KVCacheDimensionProvider {
 
     public func callAsFunction(_ inputs: MLXArray, cache: [KVCache]?) -> MLXArray {
         var h = embedTokens(inputs)
-        FileHandle.standardError.write(Data(
-            "[LagunaM1Model] inputs=\(inputs.shape) h_embed=\(h.shape)\n".utf8))
         let mask = createAttentionMask(h: h, cache: cache?.first)
         for (i, layer) in layers.enumerated() {
             h = layer(h, mask: mask, cache: cache?[i])
             if i <= 3 {
-                FileHandle.standardError.write(Data(
-                    "[LagunaM1Model] after layer \(i) h=\(h.shape)\n".utf8))
             }
         }
         h = norm(h)
