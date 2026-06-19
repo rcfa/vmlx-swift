@@ -139,6 +139,7 @@ public struct LagunaConfiguration: Codable, Sendable {
     public var attentionBias: Bool
     public var slidingWindow: Int
     public var partialRotaryFactor: Float
+    public var rotaryDim: Int
     public var tieWordEmbeddings: Bool
 
     public var numExperts: Int
@@ -181,6 +182,7 @@ public struct LagunaConfiguration: Codable, Sendable {
         case attentionBias = "attention_bias"
         case slidingWindow = "sliding_window"
         case partialRotaryFactor = "partial_rotary_factor"
+        case rotaryDim = "rotary_dim"
         case tieWordEmbeddings = "tie_word_embeddings"
         case numExperts = "num_experts"
         case numExpertsPerTok = "num_experts_per_tok"
@@ -212,6 +214,7 @@ public struct LagunaConfiguration: Codable, Sendable {
         self.slidingWindow = try c.decodeIfPresent(Int.self, forKey: .slidingWindow) ?? 512
         self.partialRotaryFactor =
             try c.decodeIfPresent(Float.self, forKey: .partialRotaryFactor) ?? 0.5
+        self.rotaryDim = try c.decodeIfPresent(Int.self, forKey: .rotaryDim) ?? 0
         self.tieWordEmbeddings =
             try c.decodeIfPresent(Bool.self, forKey: .tieWordEmbeddings) ?? false
         self.numExperts = try c.decodeIfPresent(Int.self, forKey: .numExperts) ?? 256
