@@ -1968,7 +1968,24 @@ public struct JangLoader: Sendable {
                 return (first.bits, first.groupSize)
             }
 
-            if (isHiddenAnchor || isHiddenInputProjection),
+            // Trust the bundle's EXPLICIT declared per-module quant when it unpacks the
+            // real `.weight`/`.scales` to an inputDim that is a known model dimension.
+            // On ambiguous packed widths (512 → bits ∈ {2,4,8}) the shape walk can pick
+            // a different, WRONG bit width: Laguna-M.1 ships 4-bit dense MLP, the walk
+            // re-stamped 8-bit, and the 4-bit weights dequantized to a degenerate (empty)
+            // output that collapsed the forward. A self-consistent declaration whose
+            // inputDim ∈ validInDims is the author's verified intent. A genuinely stale
+            // config (claims 8-bit for 4-bit-packed) unpacks to a NON-model inputDim,
+            // fails this check, and still falls through to the shape walk.
+            if let dq = declaredQuantization(for: basePath),
+               dq.bits > 0, numGroups > 0, (packedDim * 32) % dq.bits == 0,
+               case let declaredInputDim = (packedDim * 32) / dq.bits,
+               declaredInputDim % numGroups == 0,
+               declaredInputDim / numGroups == dq.groupSize,
+               validInDims.contains(declaredInputDim)
+            {
+                (bits, inferredGroupSize) = (dq.bits, dq.groupSize)
+            } else if (isHiddenAnchor || isHiddenInputProjection),
                let hiddenSize = hiddenSizeHint, hiddenSize > 0
             {
                 (bits, inferredGroupSize) = inferBitWidthAndGroupSize(
