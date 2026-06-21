@@ -1,5 +1,11 @@
 # MiniMax-M3 (mm3) — E2E Verification & Confirmation Spec
 
+> **STATUS (2026-06-21):** WIRED + BUILD GREEN, ready for user live testing.
+> vmlx `codex/mm3-runtime`@`409d2c47` rebased on main (incl cache B1/B2). osaurus
+> `codex/minimax-m3-integration` rebased + repinned to `5139e84a`; Release build
+> SUCCEEDED (MM3 engine integrates). The §6 script + §7 scan against the 95 GB
+> model is the remaining merge gate — RAM-gated, user-run.
+
 How to confirm and live-prove the MiniMax-M3 engine + osaurus integration end-to-end before merge.
 Paired PRs: **vmlx-swift #75** (`codex/mm3-runtime`, engine) + **osaurus #1576** (`codex/minimax-m3-integration`).
 Model: `MiniMax-M3-REAP40-d3-JANG_2L` (REAP 128→77 experts, 95 GB) at `~/models/JANGQ-AI/MiniMax-M3-REAP40-d3-JANG_2L`.
