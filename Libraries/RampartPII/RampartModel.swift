@@ -19,6 +19,18 @@ public struct RampartConfig: Codable, Sendable {
     public let typeVocabSize: Int
     public let layerNormEps: Float
     public let id2label: [String: String]
+    /// Present when the checkpoint ships MLX-quantized weights (e.g. the
+    /// published 4-bit `sledgedev/rampart-mlx`). Absent ⇒ float weights.
+    public let quantization: Quantization?
+
+    public struct Quantization: Codable, Sendable {
+        public let groupSize: Int
+        public let bits: Int
+        enum CodingKeys: String, CodingKey {
+            case groupSize = "group_size"
+            case bits
+        }
+    }
 
     enum CodingKeys: String, CodingKey {
         case hiddenSize = "hidden_size"
@@ -30,6 +42,7 @@ public struct RampartConfig: Codable, Sendable {
         case typeVocabSize = "type_vocab_size"
         case layerNormEps = "layer_norm_eps"
         case id2label
+        case quantization
     }
 
     public var numLabels: Int { id2label.count }

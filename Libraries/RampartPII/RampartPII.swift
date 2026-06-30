@@ -22,6 +22,14 @@ public final class RampartPII {
     public init(directory: URL) throws {
         let config = try RampartConfig.load(from: directory.appendingPathComponent("config.json"))
         let model = RampartModel(config)
+        // The published checkpoint (e.g. `sledgedev/rampart-mlx`) ships MLX
+        // affine-quantized weights: every Linear/Embedding (and the classifier)
+        // is stored as packed U32 `weight` + `scales`/`biases`. Convert the
+        // matching modules to their quantized form before loading so the keys
+        // and shapes line up; LayerNorms are left dense (quantize() skips them).
+        if let q = config.quantization {
+            quantize(model: model, groupSize: q.groupSize, bits: q.bits)
+        }
         let weights = try loadArrays(url: directory.appendingPathComponent("model.safetensors"))
         try model.update(parameters: ModuleParameters.unflattened(weights), verify: [.all])
         eval(model)

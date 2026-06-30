@@ -178,6 +178,13 @@ public struct RampartTokenizer: Sendable {
             if pieces.count >= bodyLimit { break }
         }
 
+        // A single word can emit several subwords past `bodyLimit` in one
+        // `append(contentsOf:)`, so hard-cap before [SEP]. Without this the
+        // sequence can exceed `maxPositionEmbeddings`, indexing the position
+        // embedding out of bounds on long inputs.
+        if pieces.count > bodyLimit {
+            pieces = Array(pieces.prefix(bodyLimit))
+        }
         pieces.append(Token(id: sepId, range: nil))
         return pieces
     }
