@@ -63,9 +63,7 @@ public final class Flux1Schnell: ImageGenerator, @unchecked Sendable {
                     ) { step, total, eta in
                         continuation.yield(.step(step: step, total: total, etaSeconds: eta))
                     }
-                    let outURL = try await MainActor.run {
-                        try ImageIO.writePNG(image, outputDir: request.outputDir, prefix: "flux1-schnell")
-                    }
+                    let outURL = try ImageIO.writePNG(image, outputDir: request.outputDir, prefix: "flux1-schnell")
                     continuation.yield(.completed(url: outURL, seed: request.seed ?? 0))
                     continuation.finish()
                 } catch {

@@ -125,7 +125,10 @@ public enum ImageIO {
 
     /// Save an image tensor to `dir/<prefix>-<uuid>.png`.
     /// Returns the URL of the written file.
-    @MainActor
+    ///
+    /// Not `@MainActor`: `.asArray(UInt8.self)` forces the MLX compute
+    /// graph to evaluate, which can block for seconds on a large image.
+    /// Callers must not run this on the main actor.
     public static func writePNG(
         _ tensor: MLXArray,
         outputDir: URL,
