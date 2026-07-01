@@ -72,9 +72,7 @@ public final class Ideogram4: ImageGenerator, @unchecked Sendable {
                     ) { step, total, eta in
                         continuation.yield(.step(step: step, total: total, etaSeconds: eta))
                     }
-                    let outURL = try await MainActor.run {
-                        try ImageIO.writePNG(image, outputDir: request.outputDir, prefix: "ideogram")
-                    }
+                    let outURL = try ImageIO.writePNG(image, outputDir: request.outputDir, prefix: "ideogram")
                     continuation.yield(.completed(url: outURL, seed: request.seed ?? 0))
                     continuation.finish()
                 } catch {

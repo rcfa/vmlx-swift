@@ -87,15 +87,11 @@ public final class ZImage: ImageGenerator, @unchecked Sendable {
             continuation.yield(.step(step: step, total: total, etaSeconds: eta))
         }
 
-        // Write the PNG. `ImageIO.writePNG` is @MainActor so the
-        // actor hop happens here.
-        let outURL = try await MainActor.run {
-            try ImageIO.writePNG(
-                image,
-                outputDir: request.outputDir,
-                prefix: "z-image"
-            )
-        }
+        let outURL = try ImageIO.writePNG(
+            image,
+            outputDir: request.outputDir,
+            prefix: "z-image"
+        )
         let seed = request.seed ?? 0
         continuation.yield(.completed(url: outURL, seed: seed))
     }

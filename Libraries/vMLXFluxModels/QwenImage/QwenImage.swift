@@ -48,9 +48,7 @@ public final class QwenImage: ImageGenerator, @unchecked Sendable {
                     ) { step, total, eta in
                         continuation.yield(.step(step: step, total: total, etaSeconds: eta))
                     }
-                    let outURL = try await MainActor.run {
-                        try ImageIO.writePNG(image, outputDir: request.outputDir, prefix: "qwen-image")
-                    }
+                    let outURL = try ImageIO.writePNG(image, outputDir: request.outputDir, prefix: "qwen-image")
                     continuation.yield(.completed(url: outURL, seed: request.seed ?? 0))
                     continuation.finish()
                 } catch {
@@ -111,12 +109,10 @@ public final class QwenImageEdit: ImageEditor, @unchecked Sendable {
                     ) { step, total, eta in
                         continuation.yield(.step(step: step, total: total, etaSeconds: eta))
                     }
-                    let outURL = try await MainActor.run {
-                        try ImageIO.writePNG(
-                            image,
-                            outputDir: request.outputDir,
-                            prefix: "qwen-image-edit")
-                    }
+                    let outURL = try ImageIO.writePNG(
+                        image,
+                        outputDir: request.outputDir,
+                        prefix: "qwen-image-edit")
                     continuation.yield(.completed(url: outURL, seed: request.seed ?? 0))
                     continuation.finish()
                 } catch {
