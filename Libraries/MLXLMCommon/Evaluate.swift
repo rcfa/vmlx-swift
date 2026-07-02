@@ -3790,7 +3790,9 @@ extension TokenLoopHandler {
     var emittedToolCall: Bool { false }
 }
 
-private struct TextToolTokenLoopHandler: TokenLoopHandler, @unchecked Sendable {
+// Internal (not private) so the stop-string truncation contract is unit-testable
+// (Tests/MLXLMTests/StopStringPostStopLeakTests.swift drives the handler directly).
+struct TextToolTokenLoopHandler: TokenLoopHandler, @unchecked Sendable {
     typealias Output = Generation
 
     var detokenizer: NaiveStreamingDetokenizer
@@ -3919,6 +3921,19 @@ private struct TextToolTokenLoopHandler: TokenLoopHandler, @unchecked Sendable {
     mutating func onGenerationEnd(
         emit: (sending Generation) -> AsyncStream<Generation>.Continuation.YieldResult
     ) {
+        // A matched stop string is the semantic end of the response.
+        // Everything still held downstream of it — the detokenizer's
+        // undecoded tail, reasoning/tool buffers, and any text queued
+        // behind them — is chronologically AFTER the match (the engine
+        // decodes a few more tokens before the halt lands) and must be
+        // discarded, not flushed. Flushing it re-feeds post-stop text
+        // through a matcher whose buffer was cleared at match time, so
+        // it leaks mangled text after the truncation point (e.g.
+        // stop=["three"] on "one, two, three, four, five" emitted
+        // "one, two, our, fi").
+        if stopSequenceHit {
+            return
+        }
         if let chunk = detokenizer.flush(), !dispatch(chunk, emit: emit) {
             return
         }
@@ -3958,11 +3973,16 @@ private struct TextToolTokenLoopHandler: TokenLoopHandler, @unchecked Sendable {
             reasoningParser = parser
         }
 
+        // Route the tool processor's end-of-stream remainder through the
+        // stop matcher (via emitRouted), not around it: a stop-string
+        // occurrence held in the tool buffer at EOS must still truncate,
+        // and feeding it keeps the matcher's tail ordered AFTER this
+        // text so the final drain below cannot reorder characters.
         for event in flushGenerationText(
             channel: reasoningParser?.isInsideReasoning == true ? .reasoning : .content,
             through: toolCallProcessor
         ) {
-            if case .terminated = emit(event) {
+            if !emitRouted(event, emit: emit) {
                 return
             }
         }

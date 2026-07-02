@@ -733,6 +733,14 @@ public actor BatchEngine {
             }
 
             func flush() {
+                // A matched stop string is the semantic end of the
+                // response: everything still held in the detokenizer /
+                // reasoning / tool buffers is chronologically AFTER the
+                // match (a few tokens decode before the halt lands) and
+                // must be discarded, not flushed — the matcher's buffer
+                // was cleared at match time, so re-feeding would leak
+                // post-stop text past the truncation point.
+                if stopMatched { return }
                 if let text = detokenizer.flush() {
                     pump(text)
                 }
@@ -759,11 +767,17 @@ public actor BatchEngine {
                     }
                     reasoningParser = parser
                 }
+                // Route the tool processor's end-of-stream remainder
+                // through the stop matcher (via emitRouted), not around
+                // it: a stop-string occurrence held in the tool buffer at
+                // EOS must still truncate, and feeding it keeps the
+                // matcher's tail ordered AFTER this text so the drain
+                // below cannot reorder characters.
                 for event in flushGenerationText(
                     channel: reasoningParser?.isInsideReasoning == true ? .reasoning : .content,
                     through: toolCallProcessor
                 ) {
-                    continuation.yield(event)
+                    emitRouted(event)
                 }
 
                 // Drain the stop-string matcher's held tail — no more
