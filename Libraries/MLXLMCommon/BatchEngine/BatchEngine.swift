@@ -1604,13 +1604,31 @@ public actor BatchEngine {
 
                     // Disk cache restore (blocks are empty, arrays are present)
                     if let diskArrays, !restored {
-                        let diskRestored = restoreFromDiskArrays(diskArrays, into: &slot.cache)
-                        if diskRestored > 0 {
-                            if let ssm = ssmStates,
-                               TQDiskSerializer.formatVersion(of: diskArrays) < 2
-                            {
-                                restoreSSMStates(ssm, into: slot.cache)
+                        // Under `MLXCacheIOLock`: the restore's Metal evals
+                        // must not interleave with other cache-adjacent GPU
+                        // submitters (serving layers tokenize the next
+                        // request's input under this lock). See the
+                        // TokenIterator disk-restore path for the abort this
+                        // prevents.
+                        let diskRestored = MLXCacheIOLock.withSerializedMLXCacheIO {
+                            () -> Int in
+                            let count = restoreFromDiskArrays(diskArrays, into: &slot.cache)
+                            if count > 0 {
+                                if let ssm = ssmStates,
+                                   TQDiskSerializer.formatVersion(of: diskArrays) < 2
+                                {
+                                    restoreSSMStates(ssm, into: slot.cache)
+                                }
+                                // The materializing eval below is what
+                                // actually submits the restore compute;
+                                // keep it inside the lock so the whole
+                                // restore is serialized, not just its
+                                // graph construction.
+                                MLX.eval(slot.cache)
                             }
+                            return count
+                        }
+                        if diskRestored > 0 {
                             // 2026-04-27 fix: materialize restored cache state
                             // in its own command buffer BEFORE prefill builds
                             // its forward graph. Disk restore produces lazy
@@ -1630,7 +1648,8 @@ public actor BatchEngine {
                             // Eager eval forces the cache state into GPU
                             // memory in a SEPARATE command buffer that
                             // commits before prefill encoding starts.
-                            MLX.eval(slot.cache)
+                            // (The eval itself runs above, inside the
+                            // MLXCacheIOLock region.)
                             restored = true
                             slot.continuation.yield(.prefillProgress(PrefillProgress(
                                 stage: .cacheRestore,
