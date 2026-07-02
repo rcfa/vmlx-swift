@@ -1421,18 +1421,34 @@ public struct TokenIterator: TokenIteratorProtocol {
 
                 // Disk cache restore (blocks are empty, arrays are present)
                 if let diskArrays, !restored {
-                    let diskRestored = restoreFromDiskArrays(diskArrays, into: &self.cache)
-                    if diskRestored > 0 {
-                        if let ssm = ssmStates,
-                           TQDiskSerializer.formatVersion(of: diskArrays) < 2
-                        {
-                            restoreSSMStates(ssm, into: self.cache)
+                    // Serialize the restore's Metal evals (TQ component
+                    // deserialization `.item()` reads, asType conversions,
+                    // and the materializing eval below) against other
+                    // cache-adjacent GPU submitters. Serving layers tokenize
+                    // the NEXT request's input under `MLXCacheIOLock` while
+                    // this producer restores; unserialized, the two encode
+                    // concurrently on the shared command queue and abort
+                    // ("Completed handler provided after commit call" —
+                    // osaurus disconnect repro, iteration with a warm disk
+                    // entry).
+                    let diskRestored = MLXCacheIOLock.withSerializedMLXCacheIO {
+                        () -> Int in
+                        let count = restoreFromDiskArrays(diskArrays, into: &self.cache)
+                        if count > 0 {
+                            if let ssm = ssmStates,
+                               TQDiskSerializer.formatVersion(of: diskArrays) < 2
+                            {
+                                restoreSSMStates(ssm, into: self.cache)
+                            }
+                            // Mirror BatchEngine's disk-hit path: materialize
+                            // restored arrays before prefill builds the next
+                            // forward graph, instead of fusing restore + model
+                            // compute into one high-pressure command buffer.
+                            MLX.eval(self.cache)
                         }
-                        // Mirror BatchEngine's disk-hit path: materialize
-                        // restored arrays before prefill builds the next
-                        // forward graph, instead of fusing restore + model
-                        // compute into one high-pressure command buffer.
-                        MLX.eval(self.cache)
+                        return count
+                    }
+                    if diskRestored > 0 {
                         restored = true
                         Self.logger.info(
                             "Cache \(detail.rawValue) hit: restored \(diskRestored) tokens from disk, prefilling \(remainingTokens.count) remaining"
