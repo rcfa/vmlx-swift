@@ -48,9 +48,11 @@ public enum NormConventionResolver {
     /// Resolve whether to apply the `(1 + weight)` shift, with deterministic precedence:
     /// per-bundle declaration → architecture declaration → order-independent vote.
     ///
-    /// A DECLARATION is authoritative — it states the storage state outright and short-circuits the
-    /// vote. A per-bundle declaration (safetensors metadata → `config.json`) wins first; then an
-    /// architecture-level declaration (`declaredConvention`). Crucially, an architecture may declare
+    /// A RECOGNIZED `(1 + weight)` marker is authoritative — it states the storage state outright and
+    /// short-circuits the vote. A per-bundle declaration (safetensors metadata → `config.json`) wins
+    /// first; then an architecture-level declaration (`declaredConvention`). An UNRECOGNIZED declared
+    /// string is treated as no declaration (it defers to the vote) rather than silently meaning
+    /// "do not shift", so a converter typo can't strand a raw bundle unshifted. Crucially, an architecture may declare
     /// only when ALL its bundles share one storage state. An architecture that ships the SAME class
     /// both raw (norm mean ≈ 0, deviation-from-1 → needs +1) AND already-shifted (mean ≈ 1 → must NOT
     /// be shifted again) — e.g. qwen3.5, where JangQ stores raw and MXFP4 stores pre-shifted — can
@@ -67,14 +69,23 @@ public enum NormConventionResolver {
         excluding isExcluded: (String) -> Bool = { _ in false },
         fallbackWhenNoProbe: () -> Bool = { false }
     ) -> Bool {
-        // Any declaration is authoritative and overrides the vote: per-bundle metadata/config first
-        // (states THIS bundle's storage state), then an architecture-level declaration (valid only
-        // for architectures with a uniform storage state across all their bundles).
-        if let explicit = metadataConvention ?? configConvention ?? declaredConvention {
-            return usesPlusOne(explicit)
+        // A RECOGNIZED "(1 + weight)" marker (per-bundle metadata → config → architecture
+        // declaration) is authoritative and forces the shift. A present-but-UNRECOGNIZED value —
+        // a converter typo or a descriptive string like "rms_norm" — is NOT trusted to silently
+        // disable the shift: it falls through to the order-independent measurement below, which
+        // reads the bundle's actual storage state. (Previously ANY non-marker string returned
+        // `usesPlusOne(...) == false` → no-shift, so a single malformed declaration stranded a raw
+        // bundle's norms unshifted (mean ≈ 0, never lifted to ≈ 1) → degraded/garbage output.)
+        if usesPlusOne(metadataConvention)
+            || usesPlusOne(configConvention)
+            || usesPlusOne(declaredConvention)
+        {
+            return true
         }
-        // Nothing declared (the qwen3.5 reality: one class, mixed storage across bundles). Measure
-        // THIS bundle, order-independently.
+        // Nothing authoritatively declares the convention (the qwen3.5 reality: one class, mixed
+        // storage across bundles — or a declaration we don't recognize). Measure THIS bundle,
+        // order-independently: the majority vote cleanly separates raw (mean ≈ 0 → shift) from
+        // already-shifted (mean ≈ 1 → leave it).
         return weightsAppearUnshifted(weights, probeSuffixes: probeSuffixes, excluding: isExcluded)
             ?? fallbackWhenNoProbe()
     }
