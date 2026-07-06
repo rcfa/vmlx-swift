@@ -3,10 +3,31 @@
 import Cmlx
 import Foundation
 
-/// Lock for operations that modify MLX global state (compile, stream creation).
-/// NOT used for eval/asyncEval — the C++ scheduler has its own std::mutex.
-/// Removing evalLock from the eval hot path allows asyncEval and item() to
-/// overlap, enabling Metal command pipeline parallelism.
+/// Serializes every CPU-side driver of the shared Metal command stream:
+/// `eval`/`asyncEval`/`item` here, plus `Stream.synchronize()`,
+/// `Memory.clearCache()`, `compile`, and stream lifecycle elsewhere.
+///
+/// This is REQUIRED for correctness, not just for the global-state ops.
+/// MLX is not thread-safe: `mlx_eval`/`mlx_async_eval` run `gpu::eval`
+/// *inline on the calling thread* (the per-stream `StreamThread` stays idle
+/// for the default GPU stream), encoding into and committing the stream's
+/// single `MTLCommandBuffer`. `Stream.synchronize()` ends+commits that same
+/// buffer. The fork's C++ `stream_map_mtx_` only guards the stream-map lookup
+/// (fix 9dabb6c4), NOT the encoder, so two Swift threads — e.g. a request's
+/// prefill `async_eval` and a concurrent unload/`strictEvict`
+/// `Stream.gpu.synchronize()` — otherwise mutate the same command buffer
+/// concurrently. Live-reproduced SIGABRT: "Completed handler provided after
+/// commit" (`addCompletedHandler` on a buffer synchronize just committed) and
+/// AGX "command encoder is already encoding".
+///
+/// The lock is held ONLY across the brief CPU-side encode+commit
+/// (`mlx_eval`/`mlx_async_eval` return once the buffer is committed; the GPU
+/// executes asynchronously afterward with the lock already released), so the
+/// CPU→GPU pipeline parallelism that motivated dropping the lock from this
+/// path is preserved: in steady-state single-producer decode the lock is
+/// uncontended, and it only serializes during teardown/cancel/cross-model —
+/// exactly when a second thread would otherwise corrupt the encoder.
+/// Recursive so a lock-holding path that re-enters eval does not self-deadlock.
 let evalLock = NSRecursiveLock()
 
 /// Evaluate one or more `MLXArray`
@@ -15,7 +36,9 @@ let evalLock = NSRecursiveLock()
 /// - <doc:lazy-evaluation>
 public func eval(_ arrays: MLXArray...) {
     let vector_array = newEvalVectorArray(arrays)
+    evalLock.lock()
     mlx_eval(vector_array)
+    evalLock.unlock()
     mlx_vector_array_free(vector_array)
 }
 
@@ -25,7 +48,9 @@ public func eval(_ arrays: MLXArray...) {
 /// - <doc:lazy-evaluation>
 public func eval(_ arrays: some Collection<MLXArray>) {
     let vector_array = newEvalVectorArray(arrays)
+    evalLock.lock()
     mlx_eval(vector_array)
+    evalLock.unlock()
     mlx_vector_array_free(vector_array)
 }
 
@@ -36,7 +61,9 @@ public func eval(_ arrays: some Collection<MLXArray>) {
 /// - ``asyncEval(_:)-(Collection<MLXArray>)``
 public func asyncEval(_ arrays: some Collection<MLXArray>) {
     let vector_array = newEvalVectorArray(arrays)
+    evalLock.lock()
     mlx_async_eval(vector_array)
+    evalLock.unlock()
     mlx_vector_array_free(vector_array)
 }
 

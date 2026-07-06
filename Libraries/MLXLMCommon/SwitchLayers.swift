@@ -12,10 +12,17 @@ public let safeGeluApproximate: @Sendable (MLXArray) -> MLXArray = {
     let body: @Sendable (MLXArray) -> MLXArray = { (x: MLXArray) -> MLXArray in
         0.5 * x * (1 + tanh(sqrt(2 / Float.pi) * (x + 0.044715 * x * x * x)))
     }
-    if HardwareInfo.isCompiledDecodeSupported {
-        return compile(shapeless: true, body)
-    }
-    return body
+    guard HardwareInfo.isCompiledDecodeSupported else { return body }
+    let compiled = compile(shapeless: true, body)
+    // When this activation is invoked *inside* the outer compiled-decode trace
+    // (`setupCompiledDecode` → `CompiledDecodeTrace.withActive`), calling a
+    // separately-compiled function is a nested compile — illegal, exactly like
+    // `eval` during a trace (see the `!CompiledDecodeTrace.isActive` guards in
+    // Gemma4Text). The inner `compileState.call` returns an empty result and
+    // `[0]` traps (Transforms+Compile.swift). Run the plain body while tracing:
+    // its ops are captured into the outer graph and fused there, so there is no
+    // throughput loss — the inner compile was both illegal and redundant.
+    return { x in CompiledDecodeTrace.isActive ? body(x) : compiled(x) }
 }()
 
 /// Drop-in replacement for MLXNN.GELU that avoids the Power primitive crash.
@@ -35,10 +42,11 @@ private let compiledSwiGLU: @Sendable (MLXArray, MLXArray) -> MLXArray = {
         (gate: MLXArray, x: MLXArray) -> MLXArray in
         silu(gate) * x
     }
-    if HardwareInfo.isCompiledDecodeSupported {
-        return compile(shapeless: true, body)
-    }
-    return body
+    guard HardwareInfo.isCompiledDecodeSupported else { return body }
+    let compiled = compile(shapeless: true, body)
+    // Fall back to the plain body inside the outer compiled-decode trace to
+    // avoid an illegal nested compile (see `safeGeluApproximate`).
+    return { g, x in CompiledDecodeTrace.isActive ? body(g, x) : compiled(g, x) }
 }()
 
 private let compiledGeGLU: @Sendable (MLXArray, MLXArray) -> MLXArray = {
@@ -46,10 +54,11 @@ private let compiledGeGLU: @Sendable (MLXArray, MLXArray) -> MLXArray = {
         (gate: MLXArray, x: MLXArray) -> MLXArray in
         (0.5 * gate * (1 + tanh(sqrt(2 / Float.pi) * (gate + 0.044715 * gate * gate * gate)))) * x
     }
-    if HardwareInfo.isCompiledDecodeSupported {
-        return compile(shapeless: true, body)
-    }
-    return body
+    guard HardwareInfo.isCompiledDecodeSupported else { return body }
+    let compiled = compile(shapeless: true, body)
+    // Fall back to the plain body inside the outer compiled-decode trace to
+    // avoid an illegal nested compile (see `safeGeluApproximate`).
+    return { g, x in CompiledDecodeTrace.isActive ? body(g, x) : compiled(g, x) }
 }()
 
 public func gatherSort(x: MLXArray, indices: MLXArray) -> (MLXArray, MLXArray, MLXArray) {
