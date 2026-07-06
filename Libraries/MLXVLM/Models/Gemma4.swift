@@ -1203,6 +1203,17 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
         emb = emb * MLXArray(sqrt(Float(config.textConfig.hiddenSize)), dtype: emb.dtype)
 
         if let pixels = input.image?.pixels {
+            // An image was supplied but this bundle loaded no vision weights
+            // (text/audio-only Gemma4, or a partial/mismatched checkpoint where
+            // both vision_tower and vision_embedder are absent). Without this
+            // check the per-image loop below appends nothing and `featuresList[0]`
+            // / `concatenated([])` at the scatter step is an empty-array crash.
+            // Fail with a typed, recoverable error instead of aborting.
+            guard unifiedVisionEmbedder != nil || visionTower != nil else {
+                throw VLMError.processing(
+                    "Gemma4: image input supplied to a bundle with no vision tower "
+                        + "or vision embedder loaded; cannot embed images.")
+            }
             // Process each image through vision tower separately — images may have
             // different spatial dimensions after resize. Vision features are always
             // [1, defaultOutputLength, visionHidden] per image regardless of input size.
