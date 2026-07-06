@@ -3328,6 +3328,18 @@ private func generateLoopTask<Handler: TokenLoopHandler>(
                 // the chunked prepare loops bail between chunks. Not an error;
                 // finish the stream with a `.cancelled` info like any other
                 // cancellation.
+                //
+                // Drain the shared GPU stream before finishing: the chunked
+                // `prepare` may have already enqueued prompt-prefill command
+                // buffers on the default stream before it bailed. Closing the
+                // stream lets the consumer (or an unload/teardown) start the
+                // next producer immediately; if we return without draining, that
+                // producer opens an encoder while our half-built prefill buffer
+                // is still live on the same stream — the cold-load-disconnect
+                // "command encoder is already encoding" / end_encoding races.
+                // The normal completion path below drains twice for the same
+                // reason; the early-exit paths must match it.
+                Stream().synchronize()
                 handler.onGenerationEnd(emit: continuation.yield)
                 _ = continuation.yield(handler.infoEvent(GenerateCompletionInfo(
                     promptTokenCount: promptTokenCount,
@@ -3341,6 +3353,9 @@ private func generateLoopTask<Handler: TokenLoopHandler>(
             } catch {
                 Logger(subsystem: "vmlx", category: "generateLoopTask").error(
                     "Iterator construction failed: \(error.localizedDescription, privacy: .public)")
+                // Drain any prefill work enqueued before the failure before
+                // closing the stream (see the CancellationError branch above).
+                Stream().synchronize()
                 handler.onGenerationEnd(emit: continuation.yield)
                 _ = continuation.yield(handler.infoEvent(GenerateCompletionInfo(
                     promptTokenCount: promptTokenCount,

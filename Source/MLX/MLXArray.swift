@@ -554,8 +554,15 @@ public final class MLXArray {
     /// MLX is lazy and arrays are not fully realized until they are evaluated.  This method is typically
     /// not needed as all reads ensure the contents are evaluated.
     public func eval() {
-        // No evalLock — C++ scheduler is thread-safe internally
+        // Serialize the CPU-side encode+commit against Stream.synchronize() and
+        // other GPU-stream drivers: MLX is NOT thread-safe (mlx_array_eval runs
+        // gpu::eval inline on this thread, mutating the shared command buffer),
+        // and the C++ stream mutex only guards the stream-map lookup, not the
+        // encoder. See the evalLock note in Transforms+Eval.swift. Held only
+        // across the brief commit, so GPU pipeline parallelism is preserved.
+        evalLock.lock()
         mlx_array_eval(ctx)
+        evalLock.unlock()
     }
 
     /// Replace the contents with a reference to a new array (INTERNAL).
