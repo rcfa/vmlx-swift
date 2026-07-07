@@ -1099,6 +1099,13 @@ enum Qwen3VLLanguage {
 
         func callAsFunction(positionIds: MLXArray, dtype: MLX.DType) -> (MLXArray, MLXArray) {
             var positionIds = positionIds
+            // Normalize to the [3, batch, seq] mrope layout. The 4-op subscript
+            // below traps on anything lower-rank (Sentry: over-rank subscript
+            // during batch decode), so lift 1-D [seq] and 2-D [batch, seq]
+            // inputs instead of assuming callers always pre-shape.
+            if positionIds.ndim == 1 {
+                positionIds = positionIds[.newAxis, 0...]
+            }
             if positionIds.ndim == 2 {
                 positionIds = positionIds[.newAxis, 0..., 0...]
                 positionIds = tiled(positionIds, repetitions: [3, 1, 1])
@@ -1467,10 +1474,19 @@ enum Qwen3VLLanguage {
                         delta = repeated(delta, count: batch, axis: 0)
                     }
 
-                    base = base + delta
-
-                    positionIds = base[.newAxis, 0..., 0...]
-                    positionIds = broadcast(positionIds!, to: [3, batch, seqLength])
+                    if delta.dim(0) == batch {
+                        // Reshape to [batch, 1] so the add broadcasts per
+                        // sequence; a bare [batch] vector against
+                        // [batch, seqLength] aligns on the trailing axis and
+                        // yields [batch, batch] garbage on decode steps.
+                        base = base + delta.reshaped(batch, 1)
+                        positionIds = base[.newAxis, 0..., 0...]
+                        positionIds = broadcast(positionIds!, to: [3, batch, seqLength])
+                    }
+                    // Otherwise ropeDeltas is stale for this batch composition
+                    // (a sequence joined or left since prefill) — leave
+                    // positionIds nil so attention rebuilds them from the
+                    // per-sequence cache offsets instead of trapping.
                 }
             }
 
