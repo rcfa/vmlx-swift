@@ -130,6 +130,9 @@ class BailingMoeAttention: Module {
         let kSize = kvHeads * headDim
         let qkvOut = qkv(x)
         let splits = split(qkvOut, indices: [qSize, qSize + kSize], axis: -1)
+        // Bail on a failed split (empty vector from a recorded MLX error)
+        // rather than trapping on the q/k/v subscripts below.
+        guard splits.count == 3 else { return x }
         var queries = splits[0]
         var keys = splits[1]
         var values = splits[2]

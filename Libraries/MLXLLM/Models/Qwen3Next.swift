@@ -121,6 +121,8 @@ public final class Qwen3NextAttention: Module {
 
         let qProjOutput = qProj(x)
         let qSplit = qProjOutput.reshaped(B, L, args.attentionHeads, -1).split(parts: 2, axis: -1)
+        // Bail on a failed split rather than trapping on the subscripts below.
+        guard qSplit.count == 2 else { return x }
         var queries = qSplit[0]
         let gate = qSplit[1].reshaped(B, L, -1)
 
@@ -246,12 +248,16 @@ public final class Qwen3NextGatedDeltaNet: Module {
             indices: [dn, 2 * dn, 2 * dn + vHeadsPerK * dv],
             axis: -1
         )
+        // Bail on a failed split rather than trapping on the subscripts below;
+        // the recorded MLX error surfaces at the next eval.
+        guard qkvzSplit.count == 4 else { return (qkvz, qkvz, qkvz, qkvz, ba, ba) }
         let q = qkvzSplit[0]
         let k = qkvzSplit[1]
         let v = qkvzSplit[2].reshaped(B, S, -1, dv)
         let z = qkvzSplit[3].reshaped(B, S, -1, dv)
 
         let baSplit = MLX.split(ba, indices: [vHeadsPerK], axis: -1)
+        guard baSplit.count == 2 else { return (q, k, v, z, ba, ba) }
         let b = baSplit[0].reshaped(B, S, nv)
         let a = baSplit[1].reshaped(B, S, nv)
 
@@ -297,6 +303,8 @@ public final class Qwen3NextGatedDeltaNet: Module {
         let convOut = silu(conv1d(convInput))
         let convSplit = MLX.split(convOut, indices: [keyDim, 2 * keyDim], axis: -1)
 
+        // Bail on a failed split rather than trapping on the subscripts below.
+        guard convSplit.count == 3 else { return inputs }
         var qOut = convSplit[0].reshaped(B, S, numKHeads, headKDim)
         var kOut = convSplit[1].reshaped(B, S, numKHeads, headKDim)
         let vOut = convSplit[2].reshaped(B, S, numVHeads, headVDim)

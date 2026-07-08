@@ -207,6 +207,8 @@ class LFM2MoEShortConv: Module {
     ) -> MLXArray {
         let BCx = inProj(x)
         let parts = BCx.split(parts: 3, axis: -1)
+        // Bail on a failed split rather than trapping on the subscripts below.
+        guard parts.count == 3 else { return x }
         let B = parts[0]
         let C = parts[1]
         let xComp = parts[2]

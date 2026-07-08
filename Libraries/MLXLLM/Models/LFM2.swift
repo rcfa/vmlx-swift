@@ -206,6 +206,9 @@ class LFM2ShortConv: Module {
     public func callAsFunction(_ x: MLXArray, cache: MambaCache?) -> MLXArray {
         let BCx = inProj(x)
         let BCxSplit = BCx.split(parts: 3, axis: -1)
+        // Bail on a failed split (empty vector from a recorded MLX error)
+        // rather than trapping on the subscripts below.
+        guard BCxSplit.count == 3 else { return x }
         let B = BCxSplit[0]
         let C = BCxSplit[1]
         let x = BCxSplit[2]
