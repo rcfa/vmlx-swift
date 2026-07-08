@@ -474,6 +474,8 @@ class FalconH1Mixer: Module {
             indices: [intermediateSize, intermediateSize + convDim],
             axis: -1
         )
+        // Bail on a failed split rather than trapping on the subscripts below.
+        guard splits.count == 3 else { return inputStates }
         let gate = splits[0]
         var convInput = splits[1]
         let dt = splits[2]
@@ -491,6 +493,7 @@ class FalconH1Mixer: Module {
             ],
             axis: -1
         )
+        guard convSplits.count == 3 else { return inputStates }
         let hiddenStatesSSM = convSplits[0]
         let B = convSplits[1]
         let C = convSplits[2]

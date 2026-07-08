@@ -290,6 +290,12 @@ final class Qwen35GatedDeltaNet: Module {
         let convOut = silu(conv1d(convInput))
 
         let convSplit = MLX.split(convOut, indices: [keyDim, 2 * keyDim], axis: -1)
+        // A failed split (e.g. a checkpoint whose conv width disagrees with
+        // keyDim*2 + valueDim) records an MLX error and returns an empty
+        // vector; subscripting it traps the process before the recorded error
+        // can surface. Bail with the input so the enclosing withError scope
+        // throws the real diagnostic at exit. (Same guard as NemotronH.)
+        guard convSplit.count == 3 else { return inputs }
         let q = convSplit[0].reshaped(B, S, numKHeads, headKDim)
         let k = convSplit[1].reshaped(B, S, numKHeads, headKDim)
         let v = convSplit[2].reshaped(B, S, numVHeads, headVDim)
@@ -465,6 +471,9 @@ final class Qwen35Attention: Module {
 
         let qProjOutput = qProj(x)
         let qSplit = qProjOutput.reshaped(B, L, attentionHeads, -1).split(parts: 2, axis: -1)
+        // Guard the query/gate split: an empty result from a recorded MLX error
+        // would trap on subscript before the diagnostic can surface.
+        guard qSplit.count == 2 else { return x }
         var queries = qSplit[0]
         let gate = qSplit[1].reshaped(B, L, -1)
 

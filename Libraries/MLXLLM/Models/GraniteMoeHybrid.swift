@@ -139,6 +139,8 @@ class GraniteMoeHybridMamba2Mixer: Module {
         let projected = inProj(hiddenStates)
         let splits = split(
             projected, indices: [intermediateSize, intermediateSize + convDim], axis: -1)
+        // Bail on a failed split rather than trapping on the subscripts below.
+        guard splits.count == 3 else { return hiddenStates }
         let gate = splits[0]
         var convInput = splits[1]
         let dt = splits[2]
@@ -155,6 +157,7 @@ class GraniteMoeHybridMamba2Mixer: Module {
             axis: -1
         )
 
+        guard convSplits.count == 3 else { return hiddenStates }
         var hidden = convSplits[0]
         var B = convSplits[1]
         var C = convSplits[2]

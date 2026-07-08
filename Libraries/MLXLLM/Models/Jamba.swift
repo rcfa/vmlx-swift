@@ -264,6 +264,8 @@ class JambaMambaMixer: Module {
             indices: [timeStepRank, timeStepRank + ssmStateSize],
             axis: -1
         )
+        // Bail on a failed split rather than trapping on the subscripts below.
+        guard splits.count == 3 else { return (x, state ?? x) }
         var delta = splits[0]
         var B = splits[1]
         var C = splits[2]
@@ -294,6 +296,8 @@ class JambaMambaMixer: Module {
     ) {
         let xz = inProj(x)
         let splits = xz.split(parts: 2, axis: -1)
+        // Bail on a failed split rather than trapping on the subscripts below.
+        guard splits.count == 2 else { return (x, (x, x)) }
         var x = splits[0]
         let z = splits[1]
 
