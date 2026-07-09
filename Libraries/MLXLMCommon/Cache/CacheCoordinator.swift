@@ -195,6 +195,14 @@ public final class CacheCoordinator: @unchecked Sendable {
         lock.withLock { _isHybrid }
     }
 
+    /// Whether a prompt-boundary store has any tier to land in. With both tiers
+    /// disabled every store is discarded, so callers must not pay to produce a
+    /// boundary snapshot — the hybrid stripped boundary in particular costs a
+    /// retained cache copy or, failing that, a whole extra prefill.
+    public var canPersistBoundaries: Bool {
+        pagedCache != nil || diskCache != nil
+    }
+
     /// 2026-05-04: mark the model as paged-incompatible (DSV4 hybrid pool
     /// caches). Forces the coordinator's fetch + store paths to skip the
     /// paged tier so the disk tier (`TQDiskSerializer`) is the only

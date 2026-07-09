@@ -1191,6 +1191,22 @@ public struct TokenIterator: TokenIteratorProtocol {
     /// generated token is fed back into the model.
     var promptCacheSnapshot: [KVCache]?
 
+    /// Absolute index into ``promptTokenIds`` of the hybrid cross-turn reuse
+    /// boundary — the last turn-start token, i.e. the end of the prompt with
+    /// its trailing generation prompt stripped. `nil` when the boundary does
+    /// not apply (dense model, media input, no turn-start token, cache tiers
+    /// all disabled).
+    var hybridStripBoundary: Int?
+
+    /// Cache state at ``hybridStripBoundary``, captured *during* prefill.
+    ///
+    /// Hybrid caches are path-dependent, so this boundary cannot be produced
+    /// by trimming the post-prefill snapshot; the only other way to obtain it
+    /// is to replay the whole stripped prefix through the model. Capturing it
+    /// as prefill passes through the boundary costs one cache copy instead of
+    /// a second full prefill. Released once stored.
+    var hybridStripSnapshot: [KVCache]?
+
     /// Stable fingerprint of any request-scope or media content in the input.
     /// `nil` for ordinary text-only inputs. Mixed into cache-coordinator keys
     /// so reasoning-mode and VLM multi-turn conversations can cache-hit without
@@ -1678,6 +1694,10 @@ public struct TokenIterator: TokenIteratorProtocol {
         } else {
             modelPrepareProgressHandler = nil
         }
+        self.hybridStripBoundary = Self.hybridStripBoundaryIndex(
+            coordinator: self.cacheCoordinator,
+            promptTokenIds: self.promptTokenIds,
+            input: input)
         self.promptPrefillTime = try measure {
             try MLXPressGenerationProfile.time("prompt.prepare_total") {
                 try PrefillProgressReporter.withHandler(modelPrepareProgressHandler) {
@@ -1753,13 +1773,137 @@ public struct TokenIterator: TokenIteratorProtocol {
         self.promptCacheSnapshot = makePromptBoundaryCacheSnapshot(from: self.cache)
     }
 
+    /// The hybrid cross-turn reuse boundary: the index of the LAST turn-start
+    /// token (`<|im_start|>` / `<start_of_turn>`), i.e. the end of the prompt
+    /// once its trailing generation prompt is stripped. The next chat turn
+    /// replaces that generation prompt with the assistant's reply, so the
+    /// full-prompt key never matches again, but this boundary does — it is what
+    /// gives hybrid models cross-turn prefix reuse at all.
+    ///
+    /// Returns `nil` when the boundary cannot pay for itself: dense models reuse
+    /// via the post-answer boundary, media inputs are excluded, and with every
+    /// cache tier disabled the store would be dropped. `VMLX_HYBRID_STRIPPED_STORE=0`
+    /// disables it outright.
+    static func hybridStripBoundaryIndex(
+        coordinator: CacheCoordinator?,
+        promptTokenIds: [Int],
+        input: LMInput
+    ) -> Int? {
+        guard ProcessInfo.processInfo.environment["VMLX_HYBRID_STRIPPED_STORE"] != "0",
+            let coordinator,
+            coordinator.isHybrid,
+            coordinator.canPersistBoundaries,
+            !input.hasMediaContent,
+            let turnStartTok = coordinator.genPromptSuffixTokens.first,
+            let stripAt = promptTokenIds.lastIndex(of: turnStartTok),
+            stripAt > 0, stripAt < promptTokenIds.count
+        else { return nil }
+        return stripAt
+    }
+
+    /// Split `input` at the hybrid strip boundary, or `nil` when the boundary
+    /// cannot be captured from this prefill.
+    ///
+    /// `input` is the prompt tail still to be prefilled — the whole prompt on a
+    /// cache miss, or whatever follows the restored prefix on a hit — so the
+    /// boundary's offset within it is `hybridStripBoundary` minus the tokens
+    /// already in the cache.
+    private func hybridStripSplit(
+        of input: LMInput
+    ) -> (head: LMInput?, tail: LMInput)? {
+        guard let stripAt = hybridStripBoundary,
+            hybridStripSnapshot == nil,
+            !input.requiresPostPrepareCacheKey,
+            // DSV4's pool cache is only correct under a single prefill forward;
+            // `effectivePrefillWindow` already forces that, so don't split it.
+            !cache.contains(where: { $0 is HybridPoolCache })
+        else { return nil }
+
+        let size = input.text.tokens.size
+        let split = stripAt - (promptTokenIds.count - size)
+        guard split >= 0, split < size else { return nil }
+
+        // The mask, when present, is per-token (`Qwen3VLProcessor` hands the
+        // hybrids an all-ones `[1, T]`), so it slices exactly like the tokens.
+        // Anything not token-aligned — a materialized `[1, 1, T, T]` attention
+        // mask, say — has no meaningful split point; leave it whole.
+        var flatMask: MLXArray? = nil
+        if let mask = input.text.mask {
+            guard mask.size == size else { return nil }
+            flatMask = mask.reshaped([-1])
+        }
+        let maskIsBatched = (input.text.mask?.ndim ?? 1) >= 2
+        func slice(_ range: MLXArray) -> MLXArray { maskIsBatched ? range[.newAxis, 0...] : range }
+
+        let flat = input.text.tokens.reshaped([-1])
+        let head =
+            split > 0
+            ? LMInput(
+                text: LMInput.Text(
+                    tokens: flat[..<split][.newAxis, 0...],
+                    mask: flatMask.map { slice($0[..<split]) }))
+            : nil
+        let tail = LMInput(
+            text: LMInput.Text(
+                tokens: flat[split...][.newAxis, 0...],
+                mask: flatMask.map { slice($0[split...]) }))
+        return (head, tail)
+    }
+
     mutating func prepare(input: LMInput, windowSize: Int? = nil) throws {
+        // Prefill the stripped prefix first so the cache state at the hybrid
+        // cross-turn boundary can simply be copied out, then continue with the
+        // tail. Both halves go through `model.prepare`, so this runs exactly the
+        // tokens a single prefill would, in the same order, through the same
+        // forwards — models that consume the whole prompt themselves (Qwen35 and
+        // the other hybrids, which return `.logits`) split just as cleanly as
+        // those that hand back a remainder. The alternative is reconstructing the
+        // boundary afterwards by replaying the entire stripped prefix, which is a
+        // second full prefill; see `storeCacheAfterGeneration`.
+        if let split = hybridStripSplit(of: input) {
+            if let head = split.head {
+                let preparedHead = try MLXPressGenerationProfile.time("prompt.model_prepare") {
+                    try model.prepare(head, cache: cache, windowSize: windowSize)
+                }
+                switch preparedHead {
+                case .tokens(let remaining):
+                    _ = model(
+                        remaining[text: .newAxis],
+                        cache: cache.isEmpty ? nil : cache,
+                        state: nil)
+                case .logits:
+                    break
+                }
+            }
+            MLX.eval(cache)
+            hybridStripSnapshot = makePromptBoundaryCacheSnapshot(from: cache)
+            try prepareRemainder(
+                input: split.tail, windowSize: windowSize,
+                promptTokensForProcessor: input.text.tokens)
+            return
+        }
+        try prepareRemainder(
+            input: input, windowSize: windowSize,
+            promptTokensForProcessor: input.text.tokens)
+    }
+
+    /// Prefill `input` and prime `y` with the first sampled token.
+    ///
+    /// `promptTokensForProcessor` is the full set of tokens this prefill covers.
+    /// It differs from `input` only when the caller split the prefill at the
+    /// hybrid strip boundary, and exists so the logit processor still sees one
+    /// unbroken prompt (repetition penalties are scored over it).
+    private mutating func prepareRemainder(
+        input: LMInput,
+        windowSize: Int?,
+        promptTokensForProcessor: MLXArray
+    ) throws {
         let prepared = try MLXPressGenerationProfile.time("prompt.model_prepare") {
             try model.prepare(input, cache: cache, windowSize: windowSize)
         }
         switch prepared {
         case .tokens(let tokens):
-            processor?.prompt(input.text.tokens)
+            processor?.prompt(promptTokensForProcessor)
             y = tokens
 
             // evaluate the remainder of the prompt -- this primes the pump
@@ -1782,7 +1926,7 @@ public struct TokenIterator: TokenIteratorProtocol {
                     .expandedDimensions(axis: 0)
                 processor?.prompt(promptTokens)
             } else {
-                processor?.prompt(input.text.tokens)
+                processor?.prompt(promptTokensForProcessor)
             }
             y = .init(tokens: MLXPressGenerationProfile.time("prompt.sample") {
                 convertToToken(logits: result.logits)
@@ -1791,8 +1935,6 @@ public struct TokenIterator: TokenIteratorProtocol {
                 asyncEval(y.tokens)
             }
         }
-
-
     }
 
     mutating func convertToToken(logits: MLXArray) -> MLXArray {
@@ -2089,36 +2231,40 @@ public struct TokenIterator: TokenIteratorProtocol {
                 // byte-identical to cache-off ground truth). Default ON for hybrid
                 // models; disable with `VMLX_HYBRID_STRIPPED_STORE=0`. Dense /
                 // sliding-window models are excluded — they already reuse via the
-                // post-answer boundary and don't need the extra re-derive. The
-                // re-derive runs post-`.info` (after the response is delivered),
-                // so it never adds to the current turn's TTFT or token rate.
-                if ProcessInfo.processInfo.environment["VMLX_HYBRID_STRIPPED_STORE"] != "0",
-                   coordinator.isHybrid,
-                   !originalInput.hasMediaContent,
-                   let turnStartTok = coordinator.genPromptSuffixTokens.first,
-                   let stripAt = promptTokenIds.lastIndex(of: turnStartTok),
-                   stripAt > 0, stripAt < promptTokenIds.count
-                {
+                // post-answer boundary and don't need this.
+                //
+                // `hybridStripSnapshot` was captured as prefill crossed the
+                // boundary, so this store is just a copy. There is deliberately no
+                // re-derive fallback: reconstructing the boundary here means
+                // replaying the stripped prefix through the model, and this runs
+                // before `.info` reaches the client, so it would hold the response
+                // stream open for the length of a second prefill.
+                //
+                // Nothing is lost by skipping it. Capture only fails when the
+                // boundary sits inside the prefix this turn restored from cache —
+                // which means a boundary at least that long is already stored, and
+                // it is the one the next turn will match — or on cache topologies
+                // (DSV4's pool cache) that cannot hold this boundary at all.
+                if let stripAt = hybridStripBoundary {
                     // NOTE: intentionally NOT gated on
-                    // `!cachePrefixTokenCounts.contains(stripAt)`. For hybrid
-                    // caches the history-boundary loop below calls
-                    // `cacheSnapshotForBoundary` WITHOUT `allowDiskBackedRederive`
-                    // and returns nil (path-dependent skip guard), so it never
-                    // stores this boundary — this re-derive store is the only one
-                    // that can, and `stripAt` routinely coincides with a
-                    // `cachePrefixTokenCounts` entry.
-                    let strippedTokens = Array(promptTokenIds.prefix(stripAt))
-                    if let strippedSnapshot = cacheSnapshotForBoundary(
-                        tokens: strippedTokens,
-                        promptSnapshot: promptCacheSnapshot,
-                        allowDiskBackedRederive: true)
-                    {
+                    // `!cachePrefixTokenCounts.contains(stripAt)`. For hybrid caches
+                    // the history-boundary loop below calls `cacheSnapshotForBoundary`
+                    // and returns nil (path-dependent skip guard), so it never stores
+                    // this boundary — this store is the only one that can, and
+                    // `stripAt` routinely coincides with a `cachePrefixTokenCounts`
+                    // entry.
+                    if let strippedSnapshot = hybridStripSnapshot {
                         store(
-                            tokens: strippedTokens,
+                            tokens: Array(promptTokenIds.prefix(stripAt)),
                             cache: strippedSnapshot,
                             kvBits: nil,
                             kvMode: .none)
+                    } else {
+                        Self.logger.debug(
+                            "TokenIterator: no stripped-boundary snapshot to store at \(stripAt, privacy: .public); prefill did not cross the boundary"
+                        )
                     }
+                    hybridStripSnapshot = nil
                 }
 
                 for boundary in Set(cachePrefixTokenCounts).sorted()
@@ -2148,8 +2294,7 @@ public struct TokenIterator: TokenIteratorProtocol {
 
     private func cacheSnapshotForBoundary(
         tokens: [Int],
-        promptSnapshot: [KVCache],
-        allowDiskBackedRederive: Bool = false
+        promptSnapshot: [KVCache]
     ) -> [KVCache]? {
         guard !tokens.isEmpty, tokens.count < promptTokenIds.count else {
             return nil
@@ -2163,8 +2308,7 @@ public struct TokenIterator: TokenIteratorProtocol {
             return trimmed
         }
 
-        if !allowDiskBackedRederive,
-           shouldSkipHistoryBoundaryRederiveAfterTrimMiss(promptSnapshot) {
+        if shouldSkipHistoryBoundaryRederiveAfterTrimMiss(promptSnapshot) {
             Self.logger.debug(
                 "TokenIterator: skipped history-boundary cache rederive after trim miss for disk-backed cache topology"
             )
@@ -2189,18 +2333,9 @@ public struct TokenIterator: TokenIteratorProtocol {
                 mediaTokenIds: originalInput.mediaTokenIds,
                 cacheScopeSalt: originalInput.cacheScopeSalt)
             let cache = model.newCache(parameters: cacheInitParameters)
-            // Path-dependent hybrids (Mamba/GatedDeltaNet SSM) leave a cache
-            // state that DEPENDS on the prefill chunk size: a single giant
-            // chunk produces a different recurrent state than the live decode's
-            // chunked prefill, so a boundary re-derived single-chunk would
-            // restore a divergent state → wrong output. Re-derive with the SAME
-            // `prefillStepSize` the live prefill used so the stored boundary
-            // state is bit-identical to what the next turn's own prefill yields.
-            let rederiveWindow = allowDiskBackedRederive
-                ? (cacheInitParameters?.prefillStepSize ?? 512)
-                : effectivePrefillWindow(
-                    requested: promptTokenIds.count,
-                    input: boundaryInput)
+            let rederiveWindow = effectivePrefillWindow(
+                requested: promptTokenIds.count,
+                input: boundaryInput)
             switch try model.prepare(
                 boundaryInput,
                 cache: cache,
