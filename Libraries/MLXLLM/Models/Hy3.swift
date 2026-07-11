@@ -517,7 +517,11 @@ class Hy3AffineMoE: Module, UnaryLayer {
 
 func hy3LMHead(_ hidden: MLXArray, _ lmHead: Linear) -> MLXArray {
     if lmHead is QuantizedLinear {
-        return lmHead(hidden)
+        // `enable_lm_head_fp32`: the reference runtime casts activations to
+        // fp32 before the quantized head matmul (jang_tools/hy3/model.py).
+        // One [1, V] matmul per step — negligible cost, meaningful logit
+        // parity for greedy near-ties.
+        return lmHead(hidden.asType(.float32))
     }
 
     let hiddenFP32 = hidden.asType(.float32)
