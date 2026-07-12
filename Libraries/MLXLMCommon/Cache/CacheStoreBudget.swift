@@ -3,48 +3,85 @@
 import Foundation
 import MLX
 
+/// How much of the host's remaining memory a single prefix-cache store may take.
+///
+/// This is the engine-side projection of the user's memory-safety level. The
+/// resolver in `ServerRuntimeSettings` turns that level into load-time caps
+/// (`LoadConfiguration.memoryLimit` / `maxResidentBytes`); this carries the same
+/// level down to the one runtime decision those caps cannot reach, because
+/// `CacheStoreBudget` runs deep inside the decode loop with no settings handle.
+/// The host sets `CacheStoreBudget.policy` before each load, exactly as it
+/// already sets `TiedHeadQuantizationPolicy.current`.
+///
+/// A fraction of *free headroom*, deliberately — not a ceiling on total memory.
+/// The load caps are a graph-scheduling guideline, not a hard resident limit, so
+/// a large pack legitimately runs with `activeMemory` above them (Hy3 sits at
+/// ~96 GB on a 128 GB Mac under the default 0.70 load cap). Treating a load cap
+/// as a store ceiling would put `activeBytes` over budget before a single KV byte
+/// and refuse *every* store — silently killing the prefix cache for precisely the
+/// large models whose re-prefill hurts most. Scaling the *increment* instead lets
+/// the safety level bite without that collapse.
+public struct CacheStorePolicy: Sendable, Equatable {
+
+    /// Share of current free headroom (`physical - active`) that one store may use.
+    public var headroomFraction: Double
+
+    public init(headroomFraction: Double) {
+        self.headroomFraction = min(max(headroomFraction, 0), 1)
+    }
+
+    public static let performance = CacheStorePolicy(headroomFraction: 0.45)
+    public static let balanced = CacheStorePolicy(headroomFraction: 0.35)
+    public static let safeAuto = CacheStorePolicy(headroomFraction: 0.25)
+    public static let strict = CacheStorePolicy(headroomFraction: 0.15)
+    public static let diagnosticDangerous = CacheStorePolicy(headroomFraction: 0.55)
+}
+
 /// Whether a KV cache can be *saved* without pushing the host over a cliff.
 ///
 /// The prefix cache is an optimisation: a stored entry only ever makes a later
 /// request faster. Storing one must therefore never be able to take the machine
 /// down — but until this guard existed, it could.
 ///
-/// `storeCacheAfterGeneration` materialises the cache up to three times over,
-/// at the exact moment memory is already at its high-water mark:
+/// Reported live on an M5 Max / 128 GB running Llama-3.3-70B-8bit at a 64K
+/// context: prefill tracked expectation (75 → 102 GiB), then +23 GiB landed
+/// immediately after generation, inside the cache-store window — ~23 GiB being
+/// exactly the size of the 62K-token KV cache. Free memory collapsed, page
+/// reclaim stalled, and the kernel panicked. macOS will not jetsam a plain user
+/// process out of the way, so nothing intervenes: the cap has to live here.
 ///
-///   1. `cacheToStore.map { $0.copy() }`   — a full duplicate of the live KV
-///   2. `extractLayerData(from: snapshot)` — again, as host `Data`, for the disk write
-///   3. `makeDiskStoreCache(...)`          — and again, as the disk-store cache
-///
-/// For a 70B 8-bit model with a 64K-token context that is ~70 GB of weights plus
-/// a ~20 GiB live KV cache, and then the store adds tens of GiB more. On a 128 GB
-/// host, free memory collapses. macOS will not jetsam a plain user process out of
-/// the way, so nothing intervenes: page reclaim stalls, watchdogd starves, and the
-/// kernel panics — reported live on an M5 Max/128 GB with Llama-3.3-70B-8bit at 64K,
-/// with the panic landing inside `storeCacheAfterGeneration` / `DiskCache.store`.
-///
-/// So: measure first, and if the copies would not fit, skip the store. A skipped
-/// store costs one slower request. An unchecked store costs the machine.
+/// So: measure first, and if the store would not fit, skip it. A skipped store
+/// costs one slower request. An unchecked store costs the machine.
 public enum CacheStoreBudget {
 
-    /// How many times the store materialises the cache (snapshot + host-`Data`
-    /// extract + disk-store cache). Deliberately conservative: undercounting here
-    /// is what made the original panic possible.
-    static let materializationFactor = 3
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var _policy: CacheStorePolicy = .safeAuto
 
-    /// Headroom kept free for everything else in flight — activations, the disk
-    /// write buffer, and the rest of the system.
-    ///
-    /// Scaled to the host, not fixed. A flat 4 GiB reserve is right on a 128 GB
-    /// Mac and nonsense on an 8 GB one: with a 4.5 GB model resident, `active +
-    /// 0 + 4 GiB` already exceeds 8 GB, so the guard would refuse EVERY store —
-    /// silently disabling the prefix cache on exactly the machines whose users
-    /// most notice a slow re-prefill. An eighth of RAM keeps the same absolute
-    /// headroom on large hosts (128 GB → 4 GiB, unchanged) while staying
-    /// proportionate on small ones (8 GB → 1 GiB).
-    static func safetyMarginBytes(budgetBytes: Int) -> Int {
-        min(4 << 30, budgetBytes / 8)
+    /// The user's memory-safety level, projected onto this decision. Set by the
+    /// host before each model load; defaults to the same Safe Auto the settings
+    /// resolver defaults to, so an embedder that never sets it is unaffected.
+    public static var policy: CacheStorePolicy {
+        get { lock.withLock { _policy } }
+        set { lock.withLock { _policy = newValue } }
     }
+
+    /// Peak *additional* full-KV materialisation the store performs, in units of
+    /// the live cache.
+    ///
+    /// One, not three. An earlier revision of this guard claimed three copies —
+    /// a deep copy, a host `Data` extract, and the disk-store cache — and none of
+    /// the three survive contact with the code: `KVCacheSimple.copy()` takes
+    /// full-range slices that share the source buffer, `extractLayerData` returns
+    /// references, `makeDiskStoreCache` returns the snapshot unchanged on the raw
+    /// path, and `mlx_save_safetensors` streams to the file descriptor rather than
+    /// building a host `Data`. What is left is the `contiguous` pass the writer
+    /// makes before writing, which can allocate at most one compact copy of the
+    /// logical KV. The reporter's own footprint series agrees: the excursion was
+    /// +23 GiB against a 23 GiB cache — one copy, not three.
+    ///
+    /// Overcounting is not free: at 3x this refused stores that fit, quietly
+    /// costing the cache hits it was never meant to cost.
+    static let materializationFactor = 1
 
     /// Live bytes held by a KV cache, without copying its contents.
     ///
@@ -67,13 +104,6 @@ public enum CacheStoreBudget {
     /// only means macOS pages the excess — slow, survivable — whereas exhausting
     /// physical memory is what actually kills the host, and that is the only thing
     /// this guard exists to prevent.
-    ///
-    /// Using the working set here would also be needlessly destructive: with a
-    /// large model resident (say 96 GB of a 107 GiB working set) it would refuse to
-    /// cache anything past ~15k tokens, disabling the prefix cache for exactly the
-    /// long-context requests that most need it. Against physical memory the same
-    /// host still caches ~38k tokens, and the request that panicked a 128 GB Mac is
-    /// still refused.
     public static func canStore(_ cache: [KVCache]) -> Bool {
         let liveBytes = cacheBytes(cache)
         guard liveBytes > 0 else { return true }
@@ -81,18 +111,30 @@ public enum CacheStoreBudget {
     }
 
     /// Testable core: no MLX state, just the arithmetic.
+    ///
+    /// `active + storeCost + margin <= budget`, where the margin is whatever share
+    /// of the headroom the user's safety level says to leave alone. Equivalently,
+    /// and more directly: the store may consume `headroomFraction` of the memory
+    /// the host still has free.
     static func canStore(
         cacheBytes liveBytes: Int,
         activeBytes: Int = max(0, MLX.Memory.activeMemory),
-        budgetBytes: Int? = Int(exactly: ProcessInfo.processInfo.physicalMemory)
+        budgetBytes: Int? = Int(exactly: ProcessInfo.processInfo.physicalMemory),
+        policy: CacheStorePolicy = CacheStoreBudget.policy
     ) -> Bool {
         guard liveBytes > 0 else { return true }
         guard let budgetBytes, budgetBytes > 0 else {
             // No budget to reason about: don't guess, don't block.
             return true
         }
-        let storeCost = liveBytes * materializationFactor
-        let projected = activeBytes + storeCost + safetyMarginBytes(budgetBytes: budgetBytes)
-        return projected <= budgetBytes
+        // Already over the wall: nothing to hand out.
+        guard activeBytes < budgetBytes else { return false }
+
+        let headroom = budgetBytes - activeBytes
+        let allowance = Int(Double(headroom) * policy.headroomFraction)
+        // Overflow-safe: liveBytes and the factor are both bounded well below
+        // Int.max/2 in practice, but compare in the division direction anyway.
+        guard materializationFactor > 0 else { return true }
+        return liveBytes <= allowance / materializationFactor
     }
 }
