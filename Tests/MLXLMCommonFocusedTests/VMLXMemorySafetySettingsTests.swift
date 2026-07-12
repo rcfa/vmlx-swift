@@ -57,6 +57,11 @@ struct VMLXMemorySafetySettingsTests {
         #expect(generate.repetitionPenalty == nil)
     }
 
+    /// The slider no longer needs validating: it is a projection of `mode` and its
+    /// setter clamps into range, so an out-of-range level is not expressible. It
+    /// used to be a stored field that nothing read, which is why it could be both
+    /// "9" and an error at the same time. Clamping is asserted in
+    /// `MemorySafetyLevelTests`; here we only pin that it no longer reports.
     @Test("validation rejects invalid custom values")
     func validationRejectsInvalidCustomValues() {
         var settings = VMLXServerRuntimeSettings()
@@ -68,7 +73,8 @@ struct VMLXMemorySafetySettingsTests {
 
         let fields = Set(settings.validationIssues().map(\.field))
 
-        #expect(fields.contains("memorySafety.slider"))
+        #expect(settings.memorySafety.mode == .diagnosticDangerous, "9 clamps to the top level")
+        #expect(!fields.contains("memorySafety.slider"))
         #expect(fields.contains("memorySafety.customPhysicalMemoryFraction"))
         #expect(fields.contains("memorySafety.customAllocatorCacheBytes"))
         #expect(fields.contains("memorySafety.customDefaultMaxKVSize"))

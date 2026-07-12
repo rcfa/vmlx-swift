@@ -1245,11 +1245,53 @@ public enum VMLXMemorySafetyMode: String, Codable, Sendable, Equatable, CaseIter
     case safeAuto = "safe_auto"
     case strict
     case diagnosticDangerous = "diagnostic_dangerous"
+
+    /// The 0...4 "Safety Level" the host renders as a slider. The two are the same
+    /// choice in two spellings, in `allCases` order.
+    public var sliderIndex: Int {
+        Self.allCases.firstIndex(of: self) ?? 2
+    }
+
+    public init(sliderIndex: Int) {
+        let clamped = min(max(sliderIndex, 0), Self.allCases.count - 1)
+        self = Self.allCases[clamped]
+    }
+
+    /// This level, projected onto the one memory decision the load-time caps cannot
+    /// reach: how much of the host's free headroom a single prefix-cache store may
+    /// take. `CacheStoreBudget` runs inside the decode loop with no settings handle,
+    /// so the host pushes this to `CacheStoreBudget.policy` before each load.
+    public var cacheStorePolicy: CacheStorePolicy {
+        switch self {
+        case .performance: return .performance
+        case .balanced: return .balanced
+        case .safeAuto: return .safeAuto
+        case .strict: return .strict
+        case .diagnosticDangerous: return .diagnosticDangerous
+        }
+    }
 }
 
 public struct VMLXMemorySafetySettings: Codable, Sendable, Equatable {
     public var mode: VMLXMemorySafetyMode
-    public var slider: Int
+
+    /// The 0...4 safety level, as a view onto `mode` rather than a field beside it.
+    ///
+    /// It used to be stored, and nothing ever read it: every resolver switches on
+    /// `mode`, so a host that wired its "Safety Level" slider to `slider` (osaurus
+    /// does) moved a control that changed nothing, while the resolved-plan readout
+    /// printed the new level next to the old, still-in-force caps. Making it a
+    /// projection of `mode` means the slider and the mode picker cannot disagree,
+    /// and the slider starts doing what it always claimed to.
+    ///
+    /// `mode` stays the single source of truth — decoding ignores any persisted
+    /// `slider`, so an existing user's safety level does not shift under them on
+    /// upgrade; only the number shown for it gets honest.
+    public var slider: Int {
+        get { mode.sliderIndex }
+        set { mode = VMLXMemorySafetyMode(sliderIndex: newValue) }
+    }
+
     public var allowExperimentalMLXPress: Bool
     public var failClosedWhenEstimateUnknown: Bool
     public var customPhysicalMemoryFraction: Double?
@@ -1257,9 +1299,52 @@ public struct VMLXMemorySafetySettings: Codable, Sendable, Equatable {
     public var customDefaultMaxKVSize: Int?
     public var customMaxConcurrentSequences: Int?
 
+    private enum CodingKeys: String, CodingKey {
+        case mode
+        case slider
+        case allowExperimentalMLXPress
+        case failClosedWhenEstimateUnknown
+        case customPhysicalMemoryFraction
+        case customAllocatorCacheBytes
+        case customDefaultMaxKVSize
+        case customMaxConcurrentSequences
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // `mode` wins over any persisted `slider`. A user whose stored settings
+        // disagree (they dragged the slider back when it did nothing) keeps the
+        // safety level the engine has actually been enforcing for them.
+        self.mode = try c.decodeIfPresent(VMLXMemorySafetyMode.self, forKey: .mode) ?? .safeAuto
+        self.allowExperimentalMLXPress =
+            try c.decodeIfPresent(Bool.self, forKey: .allowExperimentalMLXPress) ?? false
+        self.failClosedWhenEstimateUnknown =
+            try c.decodeIfPresent(Bool.self, forKey: .failClosedWhenEstimateUnknown) ?? false
+        self.customPhysicalMemoryFraction =
+            try c.decodeIfPresent(Double.self, forKey: .customPhysicalMemoryFraction)
+        self.customAllocatorCacheBytes =
+            try c.decodeIfPresent(UInt64.self, forKey: .customAllocatorCacheBytes)
+        self.customDefaultMaxKVSize =
+            try c.decodeIfPresent(Int.self, forKey: .customDefaultMaxKVSize)
+        self.customMaxConcurrentSequences =
+            try c.decodeIfPresent(Int.self, forKey: .customMaxConcurrentSequences)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(mode, forKey: .mode)
+        // Still emitted so the persisted/API shape is unchanged for readers.
+        try c.encode(slider, forKey: .slider)
+        try c.encode(allowExperimentalMLXPress, forKey: .allowExperimentalMLXPress)
+        try c.encode(failClosedWhenEstimateUnknown, forKey: .failClosedWhenEstimateUnknown)
+        try c.encodeIfPresent(customPhysicalMemoryFraction, forKey: .customPhysicalMemoryFraction)
+        try c.encodeIfPresent(customAllocatorCacheBytes, forKey: .customAllocatorCacheBytes)
+        try c.encodeIfPresent(customDefaultMaxKVSize, forKey: .customDefaultMaxKVSize)
+        try c.encodeIfPresent(customMaxConcurrentSequences, forKey: .customMaxConcurrentSequences)
+    }
+
     public init(
         mode: VMLXMemorySafetyMode = .safeAuto,
-        slider: Int = 2,
         allowExperimentalMLXPress: Bool = false,
         failClosedWhenEstimateUnknown: Bool = false,
         customPhysicalMemoryFraction: Double? = nil,
@@ -1268,7 +1353,6 @@ public struct VMLXMemorySafetySettings: Codable, Sendable, Equatable {
         customMaxConcurrentSequences: Int? = nil
     ) {
         self.mode = mode
-        self.slider = slider
         self.allowExperimentalMLXPress = allowExperimentalMLXPress
         self.failClosedWhenEstimateUnknown = failClosedWhenEstimateUnknown
         self.customPhysicalMemoryFraction = customPhysicalMemoryFraction
@@ -1279,11 +1363,8 @@ public struct VMLXMemorySafetySettings: Codable, Sendable, Equatable {
 
     public func validationIssues() -> [VMLXServerSettingsIssue] {
         var issues: [VMLXServerSettingsIssue] = []
-        if !(0...4).contains(slider) {
-            issues.append(.error(
-                field: "memorySafety.slider",
-                message: "Memory safety slider must be between 0 and 4."))
-        }
+        // `slider` no longer needs a range check: it is a projection of `mode`,
+        // and its setter clamps into `allCases`, so it cannot leave 0...4.
         if let fraction = customPhysicalMemoryFraction,
            fraction <= 0 || fraction > 1 {
             issues.append(.error(
