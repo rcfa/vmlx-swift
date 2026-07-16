@@ -850,8 +850,10 @@ public struct JangConfig: Sendable {
 public struct JangLoader: Sendable {
 
     /// Load the exact per-tensor affine metadata stamped by the converter.
-    /// Shape inference remains the fallback for older bundles without a
-    /// schema-2 manifest.
+    /// Schema 1 encoded affine mode at the quantization-block level; schema 2
+    /// carries it on every tensor so that affine-1 storage can be described.
+    /// Shape inference remains the fallback for older bundles without either
+    /// manifest.
     public static func loadTensorQuantizationManifest(
         at modelPath: URL
     ) throws -> JangTensorQuantizationManifest? {
@@ -866,11 +868,22 @@ public struct JangLoader: Sendable {
         else {
             return nil
         }
-        guard schema == 2,
-            let rawManifest = quantization["tensor_quantization_manifest"] as? [String: Any]
-        else {
+        guard schema == 1 || schema == 2 else {
             throw JangLoaderError.invalidConfig(
                 "unsupported tensor quantization manifest schema \(schema)")
+        }
+        guard let rawManifest = quantization["tensor_quantization_manifest"] as? [String: Any]
+        else {
+            throw JangLoaderError.invalidConfig(
+                "tensor quantization manifest schema \(schema) is missing its manifest")
+        }
+        if schema == 1 {
+            let scheme = (quantization["quantization_scheme"] as? String)?.lowercased()
+            let backend = (quantization["quantization_backend"] as? String)?.lowercased()
+            guard scheme == "asymmetric", backend == "mx.quantize" else {
+                throw JangLoaderError.invalidConfig(
+                    "schema-1 tensor manifest requires asymmetric mx.quantize affine metadata")
+            }
         }
         if let declaredCount = quantization["tensor_quantization_manifest_count"] as? Int,
             declaredCount != rawManifest.count
@@ -886,13 +899,26 @@ public struct JangLoader: Sendable {
             guard let entry = rawEntry as? [String: Any],
                 let bits = entry["bits"] as? Int,
                 let groupSize = entry["group_size"] as? Int,
-                let mode = (entry["mode"] as? String)?.lowercased(),
-                mode == "affine",
                 supportedAffineBits.contains(bits),
                 groupSize > 0
             else {
                 throw JangLoaderError.invalidConfig(
                     "invalid affine tensor quantization manifest entry: \(path)")
+            }
+            if schema == 1 {
+                guard bits != 1,
+                    entry["weight_key"] as? String == "\(path).weight",
+                    entry["scales_key"] as? String == "\(path).scales",
+                    entry["biases_key"] as? String == "\(path).biases"
+                else {
+                    throw JangLoaderError.invalidConfig(
+                        "invalid schema-1 tensor quantization manifest entry: \(path)")
+                }
+            } else {
+                guard (entry["mode"] as? String)?.lowercased() == "affine" else {
+                    throw JangLoaderError.invalidConfig(
+                        "invalid affine tensor quantization manifest entry: \(path)")
+                }
             }
             if let storageBits = entry["storage_bits"] as? Int, storageBits != bits {
                 throw JangLoaderError.invalidConfig(

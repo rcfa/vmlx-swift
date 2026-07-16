@@ -9,6 +9,75 @@ import Testing
 
 @Suite("JANG affine-1 runtime contract", .serialized)
 struct JangAffine1RuntimeContractTests {
+    @Test("schema-1 converter manifest retains its implicit affine contract")
+    func schemaOneManifestRetainsImplicitAffineContract() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("jang-schema1-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let path = "model.layers.0.mlp.down_proj"
+        let config: [String: Any] = [
+            "format": "jang",
+            "format_version": "2.0",
+            "quantization": [
+                "quantization_backend": "mx.quantize",
+                "quantization_scheme": "asymmetric",
+                "tensor_quantization_manifest_schema": 1,
+                "tensor_quantization_manifest_count": 1,
+                "tensor_quantization_manifest": [
+                    path: [
+                        "bits": 4,
+                        "group_size": 64,
+                        "weight_key": "\(path).weight",
+                        "scales_key": "\(path).scales",
+                        "biases_key": "\(path).biases"
+                    ],
+                ],
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+            .write(to: root.appendingPathComponent("jang_config.json"))
+
+        let loadedManifest = try JangLoader.loadTensorQuantizationManifest(at: root)
+        let manifest = try #require(loadedManifest)
+        #expect(manifest.entries[path]?.bits == 4)
+        #expect(manifest.entries[path]?.groupSize == 64)
+        #expect(manifest.entries[path]?.mode == .affine)
+    }
+
+    @Test("schema-1 manifest fails closed when its tensor keys disagree")
+    func schemaOneManifestRejectsMismatchedTensorKeys() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("jang-schema1-invalid-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let config: [String: Any] = [
+            "quantization": [
+                "quantization_backend": "mx.quantize",
+                "quantization_scheme": "asymmetric",
+                "tensor_quantization_manifest_schema": 1,
+                "tensor_quantization_manifest_count": 1,
+                "tensor_quantization_manifest": [
+                    "model.proj": [
+                        "bits": 4,
+                        "group_size": 64,
+                        "weight_key": "model.other.weight",
+                        "scales_key": "model.proj.scales",
+                        "biases_key": "model.proj.biases"
+                    ],
+                ]
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+            .write(to: root.appendingPathComponent("jang_config.json"))
+
+        #expect(throws: JangLoaderError.self) {
+            try JangLoader.loadTensorQuantizationManifest(at: root)
+        }
+    }
+
     @Test("schema-2 contract selects only affine one-bit modules")
     func contractSelectsOnlyAffineOneBitModules() throws {
         let root = FileManager.default.temporaryDirectory
