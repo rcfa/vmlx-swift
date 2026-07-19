@@ -181,9 +181,12 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
         self.mediaSalt = computeCacheSalt(for: input, parameters: effectiveParameters)
         self.materializeSyncTime += promptTokenElapsed
 
-        if let coordinator = cacheCoordinator,
-           effectiveParameters.kvBits != nil || effectiveParameters.kvMode != .none
-        {
+        let requestsAffineKV: Bool = {
+            if effectiveParameters.kvBits != nil { return true }
+            if case .affine = effectiveParameters.kvMode { return true }
+            return false
+        }()
+        if let coordinator = cacheCoordinator, requestsAffineKV {
             coordinator.setPagedIncompatible(true)
         }
 
@@ -200,25 +203,32 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
         }
         if let coordinator = cacheCoordinator,
            !cacheLookupTokenIds.isEmpty,
-           (!input.requiresPostPrepareCacheKey || cacheLookupUsesPostPrepareAlias)
+            (!input.requiresPostPrepareCacheKey || cacheLookupUsesPostPrepareAlias)
         {
             if !coordinator.isHybrid, cacheContainsPathDependentState(self.cache) {
-                coordinator.setHybrid(true)
+                let topology = ModelCacheTopologySnapshot(cache: self.cache)
+                coordinator.setHybrid(
+                    true,
+                    requiresRecurrentSSMCompanion:
+                        topology.requiresRecurrentSSMCompanionState)
             }
             if !coordinator.isPagedIncompatible,
-               cacheRequiresDiskBackedCoordinatorRestore(self.cache)
+               cacheCannotUsePagedCoordinatorRestore(self.cache)
             {
                 coordinator.setPagedIncompatible(true)
             }
             switch coordinator.fetch(tokens: cacheLookupTokenIds, mediaSalt: mediaSalt) {
-            case .hit(_, let remainingTokens, _, let blocks, let ssmStates, let diskArrays):
+            case .hit(
+                let matchedTokens, let remainingTokens, _, let blocks,
+                let ssmStates, let diskArrays):
                 var restored = false
                 if !blocks.isEmpty {
                     let restoredTokens = restoreLayerData(from: blocks, into: self.cache)
                     coordinator.release(blocks: blocks)
                     if restoredTokens > 0 {
                         if let ssm = ssmStates {
-                            restoreSSMStates(ssm, into: self.cache)
+                            restoreSSMStates(
+                                ssm, into: self.cache, boundary: matchedTokens)
                         }
                         restored = true
                     }
@@ -227,10 +237,15 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
                 if let diskArrays, !restored {
                     let diskRestored = restoreFromDiskArrays(diskArrays, into: &self.cache)
                     if diskRestored > 0 {
+                        let cacheHasArraysState = self.cache.contains {
+                            String(describing: type(of: $0)).contains("Arrays")
+                        }
                         if let ssm = ssmStates,
                            TQDiskSerializer.formatVersion(of: diskArrays) < 2
+                            || cacheHasArraysState
                         {
-                            restoreSSMStates(ssm, into: self.cache)
+                            restoreSSMStates(
+                                ssm, into: self.cache, boundary: matchedTokens)
                         }
                         MLX.eval(self.cache)
                         restored = true

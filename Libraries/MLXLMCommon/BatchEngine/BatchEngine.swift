@@ -1501,7 +1501,11 @@ public actor BatchEngine {
                     // that mix attention + rotating (Gemma-4) from being
                     // misflagged.
                     if cacheContainsPathDependentState(cache) {
-                        coordinator.setHybrid(true)
+                        let topology = ModelCacheTopologySnapshot(cache: cache)
+                        coordinator.setHybrid(
+                            true,
+                            requiresRecurrentSSMCompanion:
+                                topology.requiresRecurrentSSMCompanionState)
                         Self.logger.info(
                             "Coordinator flipped to isHybrid=true on first hybrid slot admission"
                         )
@@ -1525,7 +1529,7 @@ public actor BatchEngine {
             // mechanism for these models until paged blocks grow first-class
             // rotating-cache payloads.
             if let coordinator = cacheCoordinator, !coordinator.isPagedIncompatible {
-                if cacheRequiresDiskBackedCoordinatorRestore(cache) {
+                if cacheCannotUsePagedCoordinatorRestore(cache) {
                     coordinator.setPagedIncompatible(true)
                     Self.logger.info(
                         "Coordinator flipped to isPagedIncompatible=true on first paged-incompatible slot admission"
@@ -1659,14 +1663,18 @@ public actor BatchEngine {
                     tokens: tokenIds,
                     mediaSalt: slot.mediaSalt,
                     skipExactDiskBoundary: requiresDiskBackedRestore)
-                if case .hit(_, let remaining, let detail, let blocks, let ssmStates, let diskArrays) = result {
+                if case .hit(
+                    let matchedTokens, let remaining, let detail, let blocks,
+                    let ssmStates, let diskArrays) = result
+                {
                     var restored = false
                     if !blocks.isEmpty {
                         let restoredTokens = restoreLayerData(from: blocks, into: slot.cache)
                         coordinator.release(blocks: blocks)
                         if restoredTokens > 0 {
                             if let ssm = ssmStates {
-                                restoreSSMStates(ssm, into: slot.cache)
+                                restoreSSMStates(
+                                    ssm, into: slot.cache, boundary: matchedTokens)
                             }
                             restored = true
                             slot.continuation.yield(.prefillProgress(PrefillProgress(
@@ -1715,7 +1723,8 @@ public actor BatchEngine {
                                    TQDiskSerializer.formatVersion(of: diskArrays) < 2
                                     || cacheHasArraysState
                                 {
-                                    restoreSSMStates(ssm, into: slot.cache)
+                                    restoreSSMStates(
+                                        ssm, into: slot.cache, boundary: matchedTokens)
                                 }
                                 // The materializing eval below is what
                                 // actually submits the restore compute;
@@ -1829,7 +1838,8 @@ public actor BatchEngine {
                                     }
                                     MLX.eval(slot.cache)
                                 }
-                                restoreSSMStates(seedSSM, into: slot.cache)
+                                restoreSSMStates(
+                                    seedSSM, into: slot.cache, boundary: seedBoundary)
                                 MLX.eval(slot.cache)
                                 let lastToken = MLXArray([Int32(last)])
                                     .expandedDimensions(axis: 0)
