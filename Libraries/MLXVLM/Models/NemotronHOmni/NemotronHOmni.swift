@@ -306,8 +306,31 @@ public class NemotronHOmni: Module, VLMModel, KVCacheDimensionProvider, LoRAMode
             effectivePromptTokens = pruned.tokenIds
         }
 
+        // The text-only path above chunks Nemotron-H prefill because every
+        // Mamba layer builds sequence-quadratic intermediate state. The
+        // multimodal path previously bypassed that protection and forwarded
+        // the entire 4K+ image/video/audio embedding sequence in one call.
+        // On the real JANGTQ4 Omni bundle a 512px image then reached a 76 GiB
+        // physical-footprint high-water mark despite an ~19 GiB bundle.
+        // Materialize the media tower once, then feed the language stack in
+        // the same bounded chunks used for text prompts.
+        MLX.eval(spliced)
+        Memory.clearCache()
+        let prefillStepSize = max(1, windowSize ?? 512)
+        let sequenceLength = spliced.dim(1)
+        var offset = 0
+        while sequenceLength - offset > prefillStepSize {
+            let end = offset + prefillStepSize
+            let chunk = spliced[0..., offset..<end, 0...]
+            _ = languageModel.callAsFunction(
+                inputsEmbeds: chunk, cache: convertedCache)
+            MLX.eval(convertedCache)
+            offset = end
+            Memory.clearCache()
+        }
         let logits = languageModel.callAsFunction(
-            inputsEmbeds: spliced, cache: convertedCache)
+            inputsEmbeds: spliced[0..., offset..<sequenceLength, 0...],
+            cache: convertedCache)
         return .logits(LMOutput(
             logits: logits,
             effectivePromptTokens: effectivePromptTokens))
@@ -889,27 +912,17 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
         // messages and add the expanded run again, desynchronizing
         // placeholder count from the encoded media embeddings.
         var messages = Self.textOnlyMessages(from: input)
-        var templateContext = input.additionalContext
         if !media.isEmpty {
             if let index = Self.mediaTargetMessageIndex(in: input) {
                 Self.prependMedia(media, toMessageAt: index, in: &messages)
             } else {
                 Self.prependMedia(media, toLastUserIn: &messages)
             }
-            // Nemotron Omni's text-only reasoning path is valid, but live
-            // media probes show that its open-thinking media template
-            // hallucinates over placeholder text instead of grounding in the
-            // spliced RADIO/Parakeet embeddings. Media turns therefore use
-            // the model's documented closed-thinking template contract.
-            Self.addNoThinkingMediaInstruction(to: &messages)
-            var mediaContext = templateContext ?? [:]
-            mediaContext["enable_thinking"] = false
-            templateContext = mediaContext
         }
 
         let promptTokens = try tokenizer.applyChatTemplate(
             messages: messages, tools: input.tools,
-            additionalContext: templateContext)
+            additionalContext: input.additionalContext)
         let promptArray = MLXArray(promptTokens).expandedDimensions(axis: 0)
         let mask = ones(like: promptArray).asType(.int8)
 
@@ -952,23 +965,6 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
         _ = messages
     }
 
-    private static func addSystemInstruction(
-        _ instruction: String,
-        to messages: inout [Message]
-    ) {
-        if let systemIndex = messages.firstIndex(where: {
-            ($0["role"] as? String) == "system"
-        }) {
-            let existing = contentText(from: messages[systemIndex]["content"])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            messages[systemIndex]["content"] = existing.isEmpty
-                ? instruction
-                : instruction + "\n" + existing
-            return
-        }
-        messages.insert(["role": "system", "content": instruction], at: 0)
-    }
-
     private static func prependMedia(_ media: String, toLastUserIn messages: inout [Message]) {
         guard !messages.isEmpty else {
             messages = [["role": "user", "content": media]]
@@ -1006,13 +1002,6 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
                 || !message.videos.isEmpty
                 || !message.audios.isEmpty
         }
-    }
-
-    private static func addNoThinkingMediaInstruction(to messages: inout [Message]) {
-        let instruction =
-            "Answer directly with only the final visible response. " +
-            "Do not include analysis, reasoning, scratchpad steps, or drafts."
-        addSystemInstruction(instruction, to: &messages)
     }
 
     private static func videoTokensPerGroup(pixelValues: MLXArray) -> Int {
