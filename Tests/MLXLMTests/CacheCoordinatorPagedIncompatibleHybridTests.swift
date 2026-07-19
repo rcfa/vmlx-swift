@@ -1,11 +1,8 @@
-// Regression test for hybrid SSM/GLA models that must mark the cache
-// coordinator paged-incompatible. See `docs/HYBRID-PAGED-CACHE-BUG-2026-05-09.md`
-// for the bench evidence: Bailing/Ling (ArraysCache GLA) and Nemotron-H
-// (MambaCache) produced garbled Turn 2 output on warm-cache because the
-// paged-incompatible auto-flip in Evaluate.swift / BatchEngine.swift
-// missed those cache types. The right detector is
-// `cacheContainsPathDependentState` (CacheHelpers.swift:105-119) — these
-// tests pin its contract so the auto-flip can call it directly.
+// Regression tests for the distinction between typed disk persistence and
+// paged-RAM compatibility. Hybrid SSM/GLA models require an exact-boundary
+// recurrent companion, but Mamba/Arrays + ordinary/TurboQuant attention can
+// still use paged KV blocks when that companion exists. Rotating, CCA, affine,
+// and hybrid-pool layouts remain disk-only.
 
 import Foundation
 @testable import MLXLMCommon
@@ -15,48 +12,61 @@ import Testing
     let cache: [any KVCache] = [MambaCache(), KVCacheSimple()]
     #expect(cacheContainsPathDependentState(cache))
     #expect(cacheRequiresDiskBackedCoordinatorRestore(cache))
+    #expect(!cacheCannotUsePagedCoordinatorRestore(cache))
 }
 
 @Test func arraysCacheTriggersPathDependent() {
     let cache: [any KVCache] = [ArraysCache(size: 2), KVCacheSimple()]
     #expect(cacheContainsPathDependentState(cache))
     #expect(cacheRequiresDiskBackedCoordinatorRestore(cache))
+    #expect(!cacheCannotUsePagedCoordinatorRestore(cache))
 }
 
 @Test func zayaCCACacheTriggersPathDependent() {
     let cache: [any KVCache] = [ZayaCCACache(), KVCacheSimple()]
     #expect(cacheContainsPathDependentState(cache))
     #expect(cacheRequiresDiskBackedCoordinatorRestore(cache))
+    #expect(cacheCannotUsePagedCoordinatorRestore(cache))
 }
 
 @Test func cacheListWrappingMambaTriggersPathDependent() {
     let composite = CacheList(MambaCache(), KVCacheSimple())
     let cache: [any KVCache] = [composite]
     #expect(cacheContainsPathDependentState(cache))
+    #expect(!cacheCannotUsePagedCoordinatorRestore(cache))
 }
 
 @Test func cacheListWrappingArraysTriggersPathDependent() {
     let composite = CacheList(ArraysCache(size: 2), KVCacheSimple())
     let cache: [any KVCache] = [composite]
     #expect(cacheContainsPathDependentState(cache))
+    #expect(!cacheCannotUsePagedCoordinatorRestore(cache))
 }
 
 @Test func plainKVDoesNotTriggerPathDependent() {
     let cache: [any KVCache] = [KVCacheSimple(), KVCacheSimple()]
     #expect(!cacheContainsPathDependentState(cache))
     #expect(!cacheRequiresDiskBackedCoordinatorRestore(cache))
+    #expect(!cacheCannotUsePagedCoordinatorRestore(cache))
 }
 
 @Test func emptyCacheDoesNotTriggerPathDependent() {
     let cache: [any KVCache] = []
     #expect(!cacheContainsPathDependentState(cache))
     #expect(!cacheRequiresDiskBackedCoordinatorRestore(cache))
+    #expect(!cacheCannotUsePagedCoordinatorRestore(cache))
+}
+
+@Test func unknownCacheTypeFailsClosedForPagedRestore() {
+    let cache: [any KVCache] = [BaseKVCache()]
+    #expect(cacheCannotUsePagedCoordinatorRestore(cache))
 }
 
 @Test func rotatingCacheRequiresDiskBackedCoordinatorRestore() {
     let cache: [any KVCache] = [RotatingKVCache(maxSize: 32), KVCacheSimple()]
     #expect(!cacheContainsPathDependentState(cache))
     #expect(cacheRequiresDiskBackedCoordinatorRestore(cache))
+    #expect(cacheCannotUsePagedCoordinatorRestore(cache))
 }
 
 @Test func mixedHybridLayerOrderingTriggersPathDependent() {
@@ -69,4 +79,22 @@ import Testing
     #expect(cacheContainsPathDependentState(cacheStart))
     #expect(cacheContainsPathDependentState(cacheMiddle))
     #expect(cacheContainsPathDependentState(cacheEnd))
+    #expect(!cacheCannotUsePagedCoordinatorRestore(cacheStart))
+    #expect(!cacheCannotUsePagedCoordinatorRestore(cacheMiddle))
+    #expect(!cacheCannotUsePagedCoordinatorRestore(cacheEnd))
+}
+
+@Test func turboQuantAttentionWithMambaCompanionCanUsePagedRestore() {
+    let cache: [any KVCache] = [
+        MambaCache(),
+        TurboQuantKVCache(keyBits: 4, valueBits: 4),
+    ]
+    #expect(cacheRequiresDiskBackedCoordinatorRestore(cache))
+    #expect(!cacheCannotUsePagedCoordinatorRestore(cache))
+}
+
+@Test func rotatingAttentionInsideHybridRemainsDiskOnly() {
+    let cache: [any KVCache] = [MambaCache(), RotatingKVCache(maxSize: 32)]
+    #expect(cacheRequiresDiskBackedCoordinatorRestore(cache))
+    #expect(cacheCannotUsePagedCoordinatorRestore(cache))
 }

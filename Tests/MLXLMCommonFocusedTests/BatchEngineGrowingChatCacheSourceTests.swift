@@ -32,9 +32,10 @@ struct BatchEngineGrowingChatCacheSourceTests {
         let exactSnapshot = try #require(source.range(of: "exactBoundarySSMStatesFromSnapshotIfSufficient("))
         let rederive = try #require(source.range(of: "return reDeriveAndStoreSSMStatesForPromptBoundaries("))
         #expect(exactSnapshot.lowerBound < rederive.lowerBound)
-        #expect(source.contains("let unsafeFullHit = remaining.isEmpty && requiresDiskBackedRestore"))
+        #expect(source.contains("let unsafeFullHit ="))
+        #expect(source.contains("remaining.isEmpty && requiresDiskBackedRestore"))
         #expect(source.contains("let seedBoundary = promptLen - 1"))
-        #expect(source.contains("restoreSSMStates(seedSSM, into: slot.cache)"))
+        #expect(source.contains("seedSSM, into: slot.cache, boundary: seedBoundary"))
         #expect(source.contains("boundary: seedBoundary"))
         #expect(!source.contains("disk-backed full cache hit: re-feeding last token can corrupt path-dependent or rotating state"))
         #expect(source.contains("!slot.originalInput.requiresPostPrepareCacheKey"))
@@ -60,13 +61,14 @@ struct BatchEngineGrowingChatCacheSourceTests {
         #expect(source.contains("input.cacheHitSuffixContainsMediaPlaceholder(remainingTokens)"))
         #expect(source.contains("let requiresDiskBackedRestore ="))
         #expect(source.contains("cacheRequiresDiskBackedCoordinatorRestore(self.cache)"))
-        #expect(source.contains("let unsafeFullHit = remainingTokens.isEmpty && requiresDiskBackedRestore"))
+        #expect(source.contains("let unsafeFullHit ="))
+        #expect(source.contains("remainingTokens.isEmpty && requiresDiskBackedRestore"))
         #expect(!source.contains("!requiresDiskBackedRestore,\n                    !originalInput.hasMediaContent"))
         let exactSnapshot = try #require(source.range(of: "exactBoundarySSMStatesFromSnapshotIfSufficient("))
         let rederive = try #require(source.range(of: "return reDeriveAndStoreSSMStatesForPromptBoundaries("))
         #expect(exactSnapshot.lowerBound < rederive.lowerBound)
         #expect(source.contains("let seedBoundary = promptLen - 1"))
-        #expect(source.contains("restoreSSMStates(seedSSM, into: self.cache)"))
+        #expect(source.contains("seedSSM, into: self.cache, boundary: seedBoundary"))
         #expect(source.contains("boundary: seedBoundary"))
         #expect(!source.contains("disk-backed full cache hit: re-feeding last token can corrupt path-dependent or rotating state"))
         #expect(source.contains("cacheContainsPathDependentState(self.cache)"))
@@ -133,7 +135,12 @@ struct BatchEngineGrowingChatCacheSourceTests {
             contentsOfFile: "Libraries/MLXLMCommon/Evaluate.swift",
             encoding: .utf8)
 
-        #expect(source.contains("let diskRestored = restoreFromDiskArrays(diskArrays, into: &self.cache)"))
+        let serializedRestore = try #require(source.range(
+            of: "let diskRestored = MLXCacheIOLock.withSerializedMLXCacheIO"))
+        let restore = try #require(source.range(
+            of: "let count = restoreFromDiskArrays(diskArrays, into: &self.cache)",
+            range: serializedRestore.lowerBound..<source.endIndex))
+        #expect(serializedRestore.lowerBound < restore.lowerBound)
         #expect(source.contains("MLX.eval(self.cache)"))
         #expect(source.contains("Cache \\(detail.rawValue) hit: restored \\(diskRestored) tokens from disk"))
     }
@@ -156,8 +163,8 @@ struct BatchEngineGrowingChatCacheSourceTests {
         #expect(helpers.contains("func shouldSkipHistoryBoundaryRederiveAfterTrimMiss"))
         #expect(helpers.contains("cacheRequiresDiskBackedCoordinatorRestore(cache)"))
         #expect(evaluate.contains("cacheRequiresDiskBackedCoordinatorRestore(self.cache)"))
-        #expect(!evaluate.contains("cacheHasStandaloneRotatingWindowState(self.cache)"))
-        #expect(!batch.contains("cacheHasStandaloneRotatingWindowState(slot.cache)"))
+        #expect(evaluate.contains("cacheHasStandaloneRotatingWindowState(self.cache)"))
+        #expect(batch.contains("cacheHasStandaloneRotatingWindowState(slot.cache)"))
         #expect(evaluate.contains("path-dependent full cache hit missing seed-boundary SSM state"))
         #expect(batch.contains("path-dependent full cache hit missing seed-boundary SSM state"))
         #expect(batch.contains("cacheRequiresDiskBackedCoordinatorRestore(slot.cache)"))
@@ -177,6 +184,11 @@ struct BatchEngineGrowingChatCacheSourceTests {
         #expect(evaluate.contains("history-boundary cache rederive after trim miss"))
         #expect(batch.contains("history-boundary cache rederive after trim miss"))
         #expect(nativeMTP.contains("cacheContainsPathDependentState(self.cache)"))
+        #expect(evaluate.contains("cacheCannotUsePagedCoordinatorRestore(self.cache)"))
+        #expect(batch.contains("cacheCannotUsePagedCoordinatorRestore(cache)"))
+        #expect(nativeMTP.contains("cacheCannotUsePagedCoordinatorRestore(self.cache)"))
+        #expect(nativeMTP.contains("cacheHasArraysState"))
+        #expect(nativeMTP.contains("boundary: matchedTokens"))
     }
 
     @Test("token iterator does not blanket-eval disk-backed cache snapshots before store")
@@ -341,7 +353,7 @@ struct BatchEngineGrowingChatCacheSourceTests {
         #expect(kvCache.contains("Only converts `KVCacheSimple` layers. `RotatingKVCache`, `DeepseekV4Cache`,"))
         #expect(kvCache.contains("if let simpleCache = cache[i] as? KVCacheSimple"))
         #expect(kvCache.contains("TurboQuantKVCache.fromSimpleCache("))
-        #expect(kvCache.contains("// RotatingKVCache, DeepseekV4Cache, MambaCache, CacheList: skip"))
+        #expect(kvCache.contains("// RotatingKVCache, DeepseekV4Cache, MambaCache, CacheList,"))
     }
 
     @Test("Laguna stays off compiled decode until parity is proven")

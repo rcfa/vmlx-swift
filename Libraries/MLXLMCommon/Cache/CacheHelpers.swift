@@ -146,6 +146,55 @@ public func cacheRequiresDiskBackedCoordinatorRestore(_ cache: [any KVCache]) ->
     }
 }
 
+/// True when the paged coordinator tier cannot represent enough of the cache
+/// topology to restore it safely.
+///
+/// This is deliberately narrower than
+/// ``cacheRequiresDiskBackedCoordinatorRestore(_:)``. Mamba/Arrays companion
+/// state is path-dependent and therefore still needs typed disk persistence,
+/// but the paged tier can restore its attention KV blocks when
+/// ``SSMStateCache`` supplies a complete native companion snapshot at the same
+/// boundary. ``CacheCoordinator.fetch`` enforces that boundary match and falls
+/// through to disk when the companion is absent or incomplete.
+///
+/// TurboQuant attention slots are also paged-compatible: paged blocks hold the
+/// already-decoded prefix and ``restoreLayerData`` seats it directly in the
+/// cache's compressed phase through `restoreFromDecodedKV`, avoiding a second
+/// lossy encode. The recurrent companion state itself is never TurboQuant
+/// encoded.
+///
+/// Rotating/SWA rings, legacy affine quantized caches, ZAYA CCA, and DSV4
+/// hybrid pools remain disk-only because paged blocks do not carry their ring,
+/// quantized tuple, CCA, or compressor/indexer metadata.
+public func cacheCannotUsePagedCoordinatorRestore(_ cache: [any KVCache]) -> Bool {
+    func incompatible(_ layer: any KVCache) -> Bool {
+        if let cacheList = layer as? CacheList {
+            for index in 0..<cacheList.count where incompatible(cacheList[index]) {
+                return true
+            }
+            return false
+        }
+
+        // KVCacheSimple and TurboQuantKVCache are carried by paged KV blocks.
+        // MambaCache and ArraysCache are carried by exact-boundary companion
+        // snapshots, whose presence is mandatory at fetch time.
+        if layer is KVCacheSimple
+            || layer is TurboQuantKVCache
+            || layer is MambaCache
+            || layer is ArraysCache
+        {
+            return false
+        }
+
+        // Fail closed for rotating/SWA, affine quantized, CCA, DSV4 pools,
+        // compiled/batched caches, placeholders, and every future cache type
+        // until its block payload + restore semantics are explicitly proven.
+        return true
+    }
+
+    return cache.contains(where: incompatible)
+}
+
 /// True for Gemma/Mistral-style standalone sliding-window attention caches.
 ///
 /// These caches are disk-backed because paged KV blocks cannot represent the
@@ -420,7 +469,14 @@ public func extractSSMStates(from cache: [any KVCache]) -> [MLXArray] {
 /// - Parameters:
 ///   - states: The SSM state arrays to restore.
 ///   - cache: The model's per-layer cache array to restore into.
-public func restoreSSMStates(_ states: [MLXArray], into cache: [any KVCache]) {
+///   - boundary: Exact prompt boundary represented by `states`. Recurrent
+///     caches use this logical offset when constructing their next-step mask;
+///     restoring tensors without it is an invalid partial restore.
+public func restoreSSMStates(
+    _ states: [MLXArray],
+    into cache: [any KVCache],
+    boundary: Int? = nil
+) {
     var stateIdx = 0
     for layer in cache {
         if let mamba = layer as? MambaCache {
@@ -431,11 +487,13 @@ public func restoreSSMStates(_ states: [MLXArray], into cache: [any KVCache]) {
                 if stateIdx + slotCount <= states.count {
                     mamba.state = Array(states[stateIdx..<(stateIdx + slotCount)])
                         .map { $0[.ellipsis] }
+                    if let boundary { mamba.offset = boundary }
                     stateIdx += slotCount
                 }
             } else if stateIdx + existingCount <= states.count {
                 mamba.state = Array(states[stateIdx..<(stateIdx + existingCount)])
                     .map { $0[.ellipsis] }
+                if let boundary { mamba.offset = boundary }
                 stateIdx += existingCount
             }
         } else if let arrays = layer as? ArraysCache {
@@ -455,6 +513,7 @@ public func restoreSSMStates(_ states: [MLXArray], into cache: [any KVCache]) {
             if slotCount > 0, stateIdx + slotCount <= states.count {
                 arrays.state = Array(states[stateIdx..<(stateIdx + slotCount)])
                     .map { $0[.ellipsis] }
+                if let boundary { arrays.offset = boundary }
                 stateIdx += slotCount
             }
         } else if layer is ZayaCCACache {
@@ -468,14 +527,16 @@ public func restoreSSMStates(_ states: [MLXArray], into cache: [any KVCache]) {
                     if stateIdx + slotCount <= states.count {
                         mamba.state = Array(states[stateIdx..<(stateIdx + slotCount)])
                             .map { $0[.ellipsis] }
+                        if let boundary { mamba.offset = boundary }
                         stateIdx += slotCount
                     }
                 } else if let arrays = cacheList[i] as? ArraysCache {
-                    let existingCount = arrays.state.count
-                    if existingCount > 0, stateIdx + existingCount <= states.count {
-                        arrays.state = Array(states[stateIdx..<(stateIdx + existingCount)])
+                    let slotCount = arrays.slotCount
+                    if slotCount > 0, stateIdx + slotCount <= states.count {
+                        arrays.state = Array(states[stateIdx..<(stateIdx + slotCount)])
                             .map { $0[.ellipsis] }
-                        stateIdx += existingCount
+                        if let boundary { arrays.offset = boundary }
+                        stateIdx += slotCount
                     }
                 }
             }

@@ -89,6 +89,13 @@ public final class CacheCoordinator: @unchecked Sendable {
     /// Whether the model has hybrid (attention + SSM) layers.
     private var _isHybrid: Bool = false
 
+    /// Whether a disk hit must have the recurrent SSM/GDN companion sidecar.
+    /// Mamba and ArraysCache tensors may be path-dependent even when a v2
+    /// payload also contains ordinary KV layer tags. ZAYA CCA is the one
+    /// hybrid topology that owns its companion tensors inside the v2 layer
+    /// payload and therefore sets this false.
+    private var _requiresRecurrentSSMCompanion: Bool = false
+
     /// 2026-05-04 (DSV4 SWA/CSA/HSA correctness pass):
     /// Whether the model has hybrid pool caches (DeepseekV4 SWA+CSA+HSA)
     /// that the paged cache can't represent. When true, fetch + store
@@ -109,7 +116,8 @@ public final class CacheCoordinator: @unchecked Sendable {
     /// (stripped-boundary store skipped; safe). See Evaluate.storeCacheAfterGeneration.
     private var _genPromptSuffixTokens: [Int] = []
 
-    /// Lock protecting `_isHybrid`, `_isPagedIncompatible`, and
+    /// Lock protecting `_isHybrid`, `_requiresRecurrentSSMCompanion`,
+    /// `_isPagedIncompatible`, and
     /// `_genPromptSuffixTokens`.
     private let lock = OSAllocatedUnfairLock()
 
@@ -185,14 +193,32 @@ public final class CacheCoordinator: @unchecked Sendable {
     /// When hybrid mode is active, the coordinator will also fetch/store
     /// SSM companion states alongside the KV cache data.
     ///
-    /// - Parameter isHybrid: `true` for hybrid models.
-    public func setHybrid(_ isHybrid: Bool) {
-        lock.withLock { _isHybrid = isHybrid }
+    /// - Parameters:
+    ///   - isHybrid: `true` for hybrid models.
+    ///   - requiresRecurrentSSMCompanion: Exact topology contract. Omit only
+    ///     when the caller has no cache topology; the conservative fallback
+    ///     then requires a sidecar rather than accepting a false disk hit.
+    public func setHybrid(
+        _ isHybrid: Bool,
+        requiresRecurrentSSMCompanion: Bool? = nil
+    ) {
+        lock.withLock {
+            _isHybrid = isHybrid
+            _requiresRecurrentSSMCompanion = isHybrid
+                ? (requiresRecurrentSSMCompanion ?? true)
+                : false
+        }
     }
 
     /// Whether the model is hybrid (has both attention and SSM layers).
     public var isHybrid: Bool {
         lock.withLock { _isHybrid }
+    }
+
+    /// Whether disk admission requires a separately persisted recurrent
+    /// SSM/GDN snapshot at the exact matched prompt boundary.
+    public var requiresRecurrentSSMCompanion: Bool {
+        lock.withLock { _requiresRecurrentSSMCompanion }
     }
 
     /// Whether a prompt-boundary store has any tier to land in. With both tiers
@@ -369,14 +395,14 @@ public final class CacheCoordinator: @unchecked Sendable {
             if !(states?.isEmpty ?? true) {
                 return true
             }
-            // Format-v2 disk payloads carry first-class layer state for
-            // path-dependent caches. For ZAYA CCA, LayerKind.zayaCCA stores
-            // KV plus conv/previous-hidden companion tensors in the same
-            // payload, so a separate recurrent SSM sidecar is not required.
-            if let diskArrays, TQDiskSerializer.formatVersion(of: diskArrays) >= 2 {
-                return true
-            }
-            return false
+            // Mamba/ArraysCache topologies require the separately keyed
+            // prompt-boundary sidecar. A generic format-v2 marker is not
+            // evidence that every recurrent layer is complete (ArraysCache
+            // is intentionally serialized as `.skip`). ZAYA CCA is topology-
+            // classified with this flag false because its v2 layer payload
+            // atomically owns KV + conv + previous-hidden state.
+            return !requiresRecurrentSSMCompanion
+                && diskArrays.map { TQDiskSerializer.formatVersion(of: $0) >= 2 } == true
         }
 
         // 2026-05-04: skip the paged tier entirely for paged-incompatible
@@ -563,13 +589,36 @@ public final class CacheCoordinator: @unchecked Sendable {
         let totalTokens = promptTokens.count
         let blockSize = config.pagedBlockSize
 
+        // Older generation call sites intentionally supplied an empty paged
+        // payload for every cache that also needed typed disk persistence.
+        // That was correct for rotating/CCA/pool layouts, but it silently
+        // prevented Mamba/Arrays + ordinary/TurboQuant attention topologies
+        // from ever populating their otherwise-compatible paged KV tier.
+        // Derive the payload here, where the coordinator knows that paged RAM
+        // caching is actually enabled. Keeping this conditional avoids
+        // decompressing TurboQuant state when the user left paged caching off.
+        let effectivePerLayerData: [(keys: MLXArray, values: MLXArray)?]
+        if perLayerData.isEmpty,
+           pagedCache != nil,
+           !isPagedIncompatible,
+           let cache,
+           !cacheCannotUsePagedCoordinatorRestore(cache)
+        {
+            effectivePerLayerData = extractLayerData(from: cache)
+        } else {
+            effectivePerLayerData = perLayerData
+        }
+
         // Split per-layer full-sequence data into per-block chunks.
         let blockLayerData = splitLayerDataIntoBlocks(
-            perLayerData, blockSize: blockSize, totalTokens: totalTokens)
+            effectivePerLayerData, blockSize: blockSize, totalTokens: totalTokens)
+        let hasPagedKVPayload = blockLayerData.contains { !$0.isEmpty }
 
         // Store in paged cache (skip when the model is paged-incompatible —
-        // see `isPagedIncompatible` above).
-        if !isPagedIncompatible, let pagedCache {
+        // see `isPagedIncompatible` above). Recurrent-only/state-only caches
+        // must not publish token hashes without any restorable KV payload;
+        // doing so would suppress the valid typed disk fallback on fetch.
+        if !isPagedIncompatible, hasPagedKVPayload, let pagedCache {
             pagedCache.storeTokenSequence(
                 tokens: promptTokens, layerData: blockLayerData, mediaSalt: mediaSalt)
         }

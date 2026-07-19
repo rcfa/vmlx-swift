@@ -304,7 +304,9 @@ public final class ModelContainer: Sendable {
         }
 
         let coordinator = CacheCoordinator(config: config)
-        coordinator.setHybrid(isHybrid)
+        coordinator.setHybrid(
+            isHybrid,
+            requiresRecurrentSSMCompanion: topology.requiresRecurrentSSMCompanionState)
         coordinator.setGenPromptSuffixTokens(await computeGenPromptSuffixTokens())
 
         _cacheCoordinator.withLock { $0 = coordinator }

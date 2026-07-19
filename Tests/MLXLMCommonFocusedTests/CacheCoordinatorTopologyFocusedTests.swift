@@ -360,7 +360,7 @@ struct CacheCoordinatorTopologyFocusedTests {
             enableDiskCache: true,
             diskCacheDir: tmp,
             modelKey: "zaya-cca-focused")
-        coordinator.setHybrid(true)
+        coordinator.setHybrid(true, requiresRecurrentSSMCompanion: false)
         coordinator.setPagedIncompatible(true)
 
         let tokens = [51, 52, 53, 54]
@@ -431,7 +431,7 @@ struct CacheCoordinatorTopologyFocusedTests {
             enableDiskCache: true,
             diskCacheDir: tmp,
             modelKey: "zaya-cca-salted-exact-focused")
-        coordinator.setHybrid(true)
+        coordinator.setHybrid(true, requiresRecurrentSSMCompanion: false)
         coordinator.setPagedIncompatible(true)
 
         let tokens = [61, 62, 63, 64]
@@ -468,7 +468,7 @@ struct CacheCoordinatorTopologyFocusedTests {
         }
     }
 
-    @Test("path-dependent and sliding caches require disk-backed coordinator restore")
+    @Test("typed disk need and paged incompatibility are distinct cache contracts")
     func pathDependentAndSlidingCachesRequireDiskBackedRestore() {
         FocusedMLXTestSupport.withLock {
         prepareMLXMetallibForCacheTopologyTests()
@@ -479,6 +479,226 @@ struct CacheCoordinatorTopologyFocusedTests {
         #expect(cacheRequiresDiskBackedCoordinatorRestore([RotatingKVCache(maxSize: 32), KVCacheSimple()]))
         #expect(cacheRequiresDiskBackedCoordinatorRestore([DeepseekV4Cache(slidingWindow: 16, compressRatio: 4)]))
         #expect(!cacheRequiresDiskBackedCoordinatorRestore([KVCacheSimple(), KVCacheSimple()]))
+
+        #expect(!cacheCannotUsePagedCoordinatorRestore([MambaCache(), KVCacheSimple()]))
+        #expect(!cacheCannotUsePagedCoordinatorRestore([ArraysCache(size: 2), KVCacheSimple()]))
+        #expect(!cacheCannotUsePagedCoordinatorRestore([
+            MambaCache(), TurboQuantKVCache(keyBits: 4, valueBits: 4),
+        ]))
+        #expect(cacheCannotUsePagedCoordinatorRestore([ZayaCCACache(), KVCacheSimple()]))
+        #expect(cacheCannotUsePagedCoordinatorRestore([RotatingKVCache(maxSize: 32), KVCacheSimple()]))
+        #expect(cacheCannotUsePagedCoordinatorRestore([DeepseekV4Cache(slidingWindow: 16, compressRatio: 4)]))
+        #expect(!cacheCannotUsePagedCoordinatorRestore([KVCacheSimple(), KVCacheSimple()]))
+        #expect(cacheCannotUsePagedCoordinatorRestore([BaseKVCache()]))
+        }
+    }
+
+    @Test("Nemotron Omni Mamba plus TurboQuant topology restores a paged partial prefix atomically")
+    func nemotronOmniTurboQuantPagedPartialRestore() {
+        FocusedMLXTestSupport.withLock {
+        let tokens = Array(1...8)
+        let coordinator = makeCoordinator(
+            usePagedCache: true,
+            enableDiskCache: false,
+            modelKey: "nemotron-omni-tq-paged-focused")
+        coordinator.setHybrid(true, requiresRecurrentSSMCompanion: true)
+
+        let source = makeNemotronOmniCache(tokenCount: tokens.count, populated: true)
+        let topology = ModelCacheTopologySnapshot(cache: source)
+        #expect(topology.layerCount == 29)
+        #expect(topology.mambaLayerCount == 23)
+        #expect(topology.turboQuantKVLayerCount == 6)
+        #expect(!cacheCannotUsePagedCoordinatorRestore(source))
+
+        coordinator.storeAfterGeneration(
+            promptTokens: tokens,
+            // Match the real generation call sites for disk-backed hybrid
+            // topologies: the coordinator must derive the paged KV payload
+            // itself when the user explicitly enables paged caching.
+            perLayerData: [],
+            ssmStates: extractSSMStates(from: source),
+            cache: source)
+
+        switch coordinator.fetch(tokens: tokens + [9, 10, 11]) {
+        case .hit(
+            let matchedTokens, let remainingTokens, let detail,
+            let blocks, let ssmStates, _):
+            #expect(matchedTokens == tokens.count)
+            #expect(remainingTokens == [9, 10, 11])
+            #expect(detail == .paged)
+            #expect(ssmStates?.count == 46)
+
+            let restored = makeNemotronOmniCache(tokenCount: 0, populated: false)
+            #expect(restoreLayerData(from: blocks, into: restored) == tokens.count)
+            coordinator.release(blocks: blocks)
+            if let ssmStates {
+                restoreSSMStates(ssmStates, into: restored, boundary: matchedTokens)
+            }
+
+            var mambaCount = 0
+            var tqCount = 0
+            for layer in restored {
+                if let mamba = layer as? MambaCache {
+                    mambaCount += 1
+                    #expect(mamba.state.count == 2)
+                    #expect(mamba.offset == tokens.count)
+                } else if let tq = layer as? TurboQuantKVCache {
+                    tqCount += 1
+                    if case .compressed = tq.phase {
+                        // Expected: decoded paged KV stays in the compressed
+                        // TQ lifecycle without a second lossy encode.
+                    } else {
+                        Issue.record("paged TQ restore must remain compressed")
+                    }
+                    #expect(tq.offset == tokens.count)
+                    #expect(tq.state.first?.dim(2) == tokens.count)
+                }
+            }
+            #expect(mambaCount == 23)
+            #expect(tqCount == 6)
+        case .miss:
+            Issue.record(
+                "Nemotron hybrid TQ paged prefix should restore with a complete same-boundary companion"
+            )
+        }
+        }
+    }
+
+    @Test("paged eviction falls through to the persisted disk boundary")
+    func pagedEvictionFallsThroughToDisk() {
+        FocusedMLXTestSupport.withLock {
+        let tmp = makeTempDir("paged-eviction-disk-fallback")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let coordinator = makeCoordinator(
+            usePagedCache: true,
+            enableDiskCache: true,
+            diskCacheDir: tmp,
+            modelKey: "paged-eviction-disk-fallback-focused",
+            maxCacheBlocks: 3)
+        coordinator.setHybrid(true)
+
+        let first = Array(101...108)
+        let second = Array(201...208)
+        let companion = [
+            MLXArray.ones([1, 4], dtype: .float32),
+            MLXArray.zeros([1, 4], dtype: .float32),
+        ]
+        evalArrays(companion)
+        coordinator.storeAfterGeneration(
+            promptTokens: first,
+            perLayerData: fakeLayerData(tokenCount: first.count),
+            ssmStates: companion)
+        coordinator.storeAfterGeneration(
+            promptTokens: second,
+            perLayerData: fakeLayerData(tokenCount: second.count),
+            ssmStates: companion)
+
+        #expect((coordinator.pagedCache?.snapshotStats().evictions ?? 0) >= 2)
+        switch coordinator.fetch(tokens: first + [109, 110]) {
+        case .hit(let matched, let remaining, let detail, let blocks, let ssm, let arrays):
+            #expect(matched == first.count)
+            #expect(remaining == [109, 110])
+            #expect(detail == .disk)
+            #expect(blocks.isEmpty)
+            #expect(ssm?.count == companion.count)
+            #expect(arrays != nil)
+            #expect((coordinator.diskCache?.snapshotStats().hits ?? 0) > 0)
+        case .miss:
+            Issue.record("evicted paged prefix should fall through to its L2 disk record")
+        }
+        }
+    }
+
+    @Test("paged-off fresh coordinator restores a partial hybrid prefix from disk and companion L2")
+    func pagedOffFreshCoordinatorRestoresHybridDiskPartialPrefix() {
+        FocusedMLXTestSupport.withLock {
+        let tmp = makeTempDir("disk-only-partial-restart")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let modelKey = "disk-only-partial-restart-focused"
+        let tokens = Array(301...308)
+        let companion = [
+            MLXArray.ones([1, 4], dtype: .float32) * Float(3),
+            MLXArray.ones([1, 4], dtype: .float32) * Float(4),
+        ]
+        evalArrays(companion)
+
+        do {
+            let writer = makeCoordinator(
+                usePagedCache: false,
+                enableDiskCache: true,
+                diskCacheDir: tmp,
+                modelKey: modelKey)
+            writer.setHybrid(true)
+            writer.storeAfterGeneration(
+                promptTokens: tokens,
+                perLayerData: fakeLayerData(tokenCount: tokens.count),
+                ssmStates: companion)
+            #expect(writer.pagedCache == nil)
+            #expect((writer.diskCache?.snapshotStats().stores ?? 0) > 0)
+        }
+
+        let reader = makeCoordinator(
+            usePagedCache: false,
+            enableDiskCache: true,
+            diskCacheDir: tmp,
+            modelKey: modelKey)
+        reader.setHybrid(true)
+        switch reader.fetch(tokens: tokens + [309, 310, 311]) {
+        case .hit(let matched, let remaining, let detail, let blocks, let ssm, let arrays):
+            #expect(matched == tokens.count)
+            #expect(remaining == [309, 310, 311])
+            #expect(detail == .disk)
+            #expect(blocks.isEmpty)
+            #expect(ssm?.count == companion.count)
+            #expect(arrays != nil)
+            #expect((reader.diskCache?.snapshotStats().hits ?? 0) > 0)
+            #expect(reader.ssmStateCache.snapshotStats().hits > 0)
+        case .miss:
+            Issue.record("fresh paged-off coordinator should restore the longest partial L2 prefix")
+        }
+        }
+    }
+
+    @Test("state-only hybrid cache never publishes a token-only paged hit")
+    func stateOnlyHybridSkipsPagedAndFallsThroughToDisk() {
+        FocusedMLXTestSupport.withLock {
+        let tmp = makeTempDir("state-only-paged-false-hit")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let coordinator = makeCoordinator(
+            usePagedCache: true,
+            enableDiskCache: true,
+            diskCacheDir: tmp,
+            modelKey: "state-only-paged-false-hit-focused")
+        coordinator.setHybrid(true, requiresRecurrentSSMCompanion: true)
+
+        let tokens = Array(401...408)
+        let mamba = MambaCache()
+        mamba.state = [
+            MLXArray.ones([1, 2, 4], dtype: .float32),
+            MLXArray.ones([1, 2, 4], dtype: .float32) * Float(2),
+        ]
+        mamba.offset = tokens.count
+        evalArrays(mamba.state)
+        let cache: [any KVCache] = [mamba]
+
+        coordinator.storeAfterGeneration(
+            promptTokens: tokens,
+            perLayerData: [],
+            ssmStates: extractSSMStates(from: cache),
+            cache: cache)
+
+        #expect((coordinator.pagedCache?.snapshotStats().allocatedBlocks ?? -1) == 0)
+        switch coordinator.fetch(tokens: tokens + [409]) {
+        case .hit(let matched, let remaining, let detail, let blocks, let ssm, let arrays):
+            #expect(matched == tokens.count)
+            #expect(remaining == [409])
+            #expect(detail == .disk)
+            #expect(blocks.isEmpty)
+            #expect(ssm?.count == 2)
+            #expect(arrays != nil)
+        case .miss:
+            Issue.record("state-only hybrid should bypass paged and retain its valid typed disk hit")
+        }
         }
     }
 
@@ -604,7 +824,7 @@ struct CacheCoordinatorTopologyFocusedTests {
         #expect(batchSource.contains(#"modelName.contains("mxfp4")"#))
         #expect(batchSource.contains("!shouldSkipDiskBackedToolPromptSeedBoundary(for: slot)"))
         #expect(batchSource.contains("shouldDisableDiskBackedRequiredToolRestore"))
-        #expect(batchSource.contains("disableDiskBackedRequiredToolRestore: disableDiskBackedRequiredToolRestore"))
+        #expect(batchSource.contains("disableDiskBackedRequiredToolRestore: deferredDisableRestore"))
         #expect(batchSource.contains("Skipped disk-backed required-tool cache restore"))
         #expect(batchSource.contains("Skipped disk-backed tool prompt seed boundary"))
         #expect(evaluateSource.contains("disableDiskBackedRequiredToolRestore"))
@@ -641,7 +861,8 @@ struct CacheCoordinatorTopologyFocusedTests {
         enableDiskCache: Bool,
         diskCacheDir: URL? = nil,
         modelKey: String = "cache-topology-focused",
-        blockSize: Int = 4
+        blockSize: Int = 4,
+        maxCacheBlocks: Int = 40
     ) -> CacheCoordinator {
         prepareMLXMetallibForCacheTopologyTests()
 
@@ -649,7 +870,7 @@ struct CacheCoordinatorTopologyFocusedTests {
             usePagedCache: usePagedCache,
             enableDiskCache: enableDiskCache,
             pagedBlockSize: blockSize,
-            maxCacheBlocks: 40,
+            maxCacheBlocks: maxCacheBlocks,
             diskCacheMaxGB: 1.0,
             diskCacheDir: diskCacheDir,
             modelKey: modelKey))
@@ -660,6 +881,46 @@ struct CacheCoordinatorTopologyFocusedTests {
         let values = MLXArray.ones([1, 1, tokenCount, 4], dtype: .bfloat16) * Float(0.5)
         MLX.eval(keys, values)
         return [(keys: keys, values: values)]
+    }
+
+    /// Exact cache-bearing layer order from the current local
+    /// Nemotron-Omni-Nano JANGTQ4 bundle's `hybrid_override_pattern`:
+    /// `MEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEMEM*EMEMEMEME`.
+    /// MLP/MoE (`E`) positions compact away in `NemotronH.newCache`.
+    private func makeNemotronOmniCache(
+        tokenCount: Int,
+        populated: Bool
+    ) -> [any KVCache] {
+        let pattern = "MEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEMEM*EMEMEMEME"
+        return pattern.compactMap { symbol -> (any KVCache)? in
+            switch symbol {
+            case "M":
+                let mamba = MambaCache()
+                if populated {
+                    mamba.state = [
+                        MLXArray.ones([1, 2, 4], dtype: .float32),
+                        MLXArray.ones([1, 2, 4], dtype: .float32) * Float(2),
+                    ]
+                    mamba.offset = tokenCount
+                    evalArrays(mamba.state)
+                }
+                return mamba
+            case "*":
+                let tq = TurboQuantKVCache(
+                    keyBits: 4, valueBits: 4, sinkTokens: 0, residualTokens: 0)
+                if populated {
+                    let keys = MLXArray.ones(
+                        [1, 1, tokenCount, 8], dtype: .bfloat16)
+                    let values = MLXArray.ones(
+                        [1, 1, tokenCount, 8], dtype: .bfloat16) * Float(0.5)
+                    tq.restoreFromDecodedKV(
+                        keys: keys, values: values, sourceOffset: tokenCount)
+                }
+                return tq
+            default:
+                return nil
+            }
+        }
     }
 
     private func evalArrays(_ arrays: [MLXArray]) {
@@ -847,9 +1108,9 @@ struct Gemma4CacheTopologyFocusedTests {
         let helper = String(source[start.lowerBound..<end.lowerBound])
 
         #expect(helper.contains("cache.allSatisfy"))
-        #expect(helper.contains("$0 is RotatingKVCache"))
-        #expect(helper.contains("CompilableRotatingKVCache(from: layer as! RotatingKVCache"))
-        #expect(helper.contains("cache.allSatisfy({ $0 is KVCacheSimple })"))
+        #expect(helper.contains("layer is RotatingKVCache"))
+        #expect(helper.contains("CompilableRotatingKVCache(from: rotating)"))
+        #expect(helper.contains("layer is KVCacheSimple"))
         #expect(helper.contains("CompilableKVCache(from: layer, maxLength: maxCacheLength)"))
     }
 

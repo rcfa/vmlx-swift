@@ -132,7 +132,7 @@ public struct BlockDiffusionTokenIterator: TokenIteratorProtocol {
         // the disk tier — same contract as the AR iterators.
         if let coordinator = cacheCoordinator,
             !coordinator.isPagedIncompatible,
-            cacheRequiresDiskBackedCoordinatorRestore(self.cache)
+            cacheCannotUsePagedCoordinatorRestore(self.cache)
         {
             coordinator.setPagedIncompatible(true)
         }

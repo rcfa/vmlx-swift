@@ -1322,9 +1322,16 @@ public struct TokenIterator: TokenIteratorProtocol {
             effectiveParameters.maxKVSize = resolvedPolicy.maxKVSize
         }
         self.cache = cache ?? model.newCache(parameters: effectiveParameters)
-        if let coordinator = cacheCoordinator,
-           effectiveParameters.kvBits != nil || effectiveParameters.kvMode != .none
-        {
+        // Legacy affine KV stores quantized tuples that paged blocks do not
+        // preserve. TurboQuant is different: its decoded attention prefix has
+        // a dedicated paged restore path and may be paired with native SSM
+        // companion snapshots, so do not disable paged cache for TQ here.
+        let requestsAffineKV: Bool = {
+            if effectiveParameters.kvBits != nil { return true }
+            if case .affine = effectiveParameters.kvMode { return true }
+            return false
+        }()
+        if let coordinator = cacheCoordinator, requestsAffineKV {
             coordinator.setPagedIncompatible(true)
         }
 
@@ -1391,7 +1398,11 @@ public struct TokenIterator: TokenIteratorProtocol {
         {
             if !coordinator.isHybrid {
                 if cacheContainsPathDependentState(self.cache) {
-                    coordinator.setHybrid(true)
+                    let topology = ModelCacheTopologySnapshot(cache: self.cache)
+                    coordinator.setHybrid(
+                        true,
+                        requiresRecurrentSSMCompanion:
+                            topology.requiresRecurrentSSMCompanionState)
                     Self.logger.info(
                         "TokenIterator: coordinator flipped to isHybrid=true"
                     )
@@ -1404,7 +1415,7 @@ public struct TokenIterator: TokenIteratorProtocol {
             // serializer because the paged tier stores only full-history KV
             // blocks and cannot round-trip rotating ring metadata.
             if !coordinator.isPagedIncompatible {
-                if cacheRequiresDiskBackedCoordinatorRestore(self.cache) {
+                if cacheCannotUsePagedCoordinatorRestore(self.cache) {
                     coordinator.setPagedIncompatible(true)
                     Self.logger.info(
                         "TokenIterator: coordinator flipped to isPagedIncompatible=true"
@@ -1422,14 +1433,17 @@ public struct TokenIterator: TokenIteratorProtocol {
                     mediaSalt: mediaSalt,
                     skipExactDiskBoundary: requiresDiskBackedRestore)
                 switch result {
-                case .hit(_, let remainingTokens, let detail, let blocks, let ssmStates, let diskArrays):
+                case .hit(
+                    let matchedTokens, let remainingTokens, let detail, let blocks,
+                    let ssmStates, let diskArrays):
                 var restored = false
                 if !blocks.isEmpty {
                     let restoredTokens = restoreLayerData(from: blocks, into: self.cache)
                     coordinator.release(blocks: blocks)
                     if restoredTokens > 0 {
                         if let ssm = ssmStates {
-                            restoreSSMStates(ssm, into: self.cache)
+                            restoreSSMStates(
+                                ssm, into: self.cache, boundary: matchedTokens)
                         }
                         restored = true
                         Self.logger.info(
@@ -1484,7 +1498,8 @@ public struct TokenIterator: TokenIteratorProtocol {
                                TQDiskSerializer.formatVersion(of: diskArrays) < 2
                                 || cacheHasArraysState
                             {
-                                restoreSSMStates(ssm, into: self.cache)
+                                restoreSSMStates(
+                                    ssm, into: self.cache, boundary: matchedTokens)
                             }
                             // Mirror BatchEngine's disk-hit path: materialize
                             // restored arrays before prefill builds the next
@@ -1543,7 +1558,8 @@ public struct TokenIterator: TokenIteratorProtocol {
                                     _ = layer.trim(trimNeeded)
                                 }
                             }
-                            restoreSSMStates(seedSSM, into: self.cache)
+                            restoreSSMStates(
+                                seedSSM, into: self.cache, boundary: seedBoundary)
                             MLX.eval(self.cache)
                             let lastToken = MLXArray([Int32(last)])
                                 .expandedDimensions(axis: 0)
