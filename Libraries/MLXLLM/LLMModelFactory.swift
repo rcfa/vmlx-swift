@@ -1070,22 +1070,28 @@ public class LLMRegistry: AbstractModelRegistry, @unchecked Sendable {
         defaultPrompt: ""
     )
 
+    // Gemma-4 renamed its turn-end token: `<end_of_turn>` is NOT in the gemma-4 vocabulary.
+    // Do NOT add `extraEOSTokens: ["<end_of_turn>"]` to the gemma4_* configs. The extraEOSTokens
+    // loop passes `allowExactTextFallback: true`, so an entry the tokenizer cannot resolve does
+    // NOT evaporate — it becomes a LIVE text stop-string that truncates any answer containing
+    // those characters (e.g. gemma-4 asked to explain a Gemma-3 chat template). Gemma-4 ends
+    // turns with `<turn|>` (id 106), which it already declares in `generation_config.json`
+    // (`eos_token_id: [1, 106, 50]`) and which the loader honors via `resolvedEOSTokenIds`.
+    // The `gemma3_*` / `gemma3n_*` configs above intentionally KEEP the entry — `<end_of_turn>`
+    // is still their real turn-end token.
     static public let gemma4_27b_it_4bit = ModelConfiguration(
         id: "mlx-community/gemma-4-27b-it-4bit",
-        defaultPrompt: "Explain quantum computing briefly.",
-        extraEOSTokens: ["<end_of_turn>"]
+        defaultPrompt: "Explain quantum computing briefly."
     )
 
     static public let gemma4_12b_it_4bit = ModelConfiguration(
         id: "mlx-community/gemma-4-12b-it-4bit",
-        defaultPrompt: "What is the meaning of life?",
-        extraEOSTokens: ["<end_of_turn>"]
+        defaultPrompt: "What is the meaning of life?"
     )
 
     static public let gemma4_27b_it_qat_4bit = ModelConfiguration(
         id: "mlx-community/gemma-4-27b-it-qat-4bit",
-        defaultPrompt: "Explain quantum computing briefly.",
-        extraEOSTokens: ["<end_of_turn>"]
+        defaultPrompt: "Explain quantum computing briefly."
     )
 
     private static func all() -> [ModelConfiguration] {
