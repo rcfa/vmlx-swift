@@ -1,10 +1,15 @@
 # Gemma 4 QAT cache correctness checkpoint — 2026-07-19
 
-Status: **PARTIAL — the exact current merged vMLX tree is reconfirmed in an
+Status: **PARTIAL — the prior exact merged vMLX tree was reconfirmed in an
 isolated Release Osaurus build with the local Gemma 4 12B JANG_4M bundle for
 native cache, explicit TurboQuant 4/4, SSD-only restart/partial restore, long
 rotating-window recall, visible prefill progress, and the safe rejection of an
-explicit paged-RAM request. The current 12B Activity Monitor Memory row is
+explicit paged-RAM request. A new unmerged source patch now admits that explicit
+request only for the exact mixed RotatingKVCache plus full-attention
+KVCacheSimple/TurboQuant topology, with a typed rotating boundary companion and
+typed SSD fallback after eviction. Its focused and 42-test topology regressions
+pass, but the changed behavior has not yet been proved in a fresh Release
+Osaurus UI build. The current 12B Activity Monitor Memory row is
 9.48 GB and remains a failed low-footprint gate. A controlled built-in web-tool
 continuation is now live-proven with native cache and explicit TQ 4/4, but the
 Thinking on/off tool-loop propagation is only partial: both UI states completed
@@ -46,6 +51,45 @@ substitute test artifact and is not part of this checkpoint.
 - Gemma mixed SWA/full attention has no recurrent SSM/GLA companion state.
   Hybrid SSM/GDN/CCA async-rederive gates therefore remain separate family
   rows and must not be inferred from Gemma evidence.
+
+## 2026-07-20 explicit paged-RAM patch — source/test evidence only
+
+The clean worktree branch `codex/gemma4-paged-explicit-20260720` is based on
+vMLX `78cf0511`. It does not change the default: ordinary coordinator loads
+still construct with paged RAM off. When a caller explicitly enables paged RAM,
+the new admission is intentionally limited to direct mixed
+`RotatingKVCache` plus `KVCacheSimple`/`TurboQuantKVCache` layers. All-rotating
+Gemma, DSV4 pools, ZAYA CCA, affine KV, CacheList wrappers, and recurrent state
+remain on their prior typed disk/companion paths.
+
+The paged tier stores only token-sliceable full-attention KV. The exact leaf for
+a complete prompt boundary also carries only the rotating layers' ring tensors
+and `(keep, maxSize, step, offset, idx)` metadata. A leaf is not publishable
+unless every rotating layer serialized at exactly the prompt-token boundary.
+If the companion is absent, the coordinator releases the probed RAM blocks and
+falls through to the typed SSD entry. Evicting the leaf clears both paged KV and
+its companion while leaving SSD L2 intact. MLXPress status now reports whether
+the effective topology requires this boundary companion.
+
+Current source verification with Xcode 26.6 / Swift 6.3.3 and the repo-generated
+MLX metallib:
+
+- `gemmaMixedTurboQuantRotatingUsesPagedThenDiskAfterEviction` passed in
+  4.562 seconds. It restores three paged blocks into compressed TQ plus an
+  already-wrapped rotating ring, compares exact ring metadata/tensors, forces
+  LRU eviction, restores from SSD, appends the same suffix to both rings, and
+  compares temporally ordered KV.
+- `gemmaPagedMissingRotatingCompanionFallsThroughToDisk` passed in 0.005
+  seconds after deliberately removing the leaf companion.
+- The complete `CacheCoordinatorTopologyFocusedTests` selection passed 42
+  tests in five suites in 9.266 seconds, including dense KV, hybrid SSM,
+  Nemotron TQ plus Mamba, ZAYA CCA, DSV4 pools, media salt, paged eviction,
+  paged-off SSD partial restore, and actual Gemma cache factory topology.
+
+These are source/runtime-unit results, not release or UI proof. The new path
+remains open until the isolated Release app visibly proves default Off,
+explicit On, native and TQ 4/4 coherence, partial RAM reuse, real eviction to
+SSD fallback, tok/s, TTFT, and Activity Monitor physical footprint.
 
 ## Current evidence
 
@@ -138,7 +182,7 @@ telemetry are both required.
 |---|---|---|
 | Current-build MXFP8 TQ transition | 48 total / 8 KV / 40 rotating before and 48 / 8 TQ / 40 rotating after, plus coherent visible native/TQ/restart output | VERIFIED-LIVE |
 | Current-build JANG_4M TQ transition | Same current-build exact transition and coherent visible native/TQ/restart output | VERIFIED-LIVE |
-| Paged default/effective policy | Default visibly off; explicit request on paged-incompatible Gemma truthfully remained effective off with zero paged hits/misses | VERIFIED-LIVE |
+| Paged default/effective policy | Prior Release UI proves default Off and the old safe rejection. The new exact mixed-cache paged admission has source plus 42-test coverage, but default Off, explicit On, real paged hits, eviction, SSD fallback, coherence, and footprint still need a fresh Release UI run | PARTIAL-SOURCE; NEW LIVE ROW OPEN |
 | SSD L2 with paged off | Both 12B formats restored partial prefixes from disk after process restart while paged counters remained zero | VERIFIED-LIVE |
 | Explicit SSD L2 off | Visible SSD-Off save plus endpoint false/zero-counter proof | VERIFIED-LIVE |
 | Fresh-process L2 restore | Both 12B formats showed post-restart disk hits and coherent changed-prefix continuations | VERIFIED-LIVE |
@@ -194,23 +238,14 @@ matrix still contains a separate stale Hunyuan reasoning expectation
 (`think_xml` while the current source returns `hy_v3`). That unrelated row is
 not changed or counted as Gemma cache proof in this checkpoint.
 
-The 2026-07-20 patch adds
-`gemmaMixedTurboQuantWrappedRotatingResumesFromDisk`. Its focused current-source
-run passed 1/1 in 4.586 seconds. The test crosses a rotating window, persists a
-mixed compressed-TQ/native-rotating snapshot with paged requested but marked
-incompatible, starts a fresh coordinator, restores only from typed SSD L2,
-compares rotating metadata and tensors, appends the same suffix to both source
-and restored rings, and compares their temporally ordered KV exactly. This is a
-focused regression result only; the full Swift suite has not yet been rerun.
-
-Two wider test invocations are not counted as passes. The command-line-tools
-Swift 6.3.1 graph stopped while compiling the unrelated `MLXPressPolicyTests`
-target because that toolchain could not import `Testing`. Retrying with Xcode
-26.6 / Swift 6.3.3 built the package but the selected test executable stopped
-before assertions because it could not find MLX's default Metal library. The
-exact focused cache regression above remains the only new current-source test
-result until the package test graph is run with both Swift Testing and the MLX
-Metal library available.
+The original 2026-07-20 typed SSD-only regression was replaced by the stricter
+explicit-paged tests and full topology selection recorded above. The initial
+Command Line Tools invocation could not import `Testing`; the first Xcode
+invocation built but stopped before assertions because the MLX metallib was
+absent. Neither is counted. After running the repository's
+`scripts/prepare-mlx-metal.sh`, the exact focused tests and 42-test topology
+selection completed. No fresh full-package test suite or Release Osaurus UI row
+is claimed yet.
 
 The companion Osaurus telemetry patch was built in the Xcode workspace's Debug
 test graph and then executed from that exact build with the enumerated Swift
