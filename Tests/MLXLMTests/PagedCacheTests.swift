@@ -113,3 +113,49 @@ import Testing
     #expect(result == nil, "Completely different tokens should produce no match")
     #expect(manager.stats.cacheMisses > 0)
 }
+
+@Test func pagedCacheTinyPoolKeepsLongestUsablePrefixInsteadOfOrphanLeaf() {
+    let blockSize = 2
+    let manager = PagedCacheManager(blockSize: blockSize, maxBlocks: 2)
+    let dummyLayer: [(keys: MLXArray, values: MLXArray)] = [
+        (keys: MLXArray.zeros([1, 1, blockSize, 8]),
+         values: MLXArray.zeros([1, 1, blockSize, 8]))
+    ]
+
+    manager.storeTokenSequence(
+        tokens: [1, 2, 3, 4, 5, 6],
+        layerData: [dummyLayer, dummyLayer, dummyLayer])
+
+    let result = manager.fetchPrefix(tokens: [1, 2, 3, 4, 5, 6, 7])
+    #expect(result?.matchedTokens == blockSize)
+    #expect(result?.remainingTokens == [3, 4, 5, 6, 7])
+    #expect(result?.blocks.count == 1)
+}
+
+@Test func pagedCacheCoordinatorReleasesLeavesBeforeRootsUnderEviction() throws {
+    let blockSize = 2
+    let coordinator = CacheCoordinator(config: CacheCoordinatorConfig(
+        usePagedCache: true,
+        enableDiskCache: false,
+        pagedBlockSize: blockSize,
+        maxCacheBlocks: 4,
+        modelKey: "leaf-first-release"))
+    let manager = try #require(coordinator.pagedCache)
+    let dummyLayer: [(keys: MLXArray, values: MLXArray)] = [
+        (keys: MLXArray.zeros([1, 1, blockSize, 8]),
+         values: MLXArray.zeros([1, 1, blockSize, 8]))
+    ]
+    let original = [1, 2, 3, 4, 5, 6]
+
+    manager.storeTokenSequence(
+        tokens: original,
+        layerData: [dummyLayer, dummyLayer, dummyLayer])
+    let pinned = try #require(manager.fetchPrefix(tokens: original))
+    coordinator.release(blocks: pinned.blocks)
+
+    manager.storeTokenSequence(tokens: [9, 10], layerData: [dummyLayer])
+
+    let retained = manager.fetchPrefix(tokens: original)
+    #expect(retained?.matchedTokens == 4)
+    #expect(retained?.remainingTokens == [5, 6])
+}
