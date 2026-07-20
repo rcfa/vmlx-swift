@@ -2674,6 +2674,25 @@ public actor BatchEngine {
                 cache.map(\.offset).max() ?? 0 >= tokenCount
             }
 
+            let sharedPromptStripBoundary: Int? = {
+                guard ProcessInfo.processInfo.environment["VMLX_HYBRID_STRIPPED_STORE"] != "0",
+                    coordinator.isHybrid,
+                    let turnStartToken = coordinator.genPromptSuffixTokens.first,
+                    let stripAt = promptTokens.lastIndex(of: turnStartToken),
+                    stripAt > 0,
+                    stripAt < promptTokens.count - 1,
+                    slot.originalInput.canCaptureHybridStripBoundary(
+                        promptTokenIds: promptTokens,
+                        boundary: stripAt)
+                else { return nil }
+                return stripAt
+            }()
+            var sharedPromptRederivedStates: [Int: [MLXArray]]?
+            let sharedPromptAdditionalBoundaries = Array(Set(
+                slot.originalInput.cachePrefixTokenCounts
+                    + [sharedPromptStripBoundary].compactMap { $0 }
+            ))
+
             func storeCacheEntry(tokens: [Int], snapshot: [KVCache], label: String) {
                 guard !tokens.isEmpty else { return }
                 // Serialising the cache materialises it again (host `Data` for the
@@ -2710,6 +2729,23 @@ public actor BatchEngine {
                     if coordinator.config.enableSSMReDerive &&
                         !slot.originalInput.hasMediaContent
                     {
+                        let isPromptPrefix = tokens.count <= promptTokens.count
+                            && tokens.elementsEqual(promptTokens.prefix(tokens.count))
+                        if isPromptPrefix {
+                            if sharedPromptRederivedStates == nil {
+                                sharedPromptRederivedStates =
+                                    reDeriveAndStoreSSMStatesAtPromptBoundaries(
+                                        coordinator: coordinator,
+                                        model: context.model,
+                                        promptTokenIds: promptTokens,
+                                        mediaSalt: slot.mediaSalt,
+                                        additionalBoundaries: sharedPromptAdditionalBoundaries,
+                                        prefillStepSize: slot.parameters.prefillStepSize)
+                            }
+                            if let shared = sharedPromptRederivedStates?[tokens.count] {
+                                return shared
+                            }
+                        }
                         return reDeriveAndStoreSSMStatesForPromptBoundaries(
                             coordinator: coordinator,
                             model: context.model,
@@ -2893,13 +2929,7 @@ public actor BatchEngine {
                 // the store entirely (the re-derive here is the only writer).
                 if ProcessInfo.processInfo.environment["VMLX_HYBRID_STRIPPED_STORE"] != "0",
                    coordinator.isHybrid,
-                   let turnStartToken = coordinator.genPromptSuffixTokens.first,
-                   let stripAt = promptTokens.lastIndex(of: turnStartToken),
-                   stripAt > 0,
-                   stripAt < promptTokens.count - 1,
-                   slot.originalInput.canCaptureHybridStripBoundary(
-                       promptTokenIds: promptTokens,
-                       boundary: stripAt)
+                   let stripAt = sharedPromptStripBoundary
                 {
                     let strippedTokens = Array(promptTokens.prefix(stripAt))
                     if let snapshot = boundarySnapshot(

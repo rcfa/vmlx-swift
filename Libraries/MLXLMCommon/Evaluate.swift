@@ -2173,6 +2173,11 @@ public struct TokenIterator: TokenIteratorProtocol {
             return
         }
 
+        var sharedPromptRederivedStates: [Int: [MLXArray]]?
+        let sharedPromptAdditionalBoundaries = Array(Set(
+            cachePrefixTokenCounts + [hybridStripBoundary].compactMap { $0 }
+        ))
+
         func store(
             tokens: [Int],
             cache cacheToStore: [KVCache],
@@ -2218,6 +2223,22 @@ public struct TokenIterator: TokenIteratorProtocol {
                     !originalInput.hasMediaContent
                 else {
                     return extractSSMStates(from: snapshot)
+                }
+                let isPromptPrefix = tokens.count <= promptTokenIds.count
+                    && tokens.elementsEqual(promptTokenIds.prefix(tokens.count))
+                if isPromptPrefix {
+                    if sharedPromptRederivedStates == nil {
+                        sharedPromptRederivedStates =
+                            reDeriveAndStoreSSMStatesAtPromptBoundaries(
+                                coordinator: coordinator,
+                                model: model,
+                                promptTokenIds: promptTokenIds,
+                                mediaSalt: mediaSalt,
+                                additionalBoundaries: sharedPromptAdditionalBoundaries)
+                    }
+                    if let shared = sharedPromptRederivedStates?[tokens.count] {
+                        return shared
+                    }
                 }
                 return reDeriveAndStoreSSMStatesForPromptBoundaries(
                     coordinator: coordinator,

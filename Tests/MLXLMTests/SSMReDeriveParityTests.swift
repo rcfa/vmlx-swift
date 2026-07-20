@@ -160,6 +160,44 @@ final class SSMReDeriveParityTests: XCTestCase {
         XCTAssertEqual(coordinator.ssmStateCache.reDerives, 1)
     }
 
+    func testOneReplayCapturesAdditionalPromptStoreBoundary() throws {
+        let model = TinyHybridSSMModel()
+        let tokens = [7, 8, 9, 10, 11, 12, 13]
+        let strippedBoundary = 5
+
+        let coordinator = CacheCoordinator(config: CacheCoordinatorConfig(
+            usePagedCache: true,
+            enableDiskCache: false,
+            pagedBlockSize: 2,
+            modelKey: "tiny-hybrid|shared-store-replay"))
+        coordinator.setHybrid(true)
+
+        let statesByBoundary = reDeriveAndStoreSSMStatesAtPromptBoundaries(
+            coordinator: coordinator,
+            model: model,
+            promptTokenIds: tokens,
+            additionalBoundaries: [strippedBoundary],
+            prefillStepSize: 2)
+
+        XCTAssertEqual(
+            model.prepareCalls,
+            1,
+            "Full and stripped prompt stores must share one continuous replay")
+        XCTAssertEqual(coordinator.ssmStateCache.reDerives, 1)
+
+        let exact = try XCTUnwrap(statesByBoundary[tokens.count])
+        let stripped = try XCTUnwrap(statesByBoundary[strippedBoundary])
+        assertStatesEqual(
+            exact,
+            try warmPassStates(model: model, tokens: tokens, prefillStepSize: 2))
+        assertStatesEqual(
+            stripped,
+            try warmPassStates(
+                model: model,
+                tokens: Array(tokens.prefix(strippedBoundary)),
+                prefillStepSize: 2))
+    }
+
     func testLegacyMaybeRederiveWrapperStoresPagedBlockAndExactBoundaries() throws {
         let model = TinyHybridSSMModel()
         let promptOnly = [3, 5, 7, 11, 13]

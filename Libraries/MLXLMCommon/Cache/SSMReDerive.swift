@@ -407,6 +407,33 @@ public func reDeriveAndStoreSSMStatesForPromptBoundaries(
     mediaSalt: String? = nil,
     prefillStepSize: Int = 512
 ) -> [MLXArray]? {
+    reDeriveAndStoreSSMStatesAtPromptBoundaries(
+        coordinator: coordinator,
+        model: model,
+        promptTokenIds: promptTokenIds,
+        mediaSalt: mediaSalt,
+        prefillStepSize: prefillStepSize
+    )[promptTokenIds.count]
+}
+
+/// Re-derive one prompt while capturing every companion boundary needed by
+/// all cache entries written for that prompt.
+///
+/// A generation commonly stores both the full rendered prompt and a shorter
+/// generation-prompt-stripped prefix. Replaying each prefix independently is
+/// redundant: both are boundaries of the same token sequence. Callers that
+/// write multiple entries can pass those extra boundary lengths here, share
+/// the returned snapshots, and keep the recurrent state byte-identical to a
+/// single continuous prompt pass.
+@discardableResult
+public func reDeriveAndStoreSSMStatesAtPromptBoundaries(
+    coordinator: CacheCoordinator,
+    model: any LanguageModel,
+    promptTokenIds: [Int],
+    mediaSalt: String? = nil,
+    additionalBoundaries: [Int] = [],
+    prefillStepSize: Int = 512
+) -> [Int: [MLXArray]] {
     func trace(_ message: String) {
         guard ProcessInfo.processInfo.environment["VMLINUX_SSM_REDERIVE_TRACE"] == "1"
             || ProcessInfo.processInfo.environment["VMLX_SSM_REDERIVE_TRACE"] == "1"
@@ -414,9 +441,11 @@ public func reDeriveAndStoreSSMStatesForPromptBoundaries(
         FileHandle.standardError.write(
             Data("[vmlx][cache/ssm-rederive] prompt-boundaries/\(message) hybrid=\(coordinator.isHybrid) promptLen=\(promptTokenIds.count)\n".utf8))
     }
-    guard coordinator.isHybrid, !promptTokenIds.isEmpty else { return nil }
+    guard coordinator.isHybrid, !promptTokenIds.isEmpty else { return [:] }
 
-    var boundaries = Set<Int>()
+    var boundaries = Set(additionalBoundaries.filter {
+        $0 > 0 && $0 <= promptTokenIds.count
+    })
     boundaries.insert(promptTokenIds.count)
     if promptTokenIds.count > 1 {
         boundaries.insert(promptTokenIds.count - 1)
@@ -453,10 +482,10 @@ public func reDeriveAndStoreSSMStatesForPromptBoundaries(
         if !statesByBoundary.isEmpty {
             coordinator.ssmStateCache.markReDeriveFired()
         }
-        return statesByBoundary[promptTokenIds.count]
+        return statesByBoundary
     } catch {
         let line = "[vmlx][cache/ssm-rederive] prompt-boundaries/fail \(error) promptLen=\(promptTokenIds.count)\n"
         FileHandle.standardError.write(Data(line.utf8))
-        return nil
+        return [:]
     }
 }
