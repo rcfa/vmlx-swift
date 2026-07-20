@@ -8,11 +8,14 @@ import MLXNN
 import XCTest
 
 private final class TinyHybridSSMModel: Module, LanguageModel, @unchecked Sendable {
+    private(set) var prepareCalls = 0
+
     func newCache(parameters: GenerateParameters?) -> [KVCache] {
         [MambaCache()]
     }
 
     func prepare(_ input: LMInput, cache: [KVCache], windowSize: Int?) throws -> PrepareResult {
+        prepareCalls += 1
         let step = max(1, windowSize ?? 512)
         var flatTokens = input.text.tokens.reshaped([-1])
 
@@ -110,6 +113,10 @@ final class SSMReDeriveParityTests: XCTestCase {
                 model: model,
                 promptTokenIds: tokens,
                 prefillStepSize: 2))
+        XCTAssertEqual(
+            model.prepareCalls,
+            1,
+            "A boundary replay must enter through model.prepare once so request-scoped model state is reset")
         let warm = try warmPassStates(model: model, tokens: tokens, prefillStepSize: 2)
         let fetched = try XCTUnwrap(
             coordinator.ssmStateCache.fetch(tokens: tokens, boundary: tokens.count))
@@ -151,6 +158,44 @@ final class SSMReDeriveParityTests: XCTestCase {
         assertStatesEqual(exact, warmExact)
         assertStatesEqual(seed, warmSeed)
         XCTAssertEqual(coordinator.ssmStateCache.reDerives, 1)
+    }
+
+    func testOneReplayCapturesAdditionalPromptStoreBoundary() throws {
+        let model = TinyHybridSSMModel()
+        let tokens = [7, 8, 9, 10, 11, 12, 13]
+        let strippedBoundary = 5
+
+        let coordinator = CacheCoordinator(config: CacheCoordinatorConfig(
+            usePagedCache: true,
+            enableDiskCache: false,
+            pagedBlockSize: 2,
+            modelKey: "tiny-hybrid|shared-store-replay"))
+        coordinator.setHybrid(true)
+
+        let statesByBoundary = reDeriveAndStoreSSMStatesAtPromptBoundaries(
+            coordinator: coordinator,
+            model: model,
+            promptTokenIds: tokens,
+            additionalBoundaries: [strippedBoundary],
+            prefillStepSize: 2)
+
+        XCTAssertEqual(
+            model.prepareCalls,
+            1,
+            "Full and stripped prompt stores must share one continuous replay")
+        XCTAssertEqual(coordinator.ssmStateCache.reDerives, 1)
+
+        let exact = try XCTUnwrap(statesByBoundary[tokens.count])
+        let stripped = try XCTUnwrap(statesByBoundary[strippedBoundary])
+        assertStatesEqual(
+            exact,
+            try warmPassStates(model: model, tokens: tokens, prefillStepSize: 2))
+        assertStatesEqual(
+            stripped,
+            try warmPassStates(
+                model: model,
+                tokens: Array(tokens.prefix(strippedBoundary)),
+                prefillStepSize: 2))
     }
 
     func testLegacyMaybeRederiveWrapperStoresPagedBlockAndExactBoundaries() throws {

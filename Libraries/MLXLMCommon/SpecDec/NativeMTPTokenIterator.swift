@@ -419,6 +419,22 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
            !promptTokenIds.isEmpty,
            let promptCacheSnapshot
         {
+            let sharedPromptStripBoundary: Int? = {
+                guard ProcessInfo.processInfo.environment["VMLX_HYBRID_STRIPPED_STORE"] != "0",
+                    coordinator.isHybrid,
+                    !originalInput.hasMediaContent,
+                    let turnStartToken = coordinator.genPromptSuffixTokens.first,
+                    let stripAt = promptTokenIds.lastIndex(of: turnStartToken),
+                    stripAt > 0,
+                    stripAt < promptTokenIds.count - 1
+                else { return nil }
+                return stripAt
+            }()
+            var sharedPromptRederivedStates: [Int: [MLXArray]]?
+            let sharedPromptAdditionalBoundaries = Array(Set(
+                cachePrefixTokenCounts + [sharedPromptStripBoundary].compactMap { $0 }
+            ))
+
             func store(tokens: [Int], snapshot: [KVCache], label _: String) {
                 guard !tokens.isEmpty else { return }
                 // Same guard as the other store paths: saving a cache materialises
@@ -449,11 +465,30 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
                     else {
                         return extractSSMStates(from: cacheSnapshot)
                     }
+                    let isPromptPrefix = tokens.count <= promptTokenIds.count
+                        && tokens.elementsEqual(promptTokenIds.prefix(tokens.count))
+                    if isPromptPrefix {
+                        if sharedPromptRederivedStates == nil {
+                            sharedPromptRederivedStates =
+                                reDeriveAndStoreSSMStatesAtPromptBoundaries(
+                                    coordinator: coordinator,
+                                    model: model,
+                                    promptTokenIds: promptTokenIds,
+                                    mediaSalt: mediaSalt,
+                                    additionalBoundaries: sharedPromptAdditionalBoundaries,
+                                    persistCapturedStatesToDisk: false,
+                                    prefillStepSize: cacheInitParameters.prefillStepSize)
+                        }
+                        if let shared = sharedPromptRederivedStates?[tokens.count] {
+                            return shared
+                        }
+                    }
                     return reDeriveAndStoreSSMStatesForPromptBoundaries(
                         coordinator: coordinator,
                         model: model,
                         promptTokenIds: tokens,
                         mediaSalt: mediaSalt,
+                        persistCapturedStatesToDisk: false,
                         prefillStepSize: cacheInitParameters.prefillStepSize)
                 }()
                 let diskStoreCache = makeDiskStoreCache(
@@ -498,10 +533,7 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
                 if ProcessInfo.processInfo.environment["VMLX_HYBRID_STRIPPED_STORE"] != "0",
                    coordinator.isHybrid,
                    !originalInput.hasMediaContent,
-                   let turnStartToken = coordinator.genPromptSuffixTokens.first,
-                   let stripAt = promptTokenIds.lastIndex(of: turnStartToken),
-                   stripAt > 0,
-                   stripAt < promptTokenIds.count - 1
+                   let stripAt = sharedPromptStripBoundary
                 {
                     // NOTE: intentionally NOT gated on
                     // `!cachePrefixTokenCounts.contains(stripAt)` — see the solo
