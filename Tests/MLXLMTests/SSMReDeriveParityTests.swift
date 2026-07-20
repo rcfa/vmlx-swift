@@ -198,6 +198,29 @@ final class SSMReDeriveParityTests: XCTestCase {
                 prefillStepSize: 2))
     }
 
+    func testPromptBoundaryReplayDoesNotCaptureBeyondPagedPoolCapacity() throws {
+        let model = TinyHybridSSMModel()
+        let tokens = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        let coordinator = CacheCoordinator(config: CacheCoordinatorConfig(
+            usePagedCache: true,
+            enableDiskCache: false,
+            pagedBlockSize: 2,
+            maxCacheBlocks: 3,
+            modelKey: "tiny-hybrid|bounded-paged-replay"))
+        coordinator.setHybrid(true)
+
+        let statesByBoundary = reDeriveAndStoreSSMStatesAtPromptBoundaries(
+            coordinator: coordinator,
+            model: model,
+            promptTokenIds: tokens,
+            additionalBoundaries: [7],
+            prefillStepSize: 2)
+
+        XCTAssertEqual(Set(statesByBoundary.keys), Set([2, 4, 7, 8, 9]))
+        XCTAssertNil(statesByBoundary[6])
+        XCTAssertEqual(model.prepareCalls, 1)
+    }
+
     func testLegacyMaybeRederiveWrapperStoresPagedBlockAndExactBoundaries() throws {
         let model = TinyHybridSSMModel()
         let promptOnly = [3, 5, 7, 11, 13]

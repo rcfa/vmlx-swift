@@ -457,8 +457,21 @@ public func reDeriveAndStoreSSMStatesAtPromptBoundaries(
 
     if coordinator.pagedCache != nil, !coordinator.isPagedIncompatible {
         let blockSize = max(1, coordinator.config.pagedBlockSize)
+        // Block zero is the sentinel. The paged tier cannot retain companion
+        // boundaries beyond the KV blocks its pool can actually keep, and
+        // deriving those states creates expensive, immediately-unusable work
+        // for long prompts or intentionally small eviction-test pools.
+        let usableBlocks = coordinator.config.maxCacheBlocks > 1
+            ? coordinator.config.maxCacheBlocks - 1
+            : 0
+        let retainedCapacity = usableBlocks.multipliedReportingOverflow(by: blockSize)
+        let maximumRetainedTokens = retainedCapacity.overflow
+            ? Int.max
+            : retainedCapacity.partialValue
         var boundary = blockSize
-        while boundary < promptTokenIds.count {
+        while boundary < promptTokenIds.count,
+              boundary <= maximumRetainedTokens
+        {
             boundaries.insert(boundary)
             boundary += blockSize
         }

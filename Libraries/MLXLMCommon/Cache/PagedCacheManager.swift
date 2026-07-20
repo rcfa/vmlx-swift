@@ -234,6 +234,19 @@ public final class PagedCacheManager: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
+        // Keep the whole chain pinned until the store is complete. Releasing
+        // each block immediately lets a small/pressured pool recycle a parent
+        // while its child is still being built, leaving only an orphaned chain
+        // hash that can never satisfy a prefix walk.
+        var pinnedBlocks: [CacheBlock] = []
+        defer {
+            // Leaves are least useful without their parents, so place them at
+            // the front of the LRU queue and keep roots newest.
+            for block in pinnedBlocks.reversed() {
+                _freeBlock(block)
+            }
+        }
+
         var parentHash: String? = nil
         var chunkIndex = 0
         var offset = 0
@@ -245,8 +258,17 @@ public final class PagedCacheManager: @unchecked Sendable {
                 parentHash: parentHash, tokenIds: chunk,
                 modelKey: modelKey, mediaSalt: mediaSalt)
 
-            // Skip if this block already exists in the cache.
-            if hashMap.find(hash: hash) != nil {
+            // Reuse and pin an existing chain member. It must leave the free
+            // queue while descendants are stored, otherwise allocation could
+            // reset it before the chain is complete.
+            if let existing = hashMap.find(hash: hash) {
+                if existing.refCount == 0 {
+                    _ = freeQueue.remove(existing)
+                    stats.allocatedBlocks += 1
+                    stats.freeBlocks -= 1
+                }
+                existing.incrementRef()
+                pinnedBlocks.append(existing)
                 parentHash = hash
                 offset = end
                 chunkIndex += 1
@@ -269,14 +291,7 @@ public final class PagedCacheManager: @unchecked Sendable {
 
             block.blockHash = hash
             hashMap.insert(block)
-
-            // The stored block is now available for future prefix hits,
-            // but no live generation owns it. Drop the store-time ref and
-            // re-enqueue it so the pool remains reusable under pressure.
-            block.decrementRef()
-            stats.allocatedBlocks -= 1
-            stats.freeBlocks += 1
-            freeQueue.append(block)
+            pinnedBlocks.append(block)
 
             parentHash = hash
             offset = end

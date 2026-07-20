@@ -285,7 +285,9 @@ public final class CacheCoordinator: @unchecked Sendable {
     /// a no-op for non-paged tiers.
     public func release(blocks: [CacheBlock]) {
         guard let pagedCache, !blocks.isEmpty else { return }
-        for block in blocks {
+        // Release leaves before roots. A child cannot be restored after its
+        // parent is evicted, so roots must remain the newest LRU candidates.
+        for block in blocks.reversed() {
             pagedCache.freeBlock(block)
         }
     }
