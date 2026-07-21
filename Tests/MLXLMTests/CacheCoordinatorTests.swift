@@ -328,6 +328,53 @@ import Testing
     }
 }
 
+@Test func coordinatorSkipExactDiskBoundaryAlsoAppliesToIndexedCandidates() {
+    let mlxTestLock = lockSerializedMLXTest()
+    defer { mlxTestLock.unlock() }
+
+    let tmp = FileManager.default.temporaryDirectory
+        .appendingPathComponent("disk-skip-exact-indexed-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: tmp) }
+
+    let coordinator = CacheCoordinator(config: CacheCoordinatorConfig(
+        usePagedCache: false,
+        enableDiskCache: true,
+        diskCacheMaxGB: 1.0,
+        diskCacheDir: tmp,
+        modelKey: "disk-skip-exact-indexed-contract"))
+    let exact = [1, 2, 3, 4, 5]
+    let safePrefix = Array(exact.prefix(3))
+
+    func store(_ tokens: [Int]) {
+        coordinator.storeAfterGeneration(
+            promptTokens: tokens,
+            perLayerData: [(
+                keys: MLXArray.ones([1, 1, tokens.count, 4]),
+                values: MLXArray.ones([1, 1, tokens.count, 4]) * 2)],
+            ssmStates: nil)
+    }
+    store(exact)
+    store(safePrefix)
+
+    switch coordinator.fetch(tokens: exact, skipExactDiskBoundary: true) {
+    case .hit(let matched, let remaining, let detail, _, _, _):
+        #expect(matched == safePrefix.count)
+        #expect(remaining == [4, 5])
+        #expect(detail == .disk)
+    case .miss:
+        Issue.record("skip-exact lookup should use the longest safe indexed prefix")
+    }
+
+    switch coordinator.fetch(tokens: exact) {
+    case .hit(let matched, let remaining, let detail, _, _, _):
+        #expect(matched == exact.count)
+        #expect(remaining.isEmpty)
+        #expect(detail == .disk)
+    case .miss:
+        Issue.record("ordinary lookup should still admit the exact disk boundary")
+    }
+}
+
 @Test func coordinatorSSMCompanion() {
     let mlxTestLock = lockSerializedMLXTest()
     defer { mlxTestLock.unlock() }

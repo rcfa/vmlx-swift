@@ -55,6 +55,20 @@ struct SSMCompanionQuotaEntry: Sendable {
 /// comment for storage format + concurrency model.
 public final class SSMCompanionDiskStore: @unchecked Sendable {
 
+    private struct FileFingerprint: Equatable {
+        let size: Int
+        let modificationDate: Date
+    }
+
+    private struct ValidatedEntry: Equatable {
+        let safetensors: FileFingerprint
+        let sidecar: FileFingerprint
+        let isComplete: Bool
+        let numStates: Int
+        let boundary: Int
+        let kvHash: String
+    }
+
     // MARK: - Properties
 
     private let lock = OSAllocatedUnfairLock()
@@ -62,6 +76,15 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
     private let modelKey: String?
     /// Maximum total disk bytes before oldest-entry eviction. 0 = unlimited.
     private let maxBytes: Int
+
+    /// Companion pairs successfully written or deserialized by this process.
+    /// The process-local validation requirement prevents an inherited corrupt
+    /// pair from being trusted merely because both pathnames exist.
+    private var validatedEntries: [String: ValidatedEntry] = [:]
+
+    /// Number of full companion rewrites avoided after current-process
+    /// validation. Exposed as a locked snapshot for tests and telemetry.
+    private var storeSkips: Int = 0
 
     // MARK: - Initialization
 
@@ -74,6 +97,12 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
     }
 
     // MARK: - Public API
+
+    func snapshotStoreSkips() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storeSkips
+    }
 
     /// Persist SSM layer states for a given token prefix. Mirrors
     /// `SSMStateCache.store(ssmStates:tokens:boundary:)` with the
@@ -96,11 +125,63 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
         let key = Self.keyFor(
             tokens: tokens, boundary: boundary,
             mediaSalt: mediaSalt, modelKey: modelKey)
+        let safetensorsURL = self.safetensorsURL(for: key)
+        let sidecarURL = self.sidecarURL(for: key)
+        let kvHash = DiskCache.hashTokens(
+            Array(tokens.prefix(boundary)),
+            modelKey: modelKey,
+            mediaSalt: mediaSalt)
 
         MLXDiskCacheIOLock.shared.lock()
         defer { MLXDiskCacheIOLock.shared.unlock() }
         lock.lock()
         defer { lock.unlock() }
+
+        // A normal warm hybrid request fetches a companion and publishes the
+        // same prompt boundary again after generation. Avoid synchronizing the
+        // GPU and rewriting the full recurrent-state payload when this process
+        // has already validated the exact tensor/metadata pair. Completeness,
+        // state count, boundary, and linked KV hash must all still match; a
+        // changed file or metadata contract falls through to a healing write.
+        if let validated = validatedEntries[key],
+           validated.isComplete == isComplete,
+           validated.numStates == ssmStates.count,
+           validated.boundary == boundary,
+           validated.kvHash == kvHash,
+           let currentSafetensors = fileFingerprint(at: safetensorsURL),
+           let currentSidecar = fileFingerprint(at: sidecarURL),
+           currentSafetensors == validated.safetensors,
+           currentSidecar == validated.sidecar
+        {
+            let now = Date()
+            do {
+                try FileManager.default.setAttributes(
+                    [.modificationDate: now], ofItemAtPath: safetensorsURL.path)
+                try FileManager.default.setAttributes(
+                    [.modificationDate: now], ofItemAtPath: sidecarURL.path)
+                if let touchedSafetensors = fileFingerprint(at: safetensorsURL),
+                   let touchedSidecar = fileFingerprint(at: sidecarURL)
+                {
+                    validatedEntries[key] = ValidatedEntry(
+                        safetensors: touchedSafetensors,
+                        sidecar: touchedSidecar,
+                        isComplete: isComplete,
+                        numStates: ssmStates.count,
+                        boundary: boundary,
+                        kvHash: kvHash)
+                } else {
+                    validatedEntries.removeValue(forKey: key)
+                }
+                storeSkips += 1
+                if ProcessInfo.processInfo.environment["VMLX_CACHE_FETCH_TRACE"] == "1" {
+                    FileHandle.standardError.write(Data(
+                        "[vmlx][cache/ssm-store] SKIP validated key=\(key) boundary=\(boundary) states=\(ssmStates.count)\n".utf8))
+                }
+                return
+            } catch {
+                validatedEntries.removeValue(forKey: key)
+            }
+        }
 
         // Pre-realize on calling thread — same rationale as
         // DiskCache.swift:148-157. GPU work must complete before the
@@ -118,9 +199,6 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
             arrays["state_\(i)"] = arr
         }
 
-        let safetensorsURL = self.safetensorsURL(for: key)
-        let sidecarURL = self.sidecarURL(for: key)
-
         // Sync write — same rationale as DiskCache.swift:122-130.
         // Async dispatch races with SIGTERM on short-lived sessions,
         // leaving zero-byte files. Costs ~ms on already-realized arrays.
@@ -133,14 +211,25 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
             "num_states": ssmStates.count,
             "model_key": modelKey ?? "",
             "boundary": boundary,
-            "kv_hash": DiskCache.hashTokens(
-                Array(tokens.prefix(boundary)),
-                modelKey: modelKey,
-                mediaSalt: mediaSalt),
+            "kv_hash": kvHash,
         ]
         let sidecarData = try JSONSerialization.data(
             withJSONObject: sidecar, options: [.sortedKeys])
         try sidecarData.write(to: sidecarURL, options: [.atomic])
+
+        if let writtenSafetensors = fileFingerprint(at: safetensorsURL),
+           let writtenSidecar = fileFingerprint(at: sidecarURL)
+        {
+            validatedEntries[key] = ValidatedEntry(
+                safetensors: writtenSafetensors,
+                sidecar: writtenSidecar,
+                isComplete: isComplete,
+                numStates: ssmStates.count,
+                boundary: boundary,
+                kvHash: kvHash)
+        } else {
+            validatedEntries.removeValue(forKey: key)
+        }
 
         evictIfNeededLocked()
     }
@@ -170,7 +259,10 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
 
         guard FileManager.default.fileExists(atPath: safetensorsURL.path),
               FileManager.default.fileExists(atPath: sidecarURL.path)
-        else { return nil }
+        else {
+            validatedEntries.removeValue(forKey: key)
+            return nil
+        }
 
         // Decode sidecar first — cheap, validates the entry shape.
         guard let sidecarData = try? Data(contentsOf: sidecarURL),
@@ -179,13 +271,19 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
               let isComplete = sidecar["is_complete"] as? Bool,
               let numStates = sidecar["num_states"] as? Int,
               numStates > 0
-        else { return nil }
+        else {
+            validatedEntries.removeValue(forKey: key)
+            return nil
+        }
 
         // Decode safetensors. A failed deserialize is most often a
         // truncated file (process killed mid-write, rare on sync IO
         // but possible). Treat as miss.
         guard let arraysAndMeta = try? loadArraysAndMetadata(url: safetensorsURL)
-        else { return nil }
+        else {
+            validatedEntries.removeValue(forKey: key)
+            return nil
+        }
         let arrays = arraysAndMeta.0
 
         // Reassemble in positional order. Bail if any `state_<idx>` is
@@ -194,8 +292,37 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
         var states: [MLXArray] = []
         states.reserveCapacity(numStates)
         for i in 0 ..< numStates {
-            guard let arr = arrays["state_\(i)"] else { return nil }
+            guard let arr = arrays["state_\(i)"] else {
+                validatedEntries.removeValue(forKey: key)
+                return nil
+            }
             states.append(arr)
+        }
+
+        // Legacy sidecars remain readable, but only a complete current-format
+        // metadata match is eligible to suppress the next write-through.
+        let expectedKVHash = DiskCache.hashTokens(
+            Array(tokens.prefix(boundary)),
+            modelKey: modelKey,
+            mediaSalt: mediaSalt)
+        if let storedBoundary = sidecar["boundary"] as? Int,
+           let storedKVHash = sidecar["kv_hash"] as? String,
+           let storedModelKey = sidecar["model_key"] as? String,
+           storedBoundary == boundary,
+           storedKVHash == expectedKVHash,
+           storedModelKey == (modelKey ?? ""),
+           let fetchedSafetensors = fileFingerprint(at: safetensorsURL),
+           let fetchedSidecar = fileFingerprint(at: sidecarURL)
+        {
+            validatedEntries[key] = ValidatedEntry(
+                safetensors: fetchedSafetensors,
+                sidecar: fetchedSidecar,
+                isComplete: isComplete,
+                numStates: numStates,
+                boundary: boundary,
+                kvHash: storedKVHash)
+        } else {
+            validatedEntries.removeValue(forKey: key)
         }
 
         return SSMStateCache.FetchResult(states: states, isComplete: isComplete)
@@ -218,6 +345,7 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
                 try? FileManager.default.removeItem(at: url)
             }
         }
+        validatedEntries.removeAll(keepingCapacity: true)
     }
 
     /// Snapshot recurrent payloads for the coordinator's combined KV +
@@ -247,6 +375,7 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
         for hash in hashes {
             try? FileManager.default.removeItem(at: safetensorsURL(for: hash))
             try? FileManager.default.removeItem(at: sidecarURL(for: hash))
+            validatedEntries.removeValue(forKey: hash)
         }
     }
 
@@ -258,6 +387,17 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
 
     private func sidecarURL(for hash: String) -> URL {
         cacheDir.appendingPathComponent("ssm-\(hash).json")
+    }
+
+    private func fileFingerprint(at url: URL) -> FileFingerprint? {
+        guard let values = try? url.resourceValues(forKeys: [
+            .contentModificationDateKey, .fileSizeKey,
+        ]),
+            let size = values.fileSize,
+            size > 0,
+            let modificationDate = values.contentModificationDate
+        else { return nil }
+        return FileFingerprint(size: size, modificationDate: modificationDate)
     }
 
     private struct DiskEntry {
@@ -309,10 +449,11 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
 
         guard totalBytes > maxBytes else { return }
 
-        for entry in entries.values.sorted(by: { $0.modified < $1.modified }) {
+        for (hash, entry) in entries.sorted(by: { $0.value.modified < $1.value.modified }) {
             for url in entry.urls {
                 try? FileManager.default.removeItem(at: url)
             }
+            validatedEntries.removeValue(forKey: hash)
             totalBytes -= entry.bytes
             if totalBytes <= maxBytes { break }
         }
