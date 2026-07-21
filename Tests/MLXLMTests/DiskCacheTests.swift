@@ -30,6 +30,54 @@ import Testing
     }
 }
 
+@Test func diskCacheSkipsRewriteOnlyAfterCurrentProcessValidation() async throws {
+    try await MLXMetalTestLock.withLock {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vmlx_dedup_\(UUID())")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let tokens = [31, 41, 59, 26]
+        let arrays = ["data": MLXArray.ones([8, 8])]
+        let hash = DiskCache.hashTokens(tokens, modelKey: "dedup-model")
+        let file = tempDir.appendingPathComponent("\(hash).safetensors")
+
+        do {
+            let first = DiskCache(
+                cacheDir: tempDir, maxSizeGB: 0.1, modelKey: "dedup-model")
+            first.store(tokens: tokens, arrays: arrays)
+            #expect(first.snapshotStats().storeSkips == 0)
+        }
+
+        // A fresh process/cache instance must validate an inherited payload
+        // before it is eligible for the no-rewrite path.
+        let warm = DiskCache(
+            cacheDir: tempDir, maxSizeGB: 0.1, modelKey: "dedup-model")
+        let inheritedModification = try #require(
+            (try FileManager.default.attributesOfItem(atPath: file.path))[.modificationDate]
+                as? Date)
+        #expect(warm.fetch(tokens: tokens) != nil)
+        warm.store(tokens: tokens, arrays: arrays)
+        let deduplicatedModification = try #require(
+            (try FileManager.default.attributesOfItem(atPath: file.path))[.modificationDate]
+                as? Date)
+        #expect(deduplicatedModification == inheritedModification)
+        #expect(warm.snapshotStats().stores == 1)
+        #expect(warm.snapshotStats().storeSkips == 1)
+
+        // External replacement invalidates the fingerprint and forces a real
+        // healing write instead of preserving the changed file.
+        let changedDate = Date(timeIntervalSince1970: 1)
+        try FileManager.default.setAttributes(
+            [.modificationDate: changedDate], ofItemAtPath: file.path)
+        warm.store(tokens: tokens, arrays: arrays)
+        let healedModification = try #require(
+            (try FileManager.default.attributesOfItem(atPath: file.path))[.modificationDate]
+                as? Date)
+        #expect(healedModification != changedDate)
+        #expect(warm.snapshotStats().stores == 2)
+        #expect(warm.snapshotStats().storeSkips == 1)
+    }
+}
+
 @Test func diskCacheMiss() {
     let tempDir = FileManager.default.temporaryDirectory
         .appendingPathComponent("vmlx_test_\(UUID())")

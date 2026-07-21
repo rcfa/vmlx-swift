@@ -11,6 +11,7 @@ public struct DiskCacheStats: Sendable {
     public let hits: Int
     public let misses: Int
     public let stores: Int
+    public let storeSkips: Int
     public let maxSizeBytes: Int
 }
 
@@ -69,6 +70,11 @@ public enum MLXCacheIOLock {
 /// likewise synchronous since they typically feed directly into model inference.
 public final class DiskCache: @unchecked Sendable {
 
+    private struct ValidatedFileFingerprint: Equatable {
+        let size: Int
+        let modificationDate: Date
+    }
+
     // MARK: - Properties
 
     /// Root directory for cache files and the SQLite index.
@@ -95,6 +101,15 @@ public final class DiskCache: @unchecked Sendable {
     /// Number of store operations initiated.
     public private(set) var stores: Int = 0
 
+    /// Number of store operations that reused an already validated file.
+    public private(set) var storeSkips: Int = 0
+
+    /// Files successfully written or deserialized in this process. A matching
+    /// fingerprint lets `store` avoid realizing and rewriting the same large
+    /// prompt boundary after a cache hit, while a fresh process still validates
+    /// an inherited file before it can take the fast path.
+    private var validatedFiles: [String: ValidatedFileFingerprint] = [:]
+
     /// Thread-safe copy of current disk-cache counters.
     public func snapshotStats() -> DiskCacheStats {
         lock.lock()
@@ -103,6 +118,7 @@ public final class DiskCache: @unchecked Sendable {
             hits: hits,
             misses: misses,
             stores: stores,
+            storeSkips: storeSkips,
             maxSizeBytes: maxSizeBytes)
     }
 
@@ -153,7 +169,7 @@ public final class DiskCache: @unchecked Sendable {
     /// Store token arrays to disk as a safetensors file.
     ///
     /// Arrays are evaluated on the calling thread, then the file write and
-    /// SQLite insert are dispatched to a background task.
+    /// SQLite insert complete synchronously under the process-wide IO lock.
     ///
     /// - Parameters:
     ///   - tokens: Token IDs used to compute the cache key hash.
@@ -200,6 +216,32 @@ public final class DiskCache: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         stores += 1
+
+        // A normal warm request fetches an L2 entry and then publishes the
+        // same prompt boundary again at completion. Rewriting it used to
+        // synchronize Metal, realize every cache tensor, write hundreds of MB,
+        // and churn quota eviction even though the content-addressed key had
+        // just been validated. Only skip files successfully loaded or written
+        // by this process, and only while their size + mtime and SQLite row
+        // still match. A fresh process, changed/corrupt file, missing index, or
+        // format migration therefore takes the full write path and heals the
+        // entry instead of preserving an assumption.
+        if let validated = validatedFiles[hash],
+           let current = _fileFingerprint(url: url),
+           current == validated,
+           let indexed = _entryMetadataLocked(hash: hash),
+           indexed.tokenCount == tokenCount,
+           indexed.fileSize == current.size,
+           current.size > 0
+        {
+            storeSkips += 1
+            _touchEntryLocked(hash: hash)
+            if ProcessInfo.processInfo.environment["VMLX_CACHE_FETCH_TRACE"] == "1" {
+                FileHandle.standardError.write(Data(
+                    "[vmlx][cache/disk-store] SKIP validated hash=\(hash) count=\(tokenCount) bytes=\(current.size)\n".utf8))
+            }
+            return
+        }
         // Pre-realize arrays under the lock so Metal work completes
         // before the writer hits the C++ save path AND no other thread
         // can interleave MLX ops on the same device during this window.
@@ -226,6 +268,11 @@ public final class DiskCache: @unchecked Sendable {
             }
 
             _insertEntryLocked(hash: hash, tokenCount: tokenCount, fileSize: fileSize)
+            if let fingerprint = _fileFingerprint(url: url), fingerprint.size > 0 {
+                validatedFiles[hash] = fingerprint
+            } else {
+                validatedFiles.removeValue(forKey: hash)
+            }
             _evictIfNeededLocked()
         } catch {
             // Best-effort: swallow so a write failure doesn't fail
@@ -252,16 +299,21 @@ public final class DiskCache: @unchecked Sendable {
         defer { lock.unlock() }
 
         guard FileManager.default.fileExists(atPath: url.path) else {
+            validatedFiles.removeValue(forKey: hash)
             misses += 1
             return nil
         }
 
         do {
             let (arrays, _) = try loadArraysAndMetadata(url: url)
+            if let fingerprint = _fileFingerprint(url: url), fingerprint.size > 0 {
+                validatedFiles[hash] = fingerprint
+            }
             hits += 1
             return arrays
         } catch {
             misses += 1
+            validatedFiles.removeValue(forKey: hash)
             // A failed deserialize is almost always a corrupt safetensors
             // file — a 0-byte leftover from the pre-synchronous-store
             // bug, a partial write from an earlier crash, disk full
@@ -361,6 +413,7 @@ public final class DiskCache: @unchecked Sendable {
         for hash in hashes {
             try? FileManager.default.removeItem(at: safetensorsURL(for: hash))
             _deleteEntryLocked(hash: hash)
+            validatedFiles.removeValue(forKey: hash)
         }
     }
 
@@ -392,6 +445,8 @@ public final class DiskCache: @unchecked Sendable {
         hits = 0
         misses = 0
         stores = 0
+        storeSkips = 0
+        validatedFiles.removeAll(keepingCapacity: true)
     }
 
     // MARK: - Hashing
@@ -438,6 +493,16 @@ public final class DiskCache: @unchecked Sendable {
         cacheDir.appendingPathComponent("\(hash).safetensors")
     }
 
+    private func _fileFingerprint(url: URL) -> ValidatedFileFingerprint? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let sizeNumber = attributes[.size] as? NSNumber,
+              let modificationDate = attributes[.modificationDate] as? Date
+        else { return nil }
+        return ValidatedFileFingerprint(
+            size: sizeNumber.intValue,
+            modificationDate: modificationDate)
+    }
+
     /// Execute a simple SQL statement with no bindings.
     private func executeSQL(_ sql: String) {
         guard let db else { return }
@@ -468,6 +533,45 @@ public final class DiskCache: @unchecked Sendable {
             sqlite3_step(stmt)
         }
         sqlite3_finalize(stmt)
+    }
+
+    private func _entryMetadataLocked(hash: String) -> (tokenCount: Int, fileSize: Int)? {
+        guard let db else { return nil }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            db,
+            "SELECT token_count, file_size FROM cache_entries WHERE hash = ?",
+            -1,
+            &stmt,
+            nil) == SQLITE_OK
+        else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        _ = hash.withCString { cStr in
+            sqlite3_bind_text(stmt, 1, cStr, -1, nil)
+        }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        return (
+            tokenCount: Int(sqlite3_column_int64(stmt, 0)),
+            fileSize: Int(sqlite3_column_int64(stmt, 1)))
+    }
+
+    /// Refresh the existing eviction timestamp without replacing the row or
+    /// rewriting the payload. Caller MUST hold `lock`.
+    private func _touchEntryLocked(hash: String) {
+        guard let db else { return }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            db,
+            "UPDATE cache_entries SET created_at = julianday('now') WHERE hash = ?",
+            -1,
+            &stmt,
+            nil) == SQLITE_OK
+        else { return }
+        defer { sqlite3_finalize(stmt) }
+        hash.withCString { cStr in
+            sqlite3_bind_text(stmt, 1, cStr, -1, nil)
+            sqlite3_step(stmt)
+        }
     }
 
     /// Delete a single `cache_entries` row by hash. Caller MUST hold `lock`.
@@ -527,6 +631,7 @@ public final class DiskCache: @unchecked Sendable {
         for entry in toEvict {
             let url = safetensorsURL(for: entry.hash)
             try? FileManager.default.removeItem(at: url)
+            validatedFiles.removeValue(forKey: entry.hash)
 
             entry.hash.withCString { cStr in
                 if sqlite3_prepare_v2(db, "DELETE FROM cache_entries WHERE hash = ?", -1, &stmt, nil) == SQLITE_OK {

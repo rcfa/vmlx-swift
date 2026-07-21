@@ -554,6 +554,17 @@ public final class CacheCoordinator: @unchecked Sendable {
             }
 
             for boundary in diskCache.candidateTokenCounts(maxTokens: tokens.count) {
+                // `skipExactDiskBoundary` is a correctness requirement for
+                // path-dependent hybrid caches, not merely a preference for
+                // the first two probes above. The indexed fallback used to
+                // re-admit `tokens.count`, so Qwen 3.5 / Ornith restored an
+                // exact GDN boundary, failed to find the N-1 seed state, and
+                // discarded the restore for a full prompt prefill. Keep the
+                // exact boundary excluded across every probe source so the
+                // longest safe partial boundary is selected instead.
+                guard !skipExactDiskBoundary || boundary != tokens.count else {
+                    continue
+                }
                 guard tried.insert(boundary).inserted else { continue }
                 if let hit = diskHit(boundary: boundary) {
                     return hit

@@ -159,6 +159,70 @@ struct SSMStateCacheTests {
     #expect(saltedMiss == nil)
 }
 
+@Test func ssmCompanionDiskStoreSkipsRewriteOnlyAfterValidation() async throws {
+    try await MLXMetalTestLock.withLock {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ssm-companion-dedup-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let modelKey = "ssm-dedup-model"
+        let tokens = [2, 7, 1, 8, 2, 8]
+        let states = [MLXArray.ones([2, 4])]
+
+        do {
+            let first = try SSMCompanionDiskStore(
+                cacheDir: dir, modelKey: modelKey, maxBytes: 10_000_000)
+            try first.store(
+                ssmStates: states,
+                tokens: tokens,
+                boundary: tokens.count,
+                isComplete: true)
+            #expect(first.snapshotStoreSkips() == 0)
+        }
+
+        // A new instance must deserialize both files before it may suppress a
+        // write. The subsequent identical write-through should take the fast
+        // path without evaluating or serializing the companion tensors.
+        let warm = try SSMCompanionDiskStore(
+            cacheDir: dir, modelKey: modelKey, maxBytes: 10_000_000)
+        let fetched = warm.fetch(tokens: tokens, boundary: tokens.count)
+        #expect(fetched?.states.count == 1)
+        try warm.store(
+            ssmStates: states,
+            tokens: tokens,
+            boundary: tokens.count,
+            isComplete: true)
+        #expect(warm.snapshotStoreSkips() == 1)
+
+        // A completeness change is a semantic change even under the same
+        // token key, so it must rewrite the sidecar instead of being skipped.
+        try warm.store(
+            ssmStates: states,
+            tokens: tokens,
+            boundary: tokens.count,
+            isComplete: false)
+        #expect(warm.snapshotStoreSkips() == 1)
+        #expect(warm.fetch(tokens: tokens, boundary: tokens.count)?.isComplete == false)
+
+        // External mutation invalidates the process-local fingerprint and
+        // forces another healing write.
+        let entry = try #require(warm.quotaEntries().first)
+        let tensorURL = dir.appendingPathComponent("ssm-\(entry.hash).safetensors")
+        let changedDate = Date(timeIntervalSince1970: 1)
+        try FileManager.default.setAttributes(
+            [.modificationDate: changedDate], ofItemAtPath: tensorURL.path)
+        try warm.store(
+            ssmStates: states,
+            tokens: tokens,
+            boundary: tokens.count,
+            isComplete: false)
+        let healedDate = try #require(
+            (try FileManager.default.attributesOfItem(atPath: tensorURL.path))[.modificationDate]
+                as? Date)
+        #expect(healedDate != changedDate)
+        #expect(warm.snapshotStoreSkips() == 1)
+    }
+}
+
 @Test func ssmCompanionDiskStoreEvictsOverCap() throws {
     let dir = FileManager.default.temporaryDirectory
         .appendingPathComponent("ssm-companion-\(UUID().uuidString)")
