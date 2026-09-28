@@ -60,7 +60,7 @@
             }
         }
 
-        /// One case per kernel path, for runs under an emulator (Task 31's SDE job), where the sweep
+        /// One case per kernel path, for runs under an emulator (Intel SDE, in CI), where the sweep
         /// across every target would take hours.
         static let eachPath: [Case] = [
             Case(kvHeads: 2, queries: 1, keys: 200, headDim: 128),
