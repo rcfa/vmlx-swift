@@ -1,0 +1,9 @@
+# Copyright © 2026 Osaurus AI. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# ThreadSanitizer suppressions for runs of vmlx-swift's CPU kernel tests.
+# Two races in upstream MLX's eval_impl (mlx/transforms.cpp), whose back-pressure check reads the
+# scheduler's and the allocator's counters without their locks. Neither is in Highway's kernels or
+# the CPU pool, which these runs exist to check.
+race:mlx::core::scheduler::Scheduler::n_active_tasks
+race:mlx::core::allocator::CommonAllocator::get_active_memory
