@@ -238,7 +238,8 @@ public struct LoadBundleFacts: Sendable, Equatable {
     /// materialize-instead-of-mmap rule and the JANGH scheduling allowance size against this, not the whole
     /// bundle (Allosaurus: 32.5 GB of weights in an 88 GB bundle).
     public var gpuResidentWeightBytes: UInt64 {
-        totalSafetensorsBytes >= ssdResidentTableBytes ? totalSafetensorsBytes - ssdResidentTableBytes : 0
+        totalSafetensorsBytes > ssdResidentTableBytes
+            ? totalSafetensorsBytes - ssdResidentTableBytes : totalSafetensorsBytes
     }
 
     /// True iff `config.json` declares any of:
@@ -292,7 +293,15 @@ public struct LoadBundleFacts: Sendable, Equatable {
 
     /// Inspect the bundle directory at `url`. All probes are best-effort —
     /// failures degrade silently to safe defaults (zero bytes, dense).
-    public static func inspect(bundleURL url: URL) -> LoadBundleFacts {
+    public static func inspect(bundleURL: URL) -> LoadBundleFacts {
+        // A bundle reached through a symlinked directory (models kept on another volume and
+        // linked into the models folder) must report the same facts as its target.
+        // `contentsOfDirectory(at:)` throws ENOTDIR on a URL naming a symlink to a directory, so
+        // the unresolved URL listed nothing: zero weight bytes, so no Metal residency budget, so
+        // the whole model stayed reclaimable. DeepSeek-V4.1 JANG_2K (197 GiB) on a 256 GiB Mac
+        // then had 69-80 GiB of its weights compressed right after load, and the first command
+        // buffer that had to bring them back hit the GPU timeout.
+        let url = bundleURL.resolvingSymlinksInPath()
         let fm = FileManager.default
         let physical = HostPhysicalMemory.bytes
 
@@ -305,7 +314,9 @@ public struct LoadBundleFacts: Sendable, Equatable {
             options: [.skipsHiddenFiles])
         {
             for entry in entries where entry.pathExtension == "safetensors" {
-                if let values = try? entry.resourceValues(forKeys: [.fileSizeKey]),
+                // Through the link: a Hugging Face cache stores every shard as a symlink into
+                // `blobs/`, and a link reports its own few dozen bytes, not the weights'.
+                if let values = try? entry.resolvingSymlinksInPath().resourceValues(forKeys: [.fileSizeKey]),
                     let size = values.fileSize
                 {
                     totalBytes &+= UInt64(size)
@@ -482,39 +493,29 @@ public struct LoadBundleFacts: Sendable, Equatable {
         return facts
     }
 
-    /// Sum of `*.ple.ngram_embedding.*` tensor payloads, read from safetensors headers only (no weights).
-    /// Unreadable headers and invalid spans are ignored, conservatively retaining those bytes as weights.
+    /// Inspect every shard through the shared catalog/runtime span contract. Any unreadable or
+    /// inconsistent header makes the bundle's SSD discount unknown, retaining all bytes as weights.
     static func ngramTableBytes(bundleURL url: URL) -> UInt64 {
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
         else { return 0 }
         var total: UInt64 = 0
         for entry in entries where entry.pathExtension == "safetensors" {
-            guard let handle = try? FileHandle(forReadingFrom: entry) else { continue }
+            guard let handle = try? FileHandle(forReadingFrom: entry) else { return 0 }
             defer { try? handle.close() }
-            guard let lengthData = try? handle.read(upToCount: 8), lengthData.count == 8 else { continue }
-            let length = lengthData.enumerated().reduce(UInt64(0)) { $0 | UInt64($1.element) << UInt64(8 * $1.offset) }
-            guard length > 0, length <= 64 << 20, let headerData = try? handle.read(upToCount: Int(length)),
-                headerData.count == Int(length),
-                let header = try? JSONSerialization.jsonObject(with: headerData) as? [String: Any]
-            else { continue }
-            // A header describes offsets relative to the payload, not the file.
-            // Never subtract untrusted signed offsets: Int.min...Int.max can
-            // trap before the actual weight loader gets to reject the shard.
-            guard let fileSize = try? handle.seekToEnd(), fileSize >= 8 + length else { continue }
-            let payloadBytes = fileSize - 8 - length
-            for (name, value) in header where name.contains(".ple.ngram_embedding.") {
-                guard let offsets = (value as? [String: Any])?["data_offsets"] as? [Int],
-                    offsets.count == 2, offsets[0] >= 0, offsets[1] >= offsets[0],
-                    UInt64(offsets[1]) <= payloadBytes
-                else { continue }
-                let bytes = UInt64(offsets[1]) - UInt64(offsets[0])
-                let sum = total.addingReportingOverflow(bytes)
-                // If accounting cannot be represented, subtract nothing from
-                // the resident estimate rather than wrap to a smaller value.
-                guard !sum.overflow else { return 0 }
-                total = sum.partialValue
+            guard let lengthData = try? handle.read(upToCount: 8), lengthData.count == 8 else { return 0 }
+            let length = lengthData.enumerated().reduce(UInt64(0)) {
+                $0 | UInt64($1.element) << UInt64(8 * $1.offset)
             }
+            guard length > 0, length <= 64 << 20,
+                let headerData = try? handle.read(upToCount: Int(length)), headerData.count == Int(length),
+                let fileSize = try? handle.seekToEnd(), fileSize >= 8 + length,
+                let bytes = SSDTableMetadata.validatedNGramBytes(
+                    inHeader: headerData, payloadLength: fileSize - 8 - length)
+            else { return 0 }
+            let sum = total.addingReportingOverflow(bytes)
+            guard !sum.overflow else { return 0 }
+            total = sum.partialValue
         }
         return total
     }
@@ -600,6 +601,21 @@ public struct LoadBundleFacts: Sendable, Equatable {
             && (numRoutedExperts ?? 0) >= 128
     }
 
+    /// DeepSeek-V4.1 affine JANG (prestacked routed experts, disk-resident
+    /// engram). Resident like plain DSV4 (the model requests it), so the MLX
+    /// memory/allocator caps must not throttle decode either.
+    public var isDeepseekV41AffineJANG: Bool {
+        let type = modelType?.lowercased() ?? ""
+        let format = weightFormat?.lowercased() ?? ""
+        let declaresAffine = format.isEmpty || format == "affine" || format == "jang"
+        return (type == "deepseek_v41" || type == "deepseek_v41_text")
+            && hasJangConfig
+            && !hasJangTQRuntime
+            && declaresAffine
+            && isRouted
+            && (numRoutedExperts ?? 0) >= 128
+    }
+
     /// Qwen3.8 Flash Next JANG keeps its large PLE/ngram table in a
     /// model-owned exact-row SSD reader. Match the bundle's explicit family,
     /// JANG format, and BF16 compute declaration; model names and directory
@@ -671,7 +687,18 @@ public struct LoadBundleFacts: Sendable, Equatable {
     /// One property for both caps deliberately: they are the same decision about the same bundle,
     /// and a family added to one list and not the other is exactly how this reached production.
     public var requiresUncappedResidentPools: Bool {
-        isPlainDeepseekV4AffineJANG || isGlm5NextAffineJANG
+        isPlainDeepseekV4AffineJANG || isGlm5NextAffineJANG || isDeepseekV41AffineJANG || isMiniMaxM3Routed
+    }
+
+    /// MiniMax-M3 / M3.1 (any routed format: JANGHT banks, affine, the MXFP8 source). Same mechanism as the families
+    /// above, reached through context instead of weight size: Safe Auto's scheduling allowance is the resident
+    /// weights + 4 GiB, and the sparse-attention KV grows 138,240 B per token, so from ~26k tokens of context (M3.1
+    /// JANGHT1.9 + its drafter on a 128 GB Mac: 100.9 GB weights, 104.5 GB limit) every MLX eval waits for the queue
+    /// to drain. Measured in the Osaurus GUI proof (m5-max, 2026-10-29): a 35k-token turn prefilled at 284 pp/s and
+    /// decoded at 5.9 tok/s (AR 150 ms / token) against 36 tok/s at 33k on the same runtime without the limit.
+    public var isMiniMaxM3Routed: Bool {
+        let type = modelType?.lowercased() ?? ""
+        return (type == "minimax_m3" || type == "minimax_m3_vl") && isRouted
     }
 
     public func resolveMLXMemoryLimit(requested: ResidentCap) -> ResidentCap {

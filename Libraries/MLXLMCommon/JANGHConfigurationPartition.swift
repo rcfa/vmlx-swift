@@ -125,11 +125,26 @@ struct JANGHConfigurationPartition: Sendable {
             } else if modelType == "qwen3_5" || modelType == "minicpmv4_7" || modelType == "qwen3_5_moe", let authoritative = header {
                 // This converter's sidecar carries chat/runtime metadata and a
                 // scalar summary, not another per-module quantization owner.
+                let decision = other["decision"] as? [String: Any]
+                let runtime = other["runtime"] as? [String: Any]
+                let decisionMetadataOnly = modelType == "qwen3_5"
+                    && (root["architectures"] as? [String]) == ["Qwen3_5Model"]
+                    && decision?["format_id"] as? String == "d3-code-readout-v1"
+                    && decision?["generates_text"] as? Bool == false
+                    && decision?["pooling"] as? String == "last"
+                    && runtime?["lm_head"] as? Bool == false
+                    && runtime?["bundle_has_mtp"] as? Bool == false
+                    && runtime?["mtp_layers"] as? Int == 0
+                    && other["format"] == nil && other["format_version"] == nil
+                    && other["weight_format"] == nil
                 let version = other["format_version"]
-                guard other["format"] as? String == "jangtq2", let version,
-                    try Self.encode(["v": version]) == Self.encode(["v": 2])
-                        || version as? String == "2.0"
-                else { throw Failure.invalid("unsupported dense Qwen JANGH sidecar version") }
+                let versionedSidecar = other["format"] as? String == "jangtq2"
+                    && (version as? Int == 2 || version as? String == "2.0")
+                // D3 deliberately puts the executable v2 header/plan only in config.json.
+                // Its headless decision stamp is metadata, not a second format owner.
+                guard versionedSidecar || decisionMetadataOnly else {
+                    throw Failure.invalid("unsupported dense Qwen JANGH sidecar version")
+                }
                 if other["jangtq"] != nil {
                     guard let declared = try Self.optionalObject(other, "jangtq"),
                         try Self.encode(authoritative) == Self.encode(declared)
@@ -160,7 +175,7 @@ struct JANGHConfigurationPartition: Sendable {
                         guard
                             Set(summary.keys).isSubset(of: [
                                 "bits", "group_size", "bit_widths_used", "method", "layout",
-                            ]),
+                            ] + (decisionMetadataOnly ? ["unquantized_linears"] : [])),
                             summary["bits"] is Int, summary["group_size"] is Int,
                             summary["bit_widths_used"] is [Int],
                             summary["method"] == nil || summary["method"] is String,
@@ -170,6 +185,13 @@ struct JANGHConfigurationPartition: Sendable {
                                 "dense Qwen sidecar quantization must be summary metadata")
                         }
                     }
+                    if decisionMetadataOnly, let paths = summary["unquantized_linears"] {
+                        guard let names = paths as? [String], Set(names).count == names.count,
+                            names.allSatisfy({ plan[$0] as? Bool == false }) else {
+                            throw Failure.invalid("D3 unquantized summary disagrees with the authoritative plan")
+                        }
+                    }
+
                 }
             } else {
                 // Do not identify the format using the legacy label alone.
@@ -212,8 +234,22 @@ struct JANGHConfigurationPartition: Sendable {
         // one-expert codebook bank at `language_model.model.layers.L.mlp.{gate,up,down}_proj` (complete
         // triples are enforced by JANGHFormatContract). Nothing else may be custom in such a bundle.
         let denseQwen35 = modelType == "qwen3_5"
+        // Dense Ripple (ricursive) JANGH2: every decoder MLP projection at `model.layers.L.mlp.{gate,up,down}_proj` is a
+        // one-expert codebook bank; attention, embeddings and the head stay affine.
+        let denseRicursive = modelType == "ricursive"
         for name in customModules {
             if denseK2 { continue } // Exact down-only namespace was validated by the format contract.
+            if denseRicursive {
+                let parts = name.split(separator: ".", omittingEmptySubsequences: false)
+                guard parts.count == 5, parts[0] == "model", parts[1] == "layers",
+                    let layer = Int(parts[2]), layer >= 0, String(layer) == String(parts[2]),
+                    parts[3] == "mlp",
+                    ["gate_proj", "up_proj", "down_proj"].contains(String(parts[4]))
+                else {
+                    throw Failure.invalid("unsupported dense ricursive JANGH module path \(name)")
+                }
+                continue
+            }
             if denseQwen35 {
                 let parts = name.split(separator: ".", omittingEmptySubsequences: false)
                 guard parts.count == 6, parts[0] == "language_model", parts[1] == "model",
@@ -226,6 +262,15 @@ struct JANGHConfigurationPartition: Sendable {
                 continue
             }
             var components = name.split(separator: ".", omittingEmptySubsequences: false)
+            // DeepSeek-V4.1 JANGHT: stacked routed banks at `layers.L.ffn.experts.{gate,up,down}_proj` (the release
+            // checkpoint namespace; the dSpark `mtp.*` banks are loaded by the draft, not here). That type only.
+            if modelType == "deepseek_v41" {
+                guard components.count == 5, components[0] == "layers", let layer = Int(components[1]), layer >= 0,
+                    String(layer) == String(components[1]), components[2] == "ffn", components[3] == "experts",
+                    ["gate_proj", "up_proj", "down_proj"].contains(String(components[4]))
+                else { throw Failure.invalid("unsupported deepseek_v41 custom module path \(name)") }
+                continue
+            }
             // Nemotron-H latent MoE (Nemotron 3.5 Bolt): gate-less relu2 banks at
             // `backbone.layers.L.mixer.switch_mlp.{fc1,fc2}`; admitted for that model type only.
             if modelType == "nemotron_h" {

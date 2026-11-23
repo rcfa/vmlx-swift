@@ -434,6 +434,18 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
         // Default-on covers only the family measured to win cold (Qwen3.8 Flash-Next: `measuredFamilyAutoDepth`
         // is set from model_type, never from a path or name). Every other family keeps the opt-in contract.
         if mtp.mode == .familyDefault, status?.measuredFamilyAutoDepth == nil {
+            // This native-head decision does not disable an independently
+            // selected DFlash/Uno drafter. Known missing evidence must not
+            // suggest that changing the mode can create a head or tensors.
+            if let status, !status.hasCompleteMTPArtifact {
+                let absent = !status.bundleHasMTP
+                    && status.configuredLayers == 0 && status.tensorCount == 0
+                return .init(
+                    launchMode: .off, recommendation: nil,
+                    reason: absent
+                        ? "This bundle has no native MTP head or tensors."
+                        : "This bundle has incomplete native MTP head/tensor evidence.")
+            }
             return .init(
                 launchMode: .off, recommendation: nil,
                 reason:
@@ -549,6 +561,12 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
                 drafterPath: URL(fileURLWithPath: selected.path),
                 blockSize: mtp.dflash2BlockSize)
         }
+        // DeepSeek-V4.1 bundles ship their own dSpark head in `dspark/`. It is speed-only and exact
+        // (greedy and sampled requests), and its wall-clock governor keeps it at or above AR, so it is
+        // on by default; Off (and only Off, or VMLX_DSV41_DSPARK=0) turns it off.
+        if let dspark = bundledDSparkDrafter(configData: configData, bundleDirectory: bundleDirectory) {
+            return .dspark(drafterPath: dspark)
+        }
         if let adapter = bundledUnoAdapter(configData: configData, bundleDirectory: bundleDirectory) {
             return .uno(
                 adapterPath: adapter,
@@ -626,6 +644,74 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
                 "Bundled Uno adapter not used (decoding autoregressively): \(reason, privacy: .public)")
             return nil
         }
+        return local
+    }
+
+    /// Model types that carry a dSpark head in `dspark/`: DeepSeek-V4.1 (DSV4-0731 has none) and
+    /// MiniMax-M3 / M3.1 (a DSpark block drafter, ``miniMaxDSparkModelTypes``).
+    public static let dsparkModelTypes: Set<String> = [
+        "deepseek_v41", "deepseek_v41_text", "minimax_m3", "minimax_m3_vl",
+    ]
+
+    /// MiniMax-M3 / M3.1: `dspark/` holds a block drafter with its own `config.json`
+    /// (`DSparkMiniMaxDraftModel`, as released or pre-quantized) and safetensors.
+    public static let miniMaxDSparkModelTypes: Set<String> = ["minimax_m3", "minimax_m3_vl"]
+
+    /// True when `directory/config.json` declares a DSpark drafter (an architecture naming DSpark, or a
+    /// `dspark` projector) and the directory holds its safetensors. The vMLX Python runtime's rule
+    /// (`config_declares_dspark`): a sidecar config that does not declare DSpark is not a DSpark drafter.
+    public static func declaresDSparkDrafter(_ directory: URL) -> Bool {
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent("config.json")),
+            let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return false }
+        let architectures = (config["architectures"] as? [Any])?.compactMap { $0 as? String } ?? []
+        let projector =
+            ((config["dflash_config"] as? [String: Any])?["projector_type"] ?? config["projector_type"]) as? String
+        guard architectures.contains(where: { $0.lowercased().contains("dspark") })
+            || projector?.lowercased() == "dspark"
+        else { return false }
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        return files.contains { $0.hasSuffix(".safetensors") && !$0.hasPrefix("._") }
+    }
+
+    /// The bundle-local `dspark/` head when the bundle's model type carries one and speculation is not
+    /// switched off: DeepSeek-V4.1's `dspark.safetensors`, or a MiniMax-M3 drafter directory whose
+    /// `config.json` declares DSpark. `VMLX_DSV41_DSPARK=0` (and, for MiniMax-M3, the Python runtime's
+    /// `VMLX_DSPARK=0`) can only turn it off.
+    public func bundledDSparkDrafter(
+        configData: Data?, bundleDirectory: URL?,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL? {
+        guard mtp.mode != .off, !DSparkEnvironment.disabled(environment), let bundleDirectory,
+            let configData,
+            let config = try? JSONSerialization.jsonObject(with: configData) as? [String: Any]
+        else { return nil }
+        let text = config["text_config"] as? [String: Any]
+        let types = [config["model_type"], text?["model_type"]].compactMap {
+            ($0 as? String)?.lowercased().replacingOccurrences(of: "-", with: "_")
+        }
+        // Inkling-2-Mini ships its dSpark drafter inside the bundle (`mtp_config` + `mtp.safetensors`,
+        // `rnn_hidden` Markov head); it loads with the model, so the drafter path is the bundle itself.
+        if types.contains("inkling2_loop") {
+            let mtp = config["mtp_config"] as? [String: Any]
+            guard let mtp, (mtp["markov_head_type"] as? String ?? "rnn_hidden") == "rnn_hidden",
+                FileManager.default.fileExists(
+                    atPath: bundleDirectory.appendingPathComponent("mtp.safetensors").path)
+            else { return nil }
+            return bundleDirectory
+        }
+        guard types.contains(where: Self.dsparkModelTypes.contains) else { return nil }
+        let local = bundleDirectory.appendingPathComponent("dspark", isDirectory: true)
+        if types.contains(where: Self.miniMaxDSparkModelTypes.contains) {
+            guard !DSparkEnvironment.miniMaxDisabled(environment), Self.declaresDSparkDrafter(local) else {
+                return nil
+            }
+            return local
+        }
+        guard
+            FileManager.default.fileExists(
+                atPath: local.appendingPathComponent("dspark.safetensors").path)
+        else { return nil }
         return local
     }
 
@@ -1086,6 +1172,8 @@ public struct VMLXServerRuntimeSettings: Codable, Sendable, Equatable {
             longPromptMultiplier: cache.longPromptMultiplier)
         // Serving: the end of a turn or tool call never waits for SSD writes (see DiskCache).
         config.diskWriteBehind = true
+        // Serving: SSD only by default; VMLX_RESIDENT_CACHE_GB keeps entries resident in RAM too.
+        config.residentEntryBytes = CacheCoordinatorConfig.servingResidentEntryBytes
         return config
     }
 

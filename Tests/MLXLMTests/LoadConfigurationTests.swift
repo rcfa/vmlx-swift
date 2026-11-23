@@ -146,6 +146,106 @@ struct LoadConfigurationTests {
         #expect(s.memoryLimit == target)
     }
 
+    @Test(
+        "Unlimited total budget resets stale limits; finite budgets remain explicit",
+        arguments: [
+            ResidentCap.fraction(0.60), .absolute(32 << 30),
+            .absolute(1 << 20), .absolute(96 << 30),
+        ])
+    func unlimitedTotalBudgetTransition(finite: ResidentCap) throws {
+        let priorMemoryLimit = MLX.Memory.memoryLimit
+        let priorCacheLimit = MLX.Memory.cacheLimit
+        defer {
+            MLX.Memory.memoryLimit = priorMemoryLimit
+            MLX.Memory.cacheLimit = priorCacheLimit
+        }
+        let physical: UInt64 = 128 << 30
+        let recommended = 80 << 30
+        // The backend constructor uses min(0.95 * RAM, 1.5 * working set).
+        // Supplying facts exercises that existing default without allocations.
+        let expectedNative = Int(min(0.95 * Double(physical), 1.5 * Double(recommended)))
+        let requestedFinite = try #require(finite.resolve(physicalMemory: physical))
+        let expectedFinite = max(1 << 30, min(Int(requestedFinite), recommended))
+        MLX.Memory.cacheLimit = 64 << 20
+
+        applyLoadProcessMemoryLimit(
+            finite, physicalMemory: physical, recommendedWorkingSetBytes: recommended)
+        #expect(MemoryStatus.snapshot().memoryLimit == expectedFinite)
+        let restored = applyLoadProcessMemoryLimit(
+            .unlimited, physicalMemory: physical, recommendedWorkingSetBytes: recommended)
+        #expect(restored == expectedNative)
+        #expect(MemoryStatus.snapshot().memoryLimit == expectedNative)
+        #expect(MLX.Memory.cacheLimit == 64 << 20)
+
+        // Returning from No Automatic Limits must apply the selected cap too.
+        applyLoadProcessMemoryLimit(
+            finite, physicalMemory: physical, recommendedWorkingSetBytes: recommended)
+        #expect(MemoryStatus.snapshot().memoryLimit == expectedFinite)
+        #expect(MLX.Memory.cacheLimit == 64 << 20)
+    }
+
+    @Test("Unlimited total budget uses the native physical-memory ceiling")
+    func unlimitedTotalBudgetUsesNativePhysicalCeiling() {
+        let priorMemoryLimit = MLX.Memory.memoryLimit
+        defer { MLX.Memory.memoryLimit = priorMemoryLimit }
+        let physical: UInt64 = 128 << 30
+        let recommended = 112 << 30
+        let expectedNative = Int(min(0.95 * Double(physical), 1.5 * Double(recommended)))
+        MLX.Memory.memoryLimit = 64 << 30
+        let restored = applyLoadProcessMemoryLimit(
+            .unlimited, physicalMemory: physical, recommendedWorkingSetBytes: recommended)
+        #expect(restored == expectedNative)
+        #expect(MemoryStatus.snapshot().memoryLimit == expectedNative)
+    }
+
+    @Test("Decision loader applies Strict to unlimited to finite against the real allocator")
+    func decisionLoaderClearsStaleTotalLimit() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("decision-limit-transition-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data(#"{"model_type":"llama"}"#.utf8)
+            .write(to: directory.appendingPathComponent("config.json"))
+
+        let priorMemoryLimit = MLX.Memory.memoryLimit
+        let priorCacheLimit = MLX.Memory.cacheLimit
+        defer {
+            MLX.Memory.memoryLimit = priorMemoryLimit
+            MLX.Memory.cacheLimit = priorCacheLimit
+        }
+        let physical = HostPhysicalMemory.bytes
+        let recommended = try #require(MLX.GPU.maxRecommendedWorkingSetBytes())
+        let expectedNative = Int(min(0.95 * Double(physical), 1.5 * Double(recommended)))
+        let expectedStrict = max(1 << 30, min(Int(Double(physical) * 0.60), recommended))
+        var strict = LoadConfiguration(
+            maxResidentBytes: .absolute(64 << 20), memoryLimit: .fraction(0.60))
+        strict.keepModelInMemory = false
+        MLX.Memory.cacheLimit = 32 << 20
+        let strictResources = DecisionLoadResources(directory: directory, configuration: strict)
+        #expect(MemoryStatus.snapshot().memoryLimit == expectedStrict)
+        #expect(MLX.Memory.cacheLimit == 64 << 20)
+        #expect(strictResources.previousAllocatorCacheLimit == 32 << 20)
+        // The owner restores only the load-time pool, matching its contract.
+        MLX.Memory.cacheLimit = try #require(strictResources.previousAllocatorCacheLimit)
+
+        var unlimited = LoadConfiguration.off
+        unlimited.keepModelInMemory = false
+        let unlimitedResources = DecisionLoadResources(
+            directory: directory, configuration: unlimited)
+        #expect(MemoryStatus.snapshot().memoryLimit == expectedNative)
+        #expect(MLX.Memory.cacheLimit == 32 << 20)
+        #expect(unlimitedResources.previousAllocatorCacheLimit == nil)
+
+        var finite = LoadConfiguration(
+            maxResidentBytes: .unlimited, memoryLimit: .absolute(2 << 30))
+        finite.keepModelInMemory = false
+        let finiteResources = DecisionLoadResources(directory: directory, configuration: finite)
+        #expect(MemoryStatus.snapshot().memoryLimit == max(1 << 30, min(2 << 30, recommended)))
+        #expect(MLX.Memory.cacheLimit == 32 << 20)
+        #expect(finiteResources.previousAllocatorCacheLimit == nil)
+        withExtendedLifetime((strictResources, unlimitedResources, finiteResources)) {}
+    }
+
     @Test("Resident-pool policy clears stale process-wide MLX limits",
           arguments: ["deepseek_v4", "glm5_next", "glm5_next_text"])
     func residentPoolPolicyClearsStaleProcessLimits(modelType: String) {
@@ -646,8 +746,8 @@ struct LoadBundleFactsNGramTests {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("facts-ngram-invalid-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        // A second valid table shares the shard. Rejecting one malformed
-        // descriptor must not change valid packed-shard accounting.
+        // A valid sibling cannot establish that a malformed shard has a
+        // trustworthy layout. Keep the entire shard in the resident estimate.
         let header: [String: Any] = [
             "language_model.layers.0.ple.ngram_embedding.shards.0.weight":
                 ["dtype": "U32", "shape": [1], "data_offsets": offsets],
@@ -661,8 +761,8 @@ struct LoadBundleFactsNGramTests {
         file.append(Data(count: 16))
         try file.write(to: root.appendingPathComponent("model.safetensors"))
         let facts = LoadBundleFacts.inspect(bundleURL: root)
-        #expect(facts.ssdResidentTableBytes == 4)
-        #expect(facts.gpuResidentWeightBytes == UInt64(file.count) - 4)
+        #expect(facts.ssdResidentTableBytes == 0)
+        #expect(facts.gpuResidentWeightBytes == UInt64(file.count))
     }
 
     @Test("truncated n-gram payload remains in the conservative resident estimate")
@@ -685,11 +785,89 @@ struct LoadBundleFactsNGramTests {
         #expect(facts.gpuResidentWeightBytes == UInt64(file.count))
     }
 
+    @Test("overlapping SSD table spans never reduce the resident estimate",
+        arguments: [[[0, 64], [0, 64]], [[0, 48], [32, 64]]])
+    func overlappingNGramSpansAreNotSubtracted(spans: [[Int]]) throws {
+        let header: [String: Any] = [
+            "model.layers.0.ple.ngram_embedding.first":
+                ["dtype": "U8", "shape": [spans[0][1] - spans[0][0]], "data_offsets": spans[0]],
+            "model.layers.1.ple.ngram_embedding.second":
+                ["dtype": "U8", "shape": [spans[1][1] - spans[1][0]], "data_offsets": spans[1]],
+        ]
+        try assertInvalidTableSpansAreConservative(header)
+    }
+
+    @Test("an SSD descriptor cannot discount bytes aliased by compute weights")
+    func computeAliasIsNotSubtracted() throws {
+        try assertInvalidTableSpansAreConservative([
+            "model.layers.0.ple.ngram_embedding.table":
+                ["dtype": "U8", "shape": [64], "data_offsets": [0, 64]],
+            "model.layers.0.mlp.weight":
+                ["dtype": "U8", "shape": [64], "data_offsets": [0, 64]],
+        ])
+    }
+
+    private func assertInvalidTableSpansAreConservative(_ header: [String: Any]) throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("facts-ngram-overlap-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bytes = try JSONSerialization.data(withJSONObject: header)
+        var length = UInt64(bytes.count).littleEndian
+        var file = withUnsafeBytes(of: &length) { Data($0) }
+        file.append(bytes)
+        file.append(Data(count: 64))
+        try file.write(to: root.appendingPathComponent("model.safetensors"))
+        let facts = LoadBundleFacts.inspect(bundleURL: root)
+        #expect(facts.ssdResidentTableBytes == 0)
+        #expect(facts.gpuResidentWeightBytes == UInt64(file.count))
+    }
+
+    @Test("impossible SSD totals retain the full resident estimate",
+        arguments: [UInt64(10), UInt64(11), UInt64.max])
+    func invalidSSDTotalIsConservative(ssdBytes: UInt64) {
+        var facts = LoadBundleFacts(totalSafetensorsBytes: 10, isRouted: false, physicalMemory: 100)
+        facts.ssdResidentTableBytes = ssdBytes
+        #expect(facts.gpuResidentWeightBytes == 10)
+    }
+
+    @Test("malformed compute descriptors cannot validate an SSD discount")
+    func malformedComputeSpanIsConservative() throws {
+        try assertInvalidTableSpansAreConservative([
+            "model.layers.0.ple.ngram_embedding.table":
+                ["dtype": "U8", "shape": [16], "data_offsets": [0, 16]],
+            "model.layers.0.mlp.weight":
+                ["dtype": "U8", "shape": [65], "data_offsets": [-1, 64]],
+        ])
+    }
+
+    @Test("an unreadable sibling shard prevents a partial bundle discount")
+    func unreadableSiblingKeepsEveryByteResident() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("facts-ngram-sibling-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let header = try JSONSerialization.data(withJSONObject: [
+            "model.layers.0.ple.ngram_embedding.table":
+                ["dtype": "U8", "shape": [64], "data_offsets": [0, 64]],
+        ])
+        var length = UInt64(header.count).littleEndian
+        var shard = withUnsafeBytes(of: &length) { Data($0) }
+        shard.append(header)
+        shard.append(Data(count: 64))
+        try shard.write(to: root.appendingPathComponent("model-00001-of-00002.safetensors"))
+        try Data(count: 16).write(to: root.appendingPathComponent("model-00002-of-00002.safetensors"))
+        let facts = LoadBundleFacts.inspect(bundleURL: root)
+        #expect(facts.totalSafetensorsBytes == UInt64(shard.count + 16))
+        #expect(facts.ssdResidentTableBytes == 0)
+        #expect(facts.gpuResidentWeightBytes == UInt64(shard.count + 16))
+    }
+
     @Test("bundles without an n-gram table keep every byte as weights")
     func noNGramTable() {
         var facts = LoadBundleFacts(totalSafetensorsBytes: 10, isRouted: false, physicalMemory: 100)
         #expect(facts.gpuResidentWeightBytes == 10)
         facts.ssdResidentTableBytes = 20
-        #expect(facts.gpuResidentWeightBytes == 0)
+        #expect(facts.gpuResidentWeightBytes == 10)
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import MLX
 import XCTest
 @testable import MLXLMCommon
 
@@ -23,6 +24,82 @@ final class JANGHLoadPolicyTests: XCTestCase {
             try JSONSerialization.data(withJSONObject: sidecar).write(to: directory.appendingPathComponent("jang_config.json"))
         }
         return LoadBundleFacts.inspect(bundleURL: directory)
+    }
+
+    /// A Hugging Face hub cache stores every file as a symlink into `blobs/`. The weights must be sized by
+    /// their targets: sized by the links (a few dozen bytes each), a 70 GB model was wired as ~10 KB.
+    func testInspectSizesSymlinkedShardsByTheirTargets() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let blobs = root.appendingPathComponent("blobs")
+        let snapshot = root.appendingPathComponent("snapshots/0123abcd")
+        try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data(count: 4096).write(to: blobs.appendingPathComponent("aaaa"))
+        try FileManager.default.createSymbolicLink(
+            atPath: snapshot.appendingPathComponent("model-00001-of-00002.safetensors").path,
+            withDestinationPath: "../../blobs/aaaa")
+        try Data(count: 1000).write(to: snapshot.appendingPathComponent("model-00002-of-00002.safetensors"))
+        try JSONSerialization.data(withJSONObject: config()).write(to: snapshot.appendingPathComponent("config.json"))
+
+        XCTAssertEqual(LoadBundleFacts.inspect(bundleURL: snapshot).totalSafetensorsBytes, 4096 + 1000)
+    }
+
+    /// The bundle DIRECTORY reached through a symlink (models kept on another volume and linked
+    /// into the models folder) must report its target's facts. Listing the unresolved URL throws
+    /// ENOTDIR, which read as a 0-byte bundle: no residency budget, so DeepSeek-V4.1 JANG_2K
+    /// (197 GiB) on a 256 GiB Mac loaded unwired and timed out on the GPU.
+    func testInspectFollowsASymlinkedBundleDirectory() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let real = root.appendingPathComponent("volume/DeepSeek-V4.1-Flash-1017-JANG_2K")
+        let link = root.appendingPathComponent("models/DeepSeek-V4.1-Flash-1017-JANG_2K")
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        // A valid compute shard keeps this symlink/accounting control separate
+        // from the malformed-header rejection contract.
+        let denseHeader = try JSONSerialization.data(withJSONObject: [
+            "model.dense.weight": ["dtype": "U8", "shape": [3960], "data_offsets": [0, 3960]],
+        ])
+        XCTAssertLessThanOrEqual(denseHeader.count, 128)
+        var denseShard = Data()
+        withUnsafeBytes(of: UInt64(128).littleEndian) { denseShard.append(contentsOf: $0) }
+        denseShard.append(denseHeader)
+        denseShard.append(Data(repeating: 0x20, count: 128 - denseHeader.count))
+        denseShard.append(Data(count: 3960))
+        XCTAssertEqual(denseShard.count, 4096)
+        try denseShard.write(to: real.appendingPathComponent("model-00001-of-00002.safetensors"))
+        // A shard whose only tensor is an SSD n-gram table: counted, then subtracted from the
+        // resident weights, through the same symlinked directory.
+        let header = try JSONSerialization.data(withJSONObject: [
+            "model.layers.0.ple.ngram_embedding.weight": [
+                "dtype": "U8", "shape": [100], "data_offsets": [0, 100],
+            ],
+        ])
+        var shard = Data()
+        withUnsafeBytes(of: UInt64(header.count).littleEndian) { shard.append(contentsOf: $0) }
+        shard.append(header)
+        shard.append(Data(count: 100))
+        try shard.write(to: real.appendingPathComponent("model-00002-of-00002.safetensors"))
+        try JSONSerialization.data(withJSONObject: [
+            "model_type": "deepseek_v41", "n_routed_experts": 384, "num_experts_per_tok": 6,
+        ]).write(to: real.appendingPathComponent("config.json"))
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+
+        let direct = LoadBundleFacts.inspect(bundleURL: real)
+        let linked = LoadBundleFacts.inspect(bundleURL: link)
+        XCTAssertEqual(direct.totalSafetensorsBytes, UInt64(4096 + shard.count))
+        XCTAssertEqual(direct.ssdResidentTableBytes, 100)
+        XCTAssertEqual(linked, direct)
+        XCTAssertEqual(linked.gpuResidentWeightBytes, UInt64(4096 + shard.count - 100))
+        XCTAssertEqual(linked.modelType, "deepseek_v41")
+
+        // The residency budget is sized from these bytes: a positive target, not "nothing to wire".
+        let gib = 1 << 30
+        XCTAssertNotNil(modelResidencyWiredTarget(
+            modelBytes: Int(linked.gpuResidentWeightBytes), workingSet: 222 * gib,
+            physicalMemory: 256 * gib))
     }
 
     func testValidatedCustomMetadataDoesNotSelectAffineResidentPolicy() throws {

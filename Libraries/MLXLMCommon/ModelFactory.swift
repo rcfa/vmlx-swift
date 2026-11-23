@@ -96,6 +96,7 @@ public struct ModelContext: @unchecked Sendable {
         self.model = model
         self.processor = processor
         self.tokenizer = tokenizer
+        (model as? any AlignedPrefillTurnMarkerResolving)?.resolveAlignedPrefillTurnMarkers(tokenizer: tokenizer)
     }
 }
 
@@ -505,7 +506,7 @@ public func loadModel(
             allocatorCacheLimit: loadConfiguration.maxResidentBytes
                 .applyAsCacheLimitInt(physicalMemory: facts.physicalMemory))
     if loadConfiguration.memoryLimit != memoryLimit {
-        FileHandle.standardError.write(
+        LoadDiagnostics.write(
             Data(
                 (facts.customRoutedFormat == .janghV2
                     ? "[Load] Automatic JANGH scheduling budget includes mapped weights plus scratch headroom; explicit limits and physical-memory admission remain separate\n"
@@ -539,16 +540,8 @@ public func loadModel(
     // 3b. Apply the process-wide MLX allocator scheduling/reuse budget.
     // This fork drains reusable buffers at the GC threshold; it is not a
     // physical-footprint cap. Respect explicit limits and the device ceiling.
-    if nativeResidentPoolCeiling == nil,
-        let rawCap =
-            memoryLimit
-            .applyAsCacheLimitInt(physicalMemory: facts.physicalMemory)
-    {
-        let workingSetCap = MLX.GPU.maxRecommendedWorkingSetBytes() ?? Int.max
-        let safeCap = max(
-            1 * 1024 * 1024 * 1024,  // never below 1 GB
-            min(rawCap, workingSetCap))
-        MLX.Memory.memoryLimit = safeCap
+    if nativeResidentPoolCeiling == nil {
+        applyLoadProcessMemoryLimit(memoryLimit, physicalMemory: facts.physicalMemory)
     }
 
     // 3c. Apply the selected model-residency budget. Unlike the allocator
@@ -570,9 +563,10 @@ public func loadModel(
     let wireReport = ModelWireBudgetReport(
         modelBytes: modelBytes, budget: wireBudget, residencyTargetBytes: residencyTarget)
     ModelWireBudgetReport.recordLastLoad(wireReport)
-    FileHandle.standardError.write(Data(
-        "[Load] Model residency requested=\(loadConfiguration.keepModelInMemory) target_bytes=\(residencyTarget ?? 0) weight_bytes=\(modelBytes) working_set_bytes=\(workingSet) applied=\(residencyApplied)\n".utf8))
-    FileHandle.standardError.write(Data("\(wireReport.logLine)\n".utf8))
+    LoadDiagnostics.write(
+        Data(
+            "[Load] Model residency requested=\(loadConfiguration.keepModelInMemory) target_bytes=\(residencyTarget ?? 0) weight_bytes=\(modelBytes) working_set_bytes=\(workingSet) applied=\(residencyApplied)\n".utf8))
+    LoadDiagnostics.write(Data("\(wireReport.logLine)\n".utf8))
     loadTiming.mark("memory_and_residency")
 
     // Load original packed bytes into owned allocations; alignment repair and
@@ -607,15 +601,54 @@ public func loadModel(
     return context
 }
 
+/// The existing Metal allocator's startup ceiling (allocator.cpp), also used
+/// when a host removes a previously applied load-profile limit. This is an
+/// engine default, separate from RAM admission and model residency wiring.
+private func nativeMLXAllocatorMemoryLimit(
+    physicalMemory: UInt64, recommendedWorkingSetBytes: Int?
+) -> Int {
+    let physical = Int(clamping: physicalMemory)
+    let physical95 = (physical / 20) * 19 + ((physical % 20) * 19) / 20
+    let recommended150: Int = {
+        guard let recommendedWorkingSetBytes else { return Int.max }
+        let half = recommendedWorkingSetBytes / 2
+        guard recommendedWorkingSetBytes <= Int.max - half else { return Int.max }
+        return recommendedWorkingSetBytes + half
+    }()
+    return max(1 << 30, min(physical95, recommended150))
+}
+
+/// Apply a load's process-wide total scheduling limit, which remains active
+/// during inference. Unlike a temporary cache-pool override, explicit
+/// `.unlimited` must remove the preceding model/profile's limit by restoring
+/// the native allocator ceiling. It must not retain stale process state.
+@discardableResult
+func applyLoadProcessMemoryLimit(
+    _ limit: ResidentCap,
+    physicalMemory: UInt64,
+    recommendedWorkingSetBytes: Int? = MLX.GPU.maxRecommendedWorkingSetBytes()
+) -> Int {
+    let applied: Int
+    if let raw = limit.applyAsCacheLimitInt(physicalMemory: physicalMemory) {
+        applied = max(1 << 30, min(raw, recommendedWorkingSetBytes ?? Int.max))
+    } else {
+        applied = nativeMLXAllocatorMemoryLimit(
+            physicalMemory: physicalMemory,
+            recommendedWorkingSetBytes: recommendedWorkingSetBytes)
+    }
+    MLX.Memory.memoryLimit = applied
+    return applied
+}
+
 /// Apply the existing resident-pool policy to MLX's process-wide ceilings.
 ///
-/// An `.unlimited` resolved cap produces no integer assignment. Without an
-/// explicit reset, a preceding capped model leaves its limit active for the
-/// next model. Both the loader and policy resolver must use the same bundle
-/// property: selecting this application step by a separate architecture check
-/// left GLM's advertised unlimited policy running under the previous 70% cap.
-/// Pre-load RAM admission remains the host's gate; this restores the native
-/// MLX ceilings only for bundles already selected by that policy.
+/// These bundles keep both native total and reuse-pool ceilings for decode.
+/// Both the loader and policy resolver must use the same bundle property:
+/// selecting this step by a separate architecture check left GLM's advertised
+/// unlimited policy running under the previous 70% cap. Ordinary explicit
+/// unlimited loads reset only the total budget via `applyLoadProcessMemoryLimit`;
+/// their load-time pool and host-owned inference pool remain separate.
+/// Pre-load RAM admission remains the host's gate.
 @discardableResult
 func applyResidentPoolProcessMemoryLimitsIfNeeded(
     facts: LoadBundleFacts,
@@ -624,22 +657,17 @@ func applyResidentPoolProcessMemoryLimitsIfNeeded(
 ) -> Int? {
     guard facts.requiresUncappedResidentPools else { return nil }
 
-    let physical = Int(clamping: facts.physicalMemory)
-    let physical95 = (physical / 20) * 19 + ((physical % 20) * 19) / 20
-    let recommended150: Int = {
-        guard let recommendedWorkingSetBytes else { return Int.max }
-        let half = recommendedWorkingSetBytes / 2
-        guard recommendedWorkingSetBytes <= Int.max - half else { return Int.max }
-        return recommendedWorkingSetBytes + half
-    }()
-    let nativeCeiling = max(1 << 30, min(physical95, recommended150))
+    let nativeCeiling = nativeMLXAllocatorMemoryLimit(
+        physicalMemory: facts.physicalMemory,
+        recommendedWorkingSetBytes: recommendedWorkingSetBytes)
     let previousMemoryLimit = MLX.Memory.memoryLimit
     let previousCacheLimit = MLX.Memory.cacheLimit
     MLX.Memory.memoryLimit = nativeCeiling
     MLX.Memory.cacheLimit = min(nativeCeiling, max(0, allocatorCacheLimit ?? nativeCeiling))
     if ProcessInfo.processInfo.environment["VMLX_CACHE_FETCH_TRACE"] != nil {
-        FileHandle.standardError.write(Data(
-            ("[Load] resident-pool limits model_type=\(facts.modelType ?? "unknown") "
+        LoadDiagnostics.write(
+            Data(
+                ("[Load] resident-pool limits model_type=\(facts.modelType ?? "unknown") "
                 + "previous_memory=\(previousMemoryLimit) previous_cache=\(previousCacheLimit) "
                     + "native_ceiling=\(nativeCeiling) allocator_ceiling=\(MLX.Memory.cacheLimit)\n")
                     .utf8))

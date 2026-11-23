@@ -29,9 +29,15 @@
 
 import Foundation
 import MLX
-import AVFoundation
-import CoreImage
-import CoreMedia
+#if canImport(AVFoundation)
+    import AVFoundation
+#endif
+#if canImport(CoreImage)
+    import CoreImage
+#endif
+#if canImport(CoreMedia)
+    import CoreMedia
+#endif
 import MLXLLM
 import MLXLMCommon
 import MLXNN
@@ -66,10 +72,17 @@ enum Glm5NextPrefillMemoryProbe {
             }
         }
         let g = 1024.0 * 1024.0 * 1024.0
-        FileHandle.standardError.write(Data(String(
+        #if canImport(Metal)
+        RuntimeDiagnostics.write(Data(String(
             format: "[glm5-mem] tokens=%d active=%.2fG cache=%.2fG peak=%.2fG kvcache=%.3fG slots=%d\n",
             tokens, Double(GPU.activeMemory) / g, Double(GPU.cacheMemory) / g,
             Double(GPU.peakMemory) / g, Double(cacheBytes) / g, slots).utf8))
+        #else
+        RuntimeDiagnostics.write(Data(String(
+            format: "[glm5-mem] tokens=%d active=%.2fG cache=%.2fG peak=%.2fG kvcache=%.3fG slots=%d\n",
+            tokens, Double(Memory.activeMemory) / g, Double(Memory.cacheMemory) / g,
+            Double(Memory.peakMemory) / g, Double(cacheBytes) / g, slots).utf8))
+        #endif
     }
 }
 
@@ -2382,7 +2395,7 @@ extension Glm5Next: LanguageModel, VisionLanguageModelProtocol, VLMModel, Canoni
         do {
             return try callAsFunction(inputs, mask: nil, caches: cache, inputEmbedding: nil)
         } catch {
-            FileHandle.standardError.write(
+            RuntimeDiagnostics.write(
                 Data("[glm5_next] forward failed: \(error)\n".utf8))
             return MLXArray.zeros([inputs.dim(0), inputs.dim(1), vocabularySize])
         }
@@ -2444,6 +2457,7 @@ public struct Glm5NextProcessorConfiguration: Codable, Sendable {
     }
 }
 
+#if canImport(CoreImage) && canImport(AVFoundation)
 public final class Glm5NextProcessor: UserInputProcessor {
 
     private let config: Glm5NextImageProcessorConfiguration
@@ -2470,8 +2484,8 @@ public final class Glm5NextProcessor: UserInputProcessor {
     /// "Unsupported processor type" — a table filled in on one side only.
     ///
     /// The media ids live in the MODEL config, which is not passed here, so they are resolved from
-    /// the vocabulary instead. `convertTokenToId` rather than `encode(...).last`, because encode
-    /// may prepend a BOS and would then hand back the wrong id with no sign anything was wrong.
+    /// the vocabulary instead. Resolve one token without an added BOS and require an exact
+    /// decode round trip, so an unknown-token alias cannot become an image/cache placeholder.
     public convenience init(
         config: Glm5NextProcessorConfiguration, tokenizer: any Tokenizer
     ) throws {
@@ -2486,7 +2500,9 @@ public final class Glm5NextProcessor: UserInputProcessor {
         videoConfig: Glm5NextImageProcessorConfiguration,
         videoFPS: Double, tokenizer: any Tokenizer
     ) throws {
-        guard let imageToken = tokenizer.convertTokenToId("<|image|>") else {
+        guard let imageToken = MediaTokenIds.resolve(
+            tokenizer: tokenizer, tokens: ["<|image|>"])?.first
+        else {
             throw Glm5NextDecoderUnavailable(
                 detail: "this tokenizer has no <|image|> token, so image placeholders cannot be "
                     + "written; the bundle's tokenizer.json is not GLM-5.3's")
@@ -2840,6 +2856,7 @@ public final class Glm5NextProcessor: UserInputProcessor {
             cacheScopeSalt: cacheScopeSalt(from: input.additionalContext))
     }
 }
+#endif
 
 // MARK: - Image splicing
 

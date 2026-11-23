@@ -1,10 +1,15 @@
 // Copyright © 2024 Apple Inc.
 
-import AVFoundation
-import CoreImage.CIFilterBuiltins
+#if canImport(AVFoundation)
+    import AVFoundation
+#endif
+#if canImport(CoreImage)
+    import CoreImage.CIFilterBuiltins
+#endif
 import MLX
 import MLXLMCommon
 
+#if canImport(CoreImage) && canImport(AVFoundation)
 public typealias VideoFrame = UserInput.VideoFrame
 
 public struct ProcessedFrames {
@@ -206,17 +211,32 @@ public enum MediaProcessing {
     /// pixels: Ornith 1.5 / Qwen 3.5 on a 2020-tagged PNG got (-0.969, -0.758, -0.206) where the
     /// reference has (-0.427, -0.247, 0.278).
     public static func asMLXArrayUnmanaged(_ image: CIImage) -> MLXArray {
-        let w = Int(image.extent.size.width.rounded())
-        let h = Int(image.extent.size.height.rounded())
-        let bytesPerRow = w * 16
-        var data = Data(count: w * h * 16)
+        let (data, width, height) = renderUnmanaged(image, format: .RGBAf, bytesPerPixel: 16)
+        let array = MLXArray(data, [height, width, 4], type: Float32.self)[0..., 0..., ..<3]
+        return array.reshaped(1, height, width, 3).transposed(0, 3, 1, 2)
+    }
+
+    /// Renders stored RGB bytes before rescaling to planar float32.
+    static func asMLXArrayUnmanagedRGB8(_ image: CIImage) -> MLXArray {
+        let (data, width, height) = renderUnmanaged(image, format: .RGBA8, bytesPerPixel: 4)
+        let array = MLXArray(data, [height, width, 4], type: UInt8.self)[0..., 0..., ..<3]
+        let normalized = array.asType(.float32) / 255
+        return normalized.reshaped(1, height, width, 3).transposed(0, 3, 1, 2)
+    }
+
+    private static func renderUnmanaged(
+        _ image: CIImage, format: CIFormat, bytesPerPixel: Int
+    ) -> (Data, Int, Int) {
+        let width = Int(image.extent.size.width.rounded())
+        let height = Int(image.extent.size.height.rounded())
+        let bytesPerRow = width * bytesPerPixel
+        var data = Data(count: height * bytesPerRow)
         data.withUnsafeMutableBytes { ptr in
             unmanagedContext.render(
                 image, toBitmap: ptr.baseAddress!, rowBytes: bytesPerRow, bounds: image.extent,
-                format: .RGBAf, colorSpace: nil)
+                format: format, colorSpace: nil)
         }
-        let array = MLXArray(data, [h, w, 4], type: Float32.self)[0..., 0..., ..<3]
-        return array.reshaped(1, h, w, 3).transposed(0, 3, 1, 2)
+        return (data, width, height)
     }
 
     /// Return `true` if the size is smaller or equal to the size of the `extent`.
@@ -681,3 +701,4 @@ extension CIImage {
         return MediaProcessing.asMLXArray(self, colorSpace: colorSpace)
     }
 }
+#endif

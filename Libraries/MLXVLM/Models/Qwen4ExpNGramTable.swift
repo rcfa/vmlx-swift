@@ -1,6 +1,10 @@
 // Copyright © 2026 Apple Inc.
 
-import Darwin
+#if canImport(Darwin)
+    import Darwin
+#elseif canImport(Glibc)
+    import Glibc
+#endif
 import Foundation
 import MLXLMCommon
 
@@ -64,7 +68,11 @@ private final class Qwen4ExpSafetensorsReader: @unchecked Sendable {
     private let tensors: [String: Qwen4ExpTensorDescriptor]
 
     init(url: URL) throws {
+        #if canImport(Darwin)
         let opened = Darwin.open(url.path, O_RDONLY)
+        #else
+        let opened = Glibc.open(url.path, O_RDONLY)
+        #endif
         guard opened >= 0 else {
             throw Qwen4ExpNGramTableError.openFailed(url, errno)
         }
@@ -74,11 +82,13 @@ private final class Qwen4ExpSafetensorsReader: @unchecked Sendable {
                 throw Qwen4ExpNGramTableError.statFailed(url, errno)
             }
             let size = UInt64(status.st_size)
+            #if canImport(Darwin)
             if Qwen4ExpNGramTable.uncachedReads {
                 guard fcntl(opened, F_NOCACHE, 1) == 0 else {
                     throw Qwen4ExpNGramTableError.noCacheFailed(url, errno)
                 }
             }
+            #endif
             guard size >= 8 else {
                 throw Qwen4ExpNGramTableError.truncatedHeader(url)
             }
@@ -118,12 +128,20 @@ private final class Qwen4ExpSafetensorsReader: @unchecked Sendable {
             self.fd = opened
             self.tensors = parsed
         } catch {
+            #if canImport(Darwin)
             Darwin.close(opened)
+            #else
+            Glibc.close(opened)
+            #endif
             throw error
         }
     }
 
+    #if canImport(Darwin)
     deinit { Darwin.close(fd) }
+    #else
+    deinit { Glibc.close(fd) }
+    #endif
 
     func descriptor(for name: String) -> Qwen4ExpTensorDescriptor? {
         tensors[name]
@@ -148,9 +166,15 @@ private final class Qwen4ExpSafetensorsReader: @unchecked Sendable {
         while completed < count {
             let amount = data.withUnsafeMutableBytes { bytes -> Int in
                 guard let base = bytes.baseAddress else { return 0 }
+                #if canImport(Darwin)
                 return Darwin.pread(
                     fd, base.advanced(by: completed), count - completed,
                     off_t(range.lowerBound) + off_t(completed))
+                #else
+                return Glibc.pread(
+                    fd, base.advanced(by: completed), count - completed,
+                    off_t(range.lowerBound) + off_t(completed))
+                #endif
             }
             guard amount > 0 else {
                 throw Qwen4ExpNGramTableError.readFailed(
@@ -209,14 +233,19 @@ final class Qwen4ExpNGramTable: @unchecked Sendable {
     /// the model volume during plain AR); decode became SSD-latency-bound, the GPU idled between layers and
     /// its clock governor dropped (9 W, 735-1,100 MHz at "99 % active"): plain AR fell from 53.4 to 31.8
     /// tok/s on identical code as the drive's latency drifted. vMLX Python (table_reader.py) and
-    /// TensorFold read the table through the page cache and warm it once after load; lookups are then RAM
+    /// The reference runtime read the table through the page cache and warmed it once after load; lookups are then RAM
     /// hits. Page-cache pages are clean and reclaimable: under memory pressure macOS evicts them and
     /// lookups fall back to drive reads — never an error, never a refusal.
+    #if canImport(Darwin)
     static let uncachedReads: Bool = {
         let raw = (ProcessInfo.processInfo.environment["VMLX_QWEN4_PLE_NOCACHE"] ?? "0")
             .lowercased()
         return ["1", "true", "yes", "on"].contains(raw)
     }()
+    #else
+    // F_NOCACHE is Darwin-only: on Linux the n-gram rows are always read through the page cache.
+    static let uncachedReads = false
+    #endif
 
     /// Warm policy. `VMLX_QWEN4_PLE_WARM=1` forces the warm, `=0` disables it; unset = automatic (below).
     static let warmOverride: Bool? = {
@@ -257,7 +286,7 @@ final class Qwen4ExpNGramTable: @unchecked Sendable {
         if let names = try? fm.contentsOfDirectory(atPath: modelDirectory.path) {
             for name in names where name.hasSuffix(".safetensors") {
                 let attrs = try? fm.attributesOfItem(
-                    atPath: modelDirectory.appendingPathComponent(name).path)
+                    atPath: modelDirectory.appendingPathComponent(name).resolvingSymlinksInPath().path)
                 bundleBytes += (attrs?[.size] as? NSNumber)?.uint64Value ?? 0
             }
         }
@@ -289,16 +318,28 @@ final class Qwen4ExpNGramTable: @unchecked Sendable {
             defer { buffer.deallocate() }
             var done: UInt64 = 0
             for url in fresh {
+                #if canImport(Darwin)
                 let fd = Darwin.open(url.path, O_RDONLY)
+                #else
+                let fd = Glibc.open(url.path, O_RDONLY)
+                #endif
                 guard fd >= 0 else { continue }
                 var offset: off_t = 0
                 while true {
+                    #if canImport(Darwin)
                     let got = Darwin.pread(fd, buffer, chunk, offset)
+                    #else
+                    let got = Glibc.pread(fd, buffer, chunk, offset)
+                    #endif
                     if got <= 0 { break }
                     offset += off_t(got)
                     done += UInt64(got)
                 }
+                #if canImport(Darwin)
                 Darwin.close(fd)
+                #else
+                Glibc.close(fd)
+                #endif
             }
             let seconds = Date().timeIntervalSince(started)
             log(
@@ -349,6 +390,8 @@ final class Qwen4ExpNGramTable: @unchecked Sendable {
         let spec: AffineSpec?
         let rows: Int
         let dimensions: Int
+        /// Affine scales/biases stored as BF16 (mixed 4/8-bit converter bundles) rather than F16 (JANG).
+        var bfloat16Metadata = false
     }
 
     private let shards: [RowShard]
@@ -369,13 +412,26 @@ final class Qwen4ExpNGramTable: @unchecked Sendable {
         layerIndex: Int,
         shardCount: Int
     ) throws {
-        let indexURL = modelDirectory.appendingPathComponent("model.safetensors.index.json")
-        guard let indexData = try? Data(contentsOf: indexURL) else {
-            throw Qwen4ExpNGramTableError.missingIndex(indexURL)
+        // A mixed 4/8-bit converter bundle declares the whole table as ONE safetensors file (`config.ngram_table`) that the
+        // index does not list, its tensors named plain `weight`/`scales`/`biases`. It is read as a
+        // single row shard; the JANG layout splits the same rows into `shardCount` indexed shards.
+        let declared = try Self.readDeclaredTable(modelDirectory: modelDirectory)
+        let index: IndexFile
+        let specs: [Int: AffineSpec]
+        if let declared {
+            index = IndexFile(weightMap: [
+                "weight": declared.file, "scales": declared.file, "biases": declared.file,
+            ])
+            specs = [0: declared.spec]
+        } else {
+            let indexURL = modelDirectory.appendingPathComponent("model.safetensors.index.json")
+            guard let indexData = try? Data(contentsOf: indexURL) else {
+                throw Qwen4ExpNGramTableError.missingIndex(indexURL)
+            }
+            index = try JSONDecoder().decode(IndexFile.self, from: indexData)
+            specs = try Self.readAffineSpecs(
+                modelDirectory: modelDirectory, layerIndex: layerIndex)
         }
-        let index = try JSONDecoder().decode(IndexFile.self, from: indexData)
-        let specs = try Self.readAffineSpecs(
-            modelDirectory: modelDirectory, layerIndex: layerIndex)
 
         var openedFiles: [URL: Qwen4ExpSafetensorsReader] = [:]
         var built: [RowShard] = []
@@ -385,9 +441,10 @@ final class Qwen4ExpNGramTable: @unchecked Sendable {
         var nextStart: Int64 = 0
         var commonDimensions: Int?
 
-        for shardIndex in 0 ..< shardCount {
+        for shardIndex in 0 ..< (declared == nil ? shardCount : 1) {
             let base = "language_model.layers.\(layerIndex).ple.ngram_embedding.shards.\(shardIndex)"
-            let weightName = base + ".weight"
+            func name(_ suffix: String) -> String { declared == nil ? base + "." + suffix : suffix }
+            let weightName = name("weight")
             guard let filename = index.weightMap[weightName] else {
                 throw Qwen4ExpNGramTableError.missingTensor(weightName)
             }
@@ -414,8 +471,8 @@ final class Qwen4ExpNGramTable: @unchecked Sendable {
                 guard let affine = specs[shardIndex] else {
                     throw Qwen4ExpNGramTableError.missingBitSpec(shardIndex)
                 }
-                let scaleName = base + ".scales"
-                let biasName = base + ".biases"
+                let scaleName = name("scales")
+                let biasName = name("biases")
                 guard let scaleFileName = index.weightMap[scaleName],
                     let biasFileName = index.weightMap[biasName]
                 else {
@@ -429,7 +486,7 @@ final class Qwen4ExpNGramTable: @unchecked Sendable {
                 dimensions = weight.shape[1] * 32 / affine.bits
                 guard dimensions * affine.bits == weight.shape[1] * 32,
                     dimensions % affine.groupSize == 0,
-                    scale.dtype == "F16", bias.dtype == "F16",
+                    scale.dtype == "F16" || scale.dtype == "BF16", bias.dtype == scale.dtype,
                     scale.shape == [rows, dimensions / affine.groupSize],
                     bias.shape == scale.shape
                 else {
@@ -463,7 +520,8 @@ final class Qwen4ExpNGramTable: @unchecked Sendable {
             built.append(RowShard(
                 weightFile: file, scaleFile: scaleFile, biasFile: biasFile,
                 weight: weight, scales: scales, biases: biases,
-                spec: spec, rows: rows, dimensions: dimensions))
+                spec: spec, rows: rows, dimensions: dimensions,
+                bfloat16Metadata: scales?.dtype == "BF16"))
         }
 
         self.shards = built
@@ -648,7 +706,8 @@ final class Qwen4ExpNGramTable: @unchecked Sendable {
                         dequantizeRow(
                             packedPointer: packedBytes.baseAddress!, packedWordCount: packedWords,
                             scalePointer: scaleBytes.baseAddress!, biasPointer: biasBytes.baseAddress!,
-                            dimensions: shard.dimensions, spec: spec)
+                            dimensions: shard.dimensions, spec: spec,
+                            bfloat16Metadata: shard.bfloat16Metadata)
                     }
                 }
             }
@@ -721,8 +780,12 @@ final class Qwen4ExpNGramTable: @unchecked Sendable {
     private static func dequantizeRow(
         packedPointer: UnsafeRawPointer, packedWordCount: Int,
         scalePointer: UnsafeRawPointer, biasPointer: UnsafeRawPointer,
-        dimensions: Int, spec: AffineSpec
+        dimensions: Int, spec: AffineSpec, bfloat16Metadata: Bool
     ) -> [Float] {
+        func metadata(_ bits: UInt16) -> Float {
+            bfloat16Metadata
+                ? Float(bitPattern: UInt32(bits) << 16) : Float(Float16(bitPattern: bits))
+        }
         let mask = UInt64((1 << spec.bits) - 1)
         var result = [Float](repeating: 0, count: dimensions)
         for column in 0 ..< dimensions {
@@ -741,8 +804,8 @@ final class Qwen4ExpNGramTable: @unchecked Sendable {
                 fromByteOffset: group * 2, as: UInt16.self)
             let biasBits = biasPointer.loadUnaligned(
                 fromByteOffset: group * 2, as: UInt16.self)
-            let scale = Float(Float16(bitPattern: UInt16(littleEndian: scaleBits)))
-            let bias = Float(Float16(bitPattern: UInt16(littleEndian: biasBits)))
+            let scale = metadata(UInt16(littleEndian: scaleBits))
+            let bias = metadata(UInt16(littleEndian: biasBits))
             result[column] = code * scale + bias
         }
         return result
@@ -756,6 +819,32 @@ final class Qwen4ExpNGramTable: @unchecked Sendable {
             if values[mid] <= needle { low = mid + 1 } else { high = mid }
         }
         return low
+    }
+
+    /// `config.ngram_table = {file, bits, group_size}`, a converter bundle's declaration of a table it keeps
+    /// outside the indexed safetensors; nil when the bundle declares none. The file names no layer,
+    /// so a model with several PLE layers cannot be served by it and is refused rather than guessed.
+    private static func readDeclaredTable(
+        modelDirectory: URL
+    ) throws -> (file: String, spec: AffineSpec)? {
+        let data = try Data(contentsOf: modelDirectory.appendingPathComponent("config.json"))
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let declared = root["ngram_table"]
+        else { return nil }
+        guard let table = declared as? [String: Any],
+            let file = table["file"] as? String, !file.isEmpty, !file.contains("/"),
+            let bits = (table["bits"] as? NSNumber)?.intValue,
+            let groupSize = (table["group_size"] as? NSNumber)?.intValue
+        else {
+            throw Qwen4ExpNGramTableError.invalidTensor(
+                "ngram_table", "needs a file name in the bundle, bits and group_size")
+        }
+        let text = root["text_config"] as? [String: Any]
+        if let layers = text?["ple_layer_ids"] as? [Any], layers.count != 1 {
+            throw Qwen4ExpNGramTableError.invalidTensor(
+                "ngram_table", "one file cannot hold the tables of \(layers.count) PLE layers")
+        }
+        return (file, AffineSpec(bits: bits, groupSize: groupSize))
     }
 
     private static func readAffineSpecs(
@@ -787,6 +876,6 @@ final class Qwen4ExpNGramTable: @unchecked Sendable {
     }
 
     private static func log(_ message: String) {
-        FileHandle.standardError.write(Data("[Qwen4ExpPLE] \(message)\n".utf8))
+        RuntimeDiagnostics.write(Data("[Qwen4ExpPLE] \(message)\n".utf8))
     }
 }

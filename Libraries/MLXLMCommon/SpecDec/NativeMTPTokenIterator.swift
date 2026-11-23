@@ -105,7 +105,8 @@ public struct NativeMTPGenerationStats: Sendable, Equatable {
     /// Draft depth actually in effect at the start of generation (`depth=`).
     ///
     /// This is the REQUESTED depth after the policy cap, not the raw request:
-    /// the iterator clamps to `VMLX_MTP_DEPTH_CAP` (default `5`).
+    /// the iterator clamps to the runtime's top rung (`NativeMTPDepthPolicy.runtimeTopRung`;
+    /// `VMLX_MTP_DEPTH_CAP` overrides it for diagnostics).
     /// This bound is separate from the request's adaptive policy.
     /// A host that asks past the cap sees the clamped
     /// value here — which is the point of surfacing it, since that gap is
@@ -169,6 +170,11 @@ public struct NativeMTPGenerationStats: Sendable, Equatable {
     public let arSafetyTrips: Int
     public let arSafetyResumes: Int
 
+    /// The top rung of this generation's adaptive ladder (`NativeMTPDepthPolicy.runtimeTopRung`, or a lower
+    /// explicit limit / fixed depth): the real ceiling, so a host can show it instead of a guessed constant.
+    /// `nil` when built by a caller that does not know it.
+    public let adaptiveCeiling: Int?
+
     /// Verifier mode used for this generation (`verifierMode=`).
     public let verifierMode: String
 
@@ -191,7 +197,8 @@ public struct NativeMTPGenerationStats: Sendable, Equatable {
         verifierMode: String,
         cacheMode: String,
         arSafetyTrips: Int = 0,
-        arSafetyResumes: Int = 0
+        arSafetyResumes: Int = 0,
+        adaptiveCeiling: Int? = nil
     ) {
         self.depth = depth
         self.activeDepth = activeDepth
@@ -209,6 +216,7 @@ public struct NativeMTPGenerationStats: Sendable, Equatable {
         self.cacheMode = cacheMode
         self.arSafetyTrips = arSafetyTrips
         self.arSafetyResumes = arSafetyResumes
+        self.adaptiveCeiling = adaptiveCeiling
     }
 }
 
@@ -249,6 +257,10 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
 
     var tokenCount = 0
     var promptPrefillTime: TimeInterval = 0
+    // Returning nil ends the sequence, but must not erase a verifier error
+    // or let a direct caller resume a partially committed speculative cycle.
+    private(set) var generationFailure: GenerationFailure?
+    private var iterationTerminated = false
 
     /// `VMLX_LOGITS_NAN_TRACE=1` diagnostic (see ``NaNLogitsTrace``);
     /// `nil` when the flag is off. Probes the backbone (target) logits at
@@ -425,9 +437,9 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
     /// permanently. A changed regime can recover within the selected ceiling.
     private var adaptiveDemotedFromCount: [Int: Int] = [:]
     private var upperProbeNotBeforeCycle: [Int: Int] = [:]
-    /// Resolved promotion ceiling: fixed requests never exceed their chosen
-    /// depth; explicitly adaptive requests may explore to their bounded cap.
-    private let adaptiveDepthCeiling: Int
+    /// Resolved promotion ceiling: fixed requests never exceed their chosen depth; adaptive requests may
+    /// explore to the runtime's top rung (`NativeMTPDepthPolicy.runtimeTopRung`) or a lower explicit limit.
+    let adaptiveDepthCeiling: Int
     /// Cost-model depth owner for explicitly adaptive requests (NativeMTPDepthChooser.swift).
     private var depthChooser: NativeMTPDepthChooser?
     private var depthChooserLastStamp: (cycle: Int, time: TimeInterval)?
@@ -670,15 +682,10 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
             topK: effectiveParameters.topK, minP: effectiveParameters.minP)
         self.hostRNG = SpeculativeHostRNG(seed: effectiveParameters.randomSeed)
         self.maxTokens = effectiveParameters.maxTokens
-        // One resolved policy governs initialization, recovery and promotion.
-        // The environment bounds exploration but cannot raise a fixed request.
-        let depthCap =
-            ProcessInfo.processInfo.environment["VMLX_MTP_DEPTH_CAP"]
-            .flatMap(Int.init).map { Swift.max($0, 1) }
-            ?? (model as? any NativeMTPAdaptiveCeilingModel)?.nativeMTPAdaptiveDepthCeiling
-            ?? (model as? any NativeMTPBlockDraftModel).flatMap {
-                $0.nativeMTPUsesBlockDrafts ? $0.nativeMTPBlockDraftDepthLimit : nil
-            } ?? 5
+        // One resolved policy governs initialization, recovery and promotion. The runtime's top rung
+        // (`VMLX_MTP_DEPTH_CAP` diagnostic lever, else the model's verifier capability) bounds exploration;
+        // it cannot raise a fixed request.
+        let depthCap = NativeMTPDepthPolicy.runtimeTopRung(model: model)
         let resolvedDepth = try effectiveParameters.nativeMTPDepthPolicy.resolve(
             requestedDepth: requestedDepth, runtimeCap: depthCap)
         self.adaptiveDepthCeiling = resolvedDepth.maximumDepth
@@ -771,9 +778,20 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
             {
                 result = .miss
             } else {
+                // Same fetch as the AR lanes (TokenIterator, BatchEngine):
+                // a disk-backed topology may not consume the EXACT prompt
+                // boundary, so the coordinator serves the N-1 seed the
+                // store persisted one token short and this request prefills
+                // the last token. Without the flag the exact row was
+                // restored in full (a whole-conversation disk read plus
+                // its eval) and then thrown away by `unsafeFullHit` below,
+                // and the whole prompt was prefilled cold — on every
+                // exact-prompt retry of a hybrid chat (Allosaurus after a
+                // tool call), MTP on only.
                 result = coordinator.fetch(
                     tokens: cacheLookupTokenIds,
                     mediaSalt: mediaSalt,
+                    skipExactDiskBoundary: requiresDiskBackedRestore,
                     preferredDiskBoundaries: originalInput.cacheStablePrefixTokenCounts,
                     chainId: parameters.cacheChainId,
                     mediaIndependentPrefix: cacheSaltPlan.mediaIndependentPrefix
@@ -806,27 +824,40 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
                 // cache is separate), so an entry that does not fit it fits
                 // neither, and is reported the same way.
                 if let diskArrays, !restored {
-                    let diskRestored = restoreFromDiskArrays(
-                                diskArrays, into: &self.cache, requirePromptBoundary: true)
+                    // Under `MLXCacheIOLock`, as the AR lanes restore: the
+                    // restore's Metal evals (TQ component `.item()` reads,
+                    // asType conversions, the materializing eval) must not
+                    // interleave with other cache-adjacent GPU submitters —
+                    // serving layers tokenize the NEXT request's input under
+                    // this lock while this producer restores.
+                    let diskRestored = MLXCacheIOLock.withSerializedMLXCacheIO {
+                        () -> Int in
+                        let count = restoreFromDiskArrays(
+                            diskArrays, into: &self.cache, requirePromptBoundary: true)
+                        if count > 0 {
+                            let cacheHasArraysState = self.cache.contains {
+                                String(describing: type(of: $0)).contains("Arrays")
+                            }
+                            if let ssm = ssmStates,
+                                TQDiskSerializer.formatVersion(of: diskArrays) < 2
+                                    || cacheHasArraysState
+                            {
+                                restoreSSMStates(
+                                    ssm, into: self.cache, boundary: matchedTokens)
+                            }
+                            MLX.eval(self.cache)
+                        }
+                        return count
+                    }
                     if diskRestored > 0 {
                         restoredTokenCount = diskRestored
-                        let cacheHasArraysState = self.cache.contains {
-                            String(describing: type(of: $0)).contains("Arrays")
-                        }
-                        if let ssm = ssmStates,
-                           TQDiskSerializer.formatVersion(of: diskArrays) < 2
-                            || cacheHasArraysState
-                        {
-                            restoreSSMStates(
-                                ssm, into: self.cache, boundary: matchedTokens)
-                        }
-                        MLX.eval(self.cache)
                         restored = true
-                    } else if detail == .disk {
+                    } else if detail.isDiskTierEntry {
                         coordinator.reportDiskRestoreRejected(
                             tokens: cacheLookupTokenIds, boundary: matchedTokens,
                             mediaSalt: mediaSalt,
-                            reason: "payload does not fit the runtime cache")
+                            reason: "payload does not fit the runtime cache",
+                            mediaIndependentPrefix: cacheSaltPlan.mediaIndependentPrefix)
                     }
                 }
 
@@ -838,11 +869,12 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
                         self.cache, matchedTokens: matchedTokens,
                         restoredTokens: restoredTokenCount, detail: "native-mtp")
                 {
-                    if detail == .disk {
+                    if detail.isDiskTierEntry {
                         coordinator.reportDiskRestoreRejected(
                             tokens: cacheLookupTokenIds, boundary: matchedTokens,
                             mediaSalt: mediaSalt,
-                            reason: "restored offsets do not match the boundary")
+                            reason: "restored offsets do not match the boundary",
+                            mediaIndependentPrefix: cacheSaltPlan.mediaIndependentPrefix)
                     }
                     restored = false
                     retainedDiskRestore = false
@@ -853,13 +885,15 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
                     if cacheLookupUsesPostPrepareAlias {
                         self.promptTokenIds = cacheLookupTokenIds
                     }
-                    let requiresDiskBackedRestore =
-                        cacheRequiresDiskBackedCoordinatorRestore(self.cache)
                     let suffixHoldsMedia =
                         input.cacheHitSuffixContainsMediaPlaceholder(remainingTokens)
                     let unsafePartial = cacheHitSuffixRequiresMediaRollback(
                         input: input, remainingTokens: remainingTokens,
                         matchedTokens: matchedTokens, plan: cacheSaltPlan)
+                    // Fail-closed backstop only: with `skipExactDiskBoundary`
+                    // above, a disk-backed topology is never served its
+                    // exact prompt boundary from disk, so this now covers
+                    // an exact hit from another tier alone.
                     let unsafeFullHit = remainingTokens.isEmpty && requiresDiskBackedRestore
                     if unsafePartial || unsafeFullHit {
                         self.cache = model.newCache(parameters: effectiveParameters)
@@ -902,7 +936,8 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
                             preferredDiskBoundaries: originalInput
                                 .cacheStablePrefixTokenCounts,
                             skipExactDiskBoundary: coordinator.requiresRecurrentSSMCompanion,
-                            mediaSalt: mediaSalt)
+                            mediaSalt: mediaSalt,
+                            mediaIndependentPrefix: cacheSaltPlan.mediaIndependentPrefix)
                     }
                 }
             case .miss:
@@ -959,6 +994,11 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
             detail: promptCacheSnapshot == nil ? "native-mtp none" : "native-mtp retained")
 
         let firstToken: MLXArray
+        prefillProgressHandler?(
+            PrefillProgress(
+                stage: .prefill,
+                completedUnitCount: Swift.max(restoredCount, self.promptTokenIds.count - 1),
+                totalUnitCount: self.promptTokenIds.count, detail: "native-mtp-seed"))
         switch prepared {
         case .tokens(let tokens):
             processor?.prompt(input.text.tokens)
@@ -1018,16 +1058,24 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
         }
         pendingTokens.append(firstID)
         if let primer {
+            prefillProgressHandler?(
+                PrefillProgress(
+                    stage: .prefill, completedUnitCount: self.promptTokenIds.count,
+                    totalUnitCount: self.promptTokenIds.count, detail: "native-mtp-head-prime"))
             let primeStart = NativeMTPClock.now()
             primer.finish(firstToken: firstToken)
             promptPrimedRows = primer.foldedRows
             self.mtpDraftTime += NativeMTPClock.now() - primeStart
-            FileHandle.standardError.write(Data(String(
+            RuntimeDiagnostics.write(Data(String(
                 format: "[NativeMTP] prompt_priming rows=%d prompt_positions=%d sec=%.3f\n",
                 primer.foldedRows, primer.receivedPositions, NativeMTPClock.now() - primeStart).utf8))
         }
 
         let bridgeStart = NativeMTPClock.now()
+        prefillProgressHandler?(
+            PrefillProgress(
+                stage: .prefill, completedUnitCount: self.promptTokenIds.count,
+                totalUnitCount: self.promptTokenIds.count, detail: "native-mtp-bridge"))
         try Task.checkCancellation()
         let bridge = model.nativeBackboneForward(Self.tokenInput(firstToken), cache: self.cache)
         let secondToken = Self.sampleLast(
@@ -1046,6 +1094,10 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
         nextMain = secondToken
         pendingTokens.append(recordMaterializeSync { secondToken.item(Int.self) })
         let draftStart = NativeMTPClock.now()
+        prefillProgressHandler?(
+            PrefillProgress(
+                stage: .prefill, completedUnitCount: self.promptTokenIds.count,
+                totalUnitCount: self.promptTokenIds.count, detail: "native-mtp-initial-drafts"))
         try Task.checkCancellation()
         let draftBatch = Self.makeDrafts(
             model: model,
@@ -1096,6 +1148,11 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
     }
 
     mutating func next() -> Int? {
+        guard !iterationTerminated else { return nil }
+        if Task.isCancelled {
+            iterationTerminated = true
+            return nil
+        }
         if let returnedAt = lastTokenReturnedAt {
             // Everything between the previous return and this call belonged to the consumer.
             consumerWaitTotal += Swift.max(0, NativeMTPClock.now() - returnedAt)
@@ -1118,7 +1175,15 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
                 } else {
                     try verifyCycle()
                 }
+            } catch is CancellationError {
+                iterationTerminated = true
+                return nil
             } catch {
+                generationFailure = GenerationFailure(
+                    stage: .decoding,
+                    cause: (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                )
+                iterationTerminated = true
                 return nil
             }
         }
@@ -1427,9 +1492,11 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
             }
 
             if !isReusablePrefixWarmup,
-               includeGeneratedBoundary,
-               !generatedTokenIds.isEmpty,
-               !cache.isEmpty
+                includeGeneratedBoundary,
+                generationFailure == nil,
+                !iterationTerminated,
+                !generatedTokenIds.isEmpty,
+                !cache.isEmpty
             {
                 let postAnswerTokens = promptTokenIds + generatedTokenIds
                 let postAnswerSnapshot = cache.map { $0.copy() }
@@ -1444,15 +1511,36 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
                     leafOffsets == [postAnswerTokens.count + 1]
                         && tokenCount == generatedTokenIds.count + 1
                     ? lastReturnedTokenId : nil
+                // A stop can occur before the end of an accepted verifier queue. Its
+                // remaining accepted tokens have already reached recurrent state;
+                // only the queue's final bonus/correction token is unforwarded.
+                // Preserve that exact state/key pairing instead of guessing a tail
+                // or trimming recurrent state. Keep the existing trimmable path.
+                let forwardedStopTail =
+                    stopRowToken == nil && !canTrimPromptCache(postAnswerSnapshot)
+                    ? Self.verifiedForwardedStopTail(
+                        promptTokenCount: promptTokenIds.count,
+                        generatedTokenIds: generatedTokenIds,
+                        returnedTokenCount: tokenCount,
+                        lastReturnedTokenId: lastReturnedTokenId,
+                        pendingTokens: pendingTokens, pendingIndex: pendingIndex,
+                        leafOffsets: Array(leafOffsets)) : nil
                 if ProcessInfo.processInfo.environment["VMLX_CACHE_FETCH_TRACE"] == "1" {
-                    FileHandle.standardError.write(Data(
-                        ("[vmlx][cache/post-answer] native-mtp prompt=\(promptTokenIds.count) "
-                            + "generated=\(generatedTokenIds.count) returned=\(tokenCount) "
-                            + "offsets=\(leafOffsets.sorted()) stopRow=\(stopRowToken != nil)\n").utf8))
+                    RuntimeDiagnostics.write(
+                        Data(
+                            ("[vmlx][cache/post-answer] native-mtp prompt=\(promptTokenIds.count) "
+                                + "generated=\(generatedTokenIds.count) returned=\(tokenCount) "
+                                + "offsets=\(leafOffsets.sorted()) stopRow=\(stopRowToken != nil) "
+                                + "forwardedStopTail=\(forwardedStopTail?.count ?? 0)\n").utf8))
                 }
                 if let stopRowToken {
                     store(
                         tokens: postAnswerTokens + [stopRowToken],
+                        snapshot: postAnswerSnapshot,
+                        label: "post-answer")
+                } else if let forwardedStopTail {
+                    store(
+                        tokens: postAnswerTokens + forwardedStopTail,
                         snapshot: postAnswerSnapshot,
                         label: "post-answer")
                 } else if let offset = offsets.first,
@@ -1480,6 +1568,31 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
         }
 
         finalizeGenerationStats(generatedTokenIds: generatedTokenIds)
+    }
+
+    /// Recover only already-forwarded accepted tokens after a consumer stop.
+    /// The final queued bonus/correction has not been forwarded and is excluded.
+    /// This is a persistence-key decision, never an output-token transformation.
+    static func verifiedForwardedStopTail(
+        promptTokenCount: Int, generatedTokenIds: [Int], returnedTokenCount: Int,
+        lastReturnedTokenId: Int?, pendingTokens: [Int], pendingIndex: Int,
+        leafOffsets: [Int]
+    ) -> [Int]? {
+        guard promptTokenCount >= 0,
+            returnedTokenCount == generatedTokenIds.count + 1,
+            let offset = leafOffsets.first, leafOffsets.allSatisfy({ $0 == offset }),
+            pendingIndex > 0, pendingIndex <= pendingTokens.count,
+            pendingTokens[pendingIndex - 1] == lastReturnedTokenId
+        else { return nil }
+
+        let tailCount = offset - promptTokenCount - generatedTokenIds.count
+        let start = pendingIndex - 1
+        guard tailCount > 1,
+            start <= generatedTokenIds.count,
+            pendingTokens.prefix(start).elementsEqual(generatedTokenIds.suffix(start)),
+            tailCount == pendingTokens.count - 1 - start
+        else { return nil }
+        return Array(pendingTokens[start ..< start + tailCount])
     }
 
     /// CPU-only stats snapshot + stderr summary, split out of
@@ -1561,12 +1674,14 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
             verifierMode: verifierMode,
             cacheMode: "private-mtp+verifier-prefix-commit",
             arSafetyTrips: arSafetyTrips,
-            arSafetyResumes: arSafetyResumes)
+            arSafetyResumes: arSafetyResumes,
+            adaptiveCeiling: adaptiveDepthCeiling)
         let line = String(
             format:
-                "[NativeMTP] depth=%d activeDepth=%d verifyCalls=%d outputTokens=%d arFallbackTokens=%d acceptedByDepth=%@ bonus=%d rejected=%d residualCorrection=%d prefixCommit=%d rollbackRepair=%d mtpCacheRefresh=%d targetForwards=%d verifyInputTokens=%d repairForwards=%d seedMainForwards=%d verifyMainForwards=%d replayMainForwards=%d mtpForwards=%d avgCommittedPerVerify=%.2f avgAcceptP=%.3f adaptiveDownshifts=%d adaptiveFallback=%@ targetVerifySec=%.3f verifyGpuWaitSec=%.3f seedMainSec=%.3f verifyMainSec=%.3f replayMainSec=%.3f mtpDraftSec=%.3f samplingSec=%.3f cacheCommitSec=%.3f materializeSyncSec=%.3f cacheStateSec=%.3f iteratorWallSec=%.3f gdnReplayCalls=%d gdnReplayStates=%d gdnReplaySec=%.3f prefetch[submit=%d,consumed=%d,abandoned=%d] phaseDiag=%@ samplingMode=%@ verifierMode=%@ cacheMode=private-mtp+verifier-prefix-commit arSafety[trips=%d,resumes=%d,paused=%d] depthMoves[promotions=%d,wallclockDemotes=%d,acceptanceDemotes=%d] arLookahead=%d\n",
+                "[NativeMTP] depth=%d activeDepth=%d adaptiveCeiling=%d verifyCalls=%d outputTokens=%d arFallbackTokens=%d acceptedByDepth=%@ bonus=%d rejected=%d residualCorrection=%d prefixCommit=%d rollbackRepair=%d mtpCacheRefresh=%d targetForwards=%d verifyInputTokens=%d repairForwards=%d seedMainForwards=%d verifyMainForwards=%d replayMainForwards=%d mtpForwards=%d avgCommittedPerVerify=%.2f avgAcceptP=%.3f adaptiveDownshifts=%d adaptiveFallback=%@ targetVerifySec=%.3f verifyGpuWaitSec=%.3f seedMainSec=%.3f verifyMainSec=%.3f replayMainSec=%.3f mtpDraftSec=%.3f samplingSec=%.3f cacheCommitSec=%.3f materializeSyncSec=%.3f cacheStateSec=%.3f iteratorWallSec=%.3f gdnReplayCalls=%d gdnReplayStates=%d gdnReplaySec=%.3f prefetch[submit=%d,consumed=%d,abandoned=%d] phaseDiag=%@ samplingMode=%@ verifierMode=%@ cacheMode=private-mtp+verifier-prefix-commit arSafety[trips=%d,resumes=%d,paused=%d] depthMoves[promotions=%d,wallclockDemotes=%d,acceptanceDemotes=%d] arLookahead=%d\n",
             depth,
             currentDepth,
+            adaptiveDepthCeiling,
             verifyCalls,
             generatedTokenIds.count,
             autoregressiveFallbackTokenCount,
@@ -1615,7 +1730,7 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
             adaptiveWallClockDemotes,
             adaptiveAcceptanceDemotes,
             arLookaheadCount)
-        FileHandle.standardError.write(Data(line.utf8))
+        RuntimeDiagnostics.write(Data(line.utf8))
     }
 
     /// Compile the fixed-shape staged verify forward. Built AFTER the
@@ -1633,7 +1748,7 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
             // rebound somewhere and every replay silently degrades to a
             // rebuild.
             if ProcessInfo.processInfo.environment["VMLX_MTP_PHASE_TIMERS"] == "1" {
-                FileHandle.standardError.write(
+                RuntimeDiagnostics.write(
                     Data("[NativeMTP] compiled verify TRACE build rows=\(rows)\n".utf8))
             }
             return CompiledDecodeTrace.withActive {
@@ -1862,7 +1977,7 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
             coordinator.requiresRecurrentSSMCompanion,
             !coordinator.requiresSeparateRecurrentPayload,
             let disk = coordinator.diskCache,
-            case .arrays(let arrays) = disk.fetchCandidate(tokens: tokens, mediaSalt: mediaSalt)
+            case .arrays(let arrays, _) = disk.fetchCandidate(tokens: tokens, mediaSalt: mediaSalt)
         else { return false }
         var scratch = model.newCache(parameters: cacheInitParameters)
         let restored = restoreFromDiskArrays(arrays, into: &scratch)
@@ -1914,7 +2029,7 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
             if Self.traceEnabled {
                 let line =
                     "[NativeMTPTrace] skipped history-boundary cache rederive after trim miss for disk-backed cache topology\n"
-                FileHandle.standardError.write(Data(line.utf8))
+                RuntimeDiagnostics.write(Data(line.utf8))
             }
             return nil
         }
@@ -2244,7 +2359,7 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
             let nextID = recordMaterializeSync { nextVerifiedToken.item(Int.self) }
             let line =
                 "[NativeMTPTrace] call=\(verifyCalls) emitted=\(tokenCount) requested=\(requestedIDs) drafts=\(draftIDs) target=\(verifyDecision.targetTokenIds) accepted=\(accepted) next=\(nextID)\n"
-            FileHandle.standardError.write(Data(line.utf8))
+            RuntimeDiagnostics.write(Data(line.utf8))
         }
 
         for (index, token) in drafts.prefix(accepted).enumerated() {
@@ -2775,7 +2890,7 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
                 arSafetySeedStepSec = arSafetyLiveStepSec ?? arSafetySeedStepSec
                 arSafetyFirstVerifySec = nil
                 adaptiveFallbackReason = nil
-                FileHandle.standardError.write(Data(String(
+                RuntimeDiagnostics.write(Data(String(
                     format: "[NativeMTP] ar_safety resumed: mtp=%.1fms/tok live_ar=%.1fms depth=%d\n",
                     mtpMs, arMs, currentDepth).utf8))
             }
@@ -2863,7 +2978,7 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
         mtpCache = model.makeNativeMTPCache()
         mtpCacheRefreshCount += 1
         headChainPairs = 0
-        FileHandle.standardError.write(Data(
+        RuntimeDiagnostics.write(Data(
             "[NativeMTP] ar_safety depth=\(previous)->\(currentDepth) reason=\(reason)\n".utf8))
     }
     private mutating func arSafetyPause(reason: String, loss: Bool = true) {
@@ -2891,7 +3006,7 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
         drafts.removeAll(keepingCapacity: true)
         draftsAreCopy = false
         draftProbabilities.removeAll(keepingCapacity: true)
-        FileHandle.standardError.write(Data("[NativeMTP] ar_safety paused: \(reason)\n".utf8))
+        RuntimeDiagnostics.write(Data("[NativeMTP] ar_safety paused: \(reason)\n".utf8))
     }
 
     /// After every AR step: capture the seed AR cost on the very first
@@ -3610,7 +3725,7 @@ struct NativeMTPTokenIterator: TokenIteratorProtocol {
             let nextID = recordMaterializeSync { nextToken.item(Int.self) }
             let line =
                 "[NativeMTPTrace] call=\(verifyCalls) emitted=\(tokenCount) requested=\(requestedIDs) drafts=\(draftIDs) target=\(targetTokenIds) accepted=\(accepted) next=\(nextID) sequential=1\n"
-            FileHandle.standardError.write(Data(line.utf8))
+            RuntimeDiagnostics.write(Data(line.utf8))
         }
 
         var alignedCommitHidden: MLXArray?

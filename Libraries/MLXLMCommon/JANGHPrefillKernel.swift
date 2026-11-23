@@ -14,13 +14,17 @@ final class JANGHPrefillKernel {
     private let codebookHeader: String
     private var kernels: [String: MLXFast.MLXFastKernel] = [:]
     private let lock = NSLock()
+    /// The fused gate/up epilogue's activation (NAX `tq_act` and the steel fallback). `.silu` keeps every existing
+    /// kernel source and cache key unchanged.
+    private let activation: JANGTActivation
     private let rotation = JANGHRowRotation()
 
     init(
         contract: JANGHFormatContract, module: String, upModule: String? = nil,
-        enableDenseSmallTile: Bool = false
+        enableDenseSmallTile: Bool = false, activation: JANGTActivation = .silu
     ) throws {
         self.enableDenseSmallTile = enableDenseSmallTile
+        self.activation = activation
         guard let projection = contract.projections[module],
             upModule == nil || contract.projections[upModule!] != nil
         else { throw JANGHFormatContract.ValidationError.invalid("missing prefill projection") }
@@ -61,16 +65,23 @@ final class JANGHPrefillKernel {
     static var nativeBackend: Backend {
         #if os(macOS)
             guard #available(macOS 26.2, *) else { return .steel }
-            let architecture = GPU.deviceInfo().architecture
-            let parts = architecture.split(separator: "g").last.map(String.init) ?? ""
-            let digits = String(parts.prefix(while: { $0.isNumber }))
-            guard let generation = Int(digits), let kind = parts.dropFirst(digits.count).first else {
-                return .steel
-            }
-            return generation >= (kind == "p" ? 18 : 17) ? .nax : .steel
+            return backend(forMetalArchitecture: GPU.deviceInfo().architecture)
         #else
             return .steel
         #endif
+    }
+
+    static func backend(forMetalArchitecture architecture: String) -> Backend {
+        // Metal uses ...g<generation><kind>; g is also the trailing kind
+        // for base GPUs. Splitting on g discards that final kind.
+        guard let kind = architecture.last, "gspd".contains(kind) else { return .steel }
+        let stem = architecture.dropLast()
+        guard let marker = stem.lastIndex(of: "g"),
+            let generation = Int(stem[stem.index(after: marker)...])
+        else {
+            return .steel
+        }
+        return generation >= (kind == "p" ? 18 : 17) ? .nax : .steel
     }
 
     /// The native NAX fragment helper assumes relaxed-precision layout.
@@ -89,7 +100,7 @@ final class JANGHPrefillKernel {
         let type = dtype == .bfloat16 ? "bfloat16_t" : dtype == .float16 ? "half" : "float"
         let key =
             "\(backend.rawValue)_\(type)_\(width)_\(upBits)_\(fused)_\(rotate)"
-            + (tileRows == 64 ? "" : "_m\(tileRows)")
+            + (tileRows == 64 ? "" : "_m\(tileRows)") + (fused ? activation.nameTag : "")
         lock.lock()
         defer { lock.unlock() }
         if let value = kernels[key] { return value }
@@ -107,7 +118,8 @@ final class JANGHPrefillKernel {
                 name: "jangh_prefill_" + key,
                 inputNames: ["x", "wg", "sg", "wu", "su", "indices", "meta", "lim"],
                 outputNames: ["y"], source: source,
-                header: JANGHPrefillHeaders.nax + codebookHeader + JANGHPrefillSource.loader + JANGHPrefillSource.nax,
+                header: JANGHPrefillHeaders.nax + codebookHeader + JANGHPrefillSource.loader
+                    + JANGHPrefillSource.nax(activation: activation),
                 ensureRowContiguous: false)
         } else {
             let source = """
@@ -241,7 +253,8 @@ final class JANGHPrefillKernel {
             var up = single(upPacked, upScales, upBits).asType(.float32)
             gate = gate.asType(.float32)
             if let limit { gate = minimum(gate, limit); up = clip(up, min: -limit, max: limit) }
-            gate = (gate * sigmoid(gate) * up).asType(input.dtype)
+            gate = (activation == .silu ? gate * sigmoid(gate) * up
+                : activation(gate: gate, up: up, limit: 0)).asType(input.dtype)
         }
         if rotateOutput {
             gate = try rotation(gate, outputDType: input.dtype)

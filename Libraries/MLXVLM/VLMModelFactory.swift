@@ -164,6 +164,10 @@ public enum VLMTypeRegistry {
         // both keys to the same dispatch.
         "ministral3": dispatchMistral3VLM,
         "lfm2_vl": create(LFM2VLConfiguration.self, LFM2VL.init),
+        "lfm3_vl": create(LFM3VLConfiguration.self, LFM3VL.init),
+        // LFM3-Audio / LFM3-Omni: speech input (and Omni vision) into the LFM3 decoder.
+        "lfm3_audio": create(LFM3OmniConfiguration.self, LFM3Omni.init),
+        "lfm3_omni": create(LFM3OmniConfiguration.self, LFM3Omni.init),
             "apertus1p5": create(Apertus1p5Configuration.self, Apertus1p5.init),
         "lfm2-vl": create(LFM2VLConfiguration.self, LFM2VL.init),
         "glm_ocr": create(GlmOcrConfiguration.self, GlmOcr.init),
@@ -260,11 +264,16 @@ public enum VLMProcessorTypeRegistry {
             "NemotronH_Nano_Omni_Reasoning_V3": "NemotronHOmniProcessor",
             "nemotron_h_omni": "NemotronHOmniProcessor",
             "minicpmv4_7": "MiniCPMV47Processor",
+            "lfm3_vl": "Lfm3VlProcessor",
+            // LFM3-Audio's preprocessor_config.json (read first) has no processor_class.
+            "lfm3_audio": "Lfm3AudioProcessor",
+            "lfm3_omni": "Lfm3OmniProcessor",
         ]
         return processorTypeOverrides[modelType] ?? declaredProcessorType
     }
 
     /// Shared instance with default processor types.
+    #if canImport(CoreImage) && canImport(AVFoundation) && canImport(Accelerate)
     public static let shared: ProcessorTypeRegistry = .init(creators: [
         "MiMoV26Processor": { data, tokenizer in
             try MiMoV26Processor(JSONDecoder.json5().decode(MiMoV26ProcessorConfiguration.self, from: data), tokenizer: tokenizer)
@@ -280,7 +289,7 @@ public enum VLMProcessorTypeRegistry {
         "Qwen2_5_VLProcessor": create(
             Qwen25VLProcessorConfiguration.self, Qwen25VLProcessor.init),
         "Qwen3VLProcessor": create(
-            Qwen3VLProcessorConfiguration.self, Qwen3VLProcessor.init),
+            Qwen3VLProcessorConfiguration.self, { Qwen3VLProcessor($0, tokenizer: $1) }),
         "MiniCPMV47Processor": create(
             MiniCPMV47ProcessorConfiguration.self, MiniCPMV47Processor.init),
         "Idefics3Processor": create(
@@ -297,6 +306,20 @@ public enum VLMProcessorTypeRegistry {
             Mistral3VLMProcessorConfiguration.self, Mistral3VLMProcessor.init),
         "Lfm2VlProcessor": create(
             LFM2VLProcessorConfiguration.self, LFM2VLProcessor.init),
+        // LFM3-VL ships the transformers-v5 nested processor_config.json (image_processor /
+        // video_processor), which the Qwen3-VL configuration decodes.
+        "Lfm3VlProcessor": create(
+            Qwen3VLProcessorConfiguration.self, { LFM3VLProcessor($0, tokenizer: $1) }),
+        // LFM3-Audio ships feature settings only; LFM3-Omni adds LFM3-VL's image / video blocks.
+        "Lfm3AudioProcessor": { _, tokenizer in
+            LFM3OmniProcessor(tokenizer: tokenizer, vision: nil)
+        },
+        "Lfm3OmniProcessor": { data, tokenizer in
+            LFM3OmniProcessor(
+                tokenizer: tokenizer,
+                vision: try JSONDecoder.json5().decode(
+                    Qwen3VLProcessorConfiguration.self, from: data))
+        },
         "Apertus1p5Processor": create(
             Apertus1p5ProcessorConfiguration.self, Apertus1p5Processor.init),
         "Glm46VProcessor": create(
@@ -324,7 +347,29 @@ public enum VLMProcessorTypeRegistry {
         "Zaya1VLProcessor": create(
             Qwen25VLProcessorConfiguration.self, Zaya1VLProcessor.init),
     ])
+    #else
+    public static let shared: ProcessorTypeRegistry = .init(creators: [:])
+    #endif
 }
+
+#if !(canImport(CoreImage) && canImport(AVFoundation) && canImport(Accelerate))
+    /// The processor `VLMModelFactory` installs on a platform without Apple's media frameworks, for a
+    /// processor type that the registry does not know. It refuses every input, text-only included,
+    /// so that no prompt is ever built differently from what the bundle's own processor builds.
+    struct PreparedInputRequiredProcessor: UserInputProcessor {
+        let processorType: String
+
+        static func message(_ processorType: String) -> String {
+            "\(processorType) needs Apple's media frameworks (CoreImage, AVFoundation, Accelerate), "
+                + "which this platform lacks. Register a processor for \"\(processorType)\", "
+                + "or prepare the LMInput yourself."
+        }
+
+        func prepare(input: UserInput) async throws -> LMInput {
+            throw VLMError.processing(Self.message(processorType))
+        }
+    }
+#endif
 
 /// Registry of models and any overrides that go with them, e.g. prompt augmentation.
 /// If asked for an unknown configuration this will use the model/tokenizer as-is.
@@ -481,6 +526,10 @@ public final class VLMModelFactory: ModelFactory {
         tokenizerLoader: any TokenizerLoader
     ) async throws -> sending ModelContext {
         let modelDirectory = configuration.modelDirectory
+        if DecisionBundle.declaresDecisionModel(at: modelDirectory) {
+            throw DecisionRuntimeError.invalid("This is a decision model; use the System One decision runtime, not chat generation")
+        }
+
         var loadTiming = ModelLoadTiming(scope: "vlm")
 
         // Load config.json once and decode for both base config and model-specific config
@@ -739,6 +788,9 @@ public final class VLMModelFactory: ModelFactory {
         if !loadNativeMTP {
             mergedConfigData = try NativeMTPActivation.scrubInactiveMTPConfig(mergedConfigData)
         }
+        // A qwen4_exp bundle whose vision tower has no processor file is constructed text-only.
+        mergedConfigData = Qwen4ExpTextOnlyBundle.textOnlyConfiguration(
+            mergedConfigData, modelDirectory: modelDirectory)
 
         let model: LanguageModel
         do {
@@ -813,7 +865,6 @@ public final class VLMModelFactory: ModelFactory {
 
         var mutableConfiguration = configuration
         mutableConfiguration.eosTokenIds = eosTokenIds
-
         // Detect JANG model BEFORE tool-format selection so the `capabilities.tool_parser`
         // stamp is authoritative for JANG bundles. Standard MLX models skip this and
         // jangConfig stays nil, in which case we fall through to the model_type heuristic.
@@ -860,7 +911,7 @@ public final class VLMModelFactory: ModelFactory {
                     resolvedReasoning.parser == nil
                     ? "none"
                     : (resolvedReasoning.source == .chatTemplate
-                        ? (resolvedReasoning.parser?.preservesXMLFunctionPayloads == true ? "minicpm5" : "qwen3")
+                        ? ParserResolution.templateReasoningStampName(resolvedReasoning.parser)
                         : reasoningStampFromModelType(baseConfig.modelType))
             } else if let stamp = jangConfig?.capabilities?.reasoningParser {
                 mutableConfiguration.reasoningParserName = stamp
@@ -873,7 +924,7 @@ public final class VLMModelFactory: ModelFactory {
                     resolvedReasoning.parser == nil
                     ? "none"
                     : (resolvedReasoning.source == .chatTemplate
-                        ? (resolvedReasoning.parser?.preservesXMLFunctionPayloads == true ? "minicpm5" : "qwen3")
+                        ? ParserResolution.templateReasoningStampName(resolvedReasoning.parser)
                         : reasoningStampFromModelType(baseConfig.modelType))
             }
         }
@@ -934,11 +985,25 @@ public final class VLMModelFactory: ModelFactory {
             modelType: dispatchModelType,
             declaredProcessorType: baseProcessorConfig.processorClass)
 
+        #if canImport(CoreImage) && canImport(AVFoundation) && canImport(Accelerate)
         let baseProcessor = try await processorRegistry.createModel(
             configuration: processorConfigData,
             processorType: processorType, tokenizer: tokenizer)
+        #else
+        // Every built-in processor needs Apple's media frameworks. A processor that the caller
+        // registered is used; for any other type, the model loads with a stand-in processor that
+        // refuses input, so that the caller can prepare the LMInput itself.
+        let baseProcessor: any UserInputProcessor
+        if processorRegistry.containsProcessorType(processorType) {
+            baseProcessor = try await processorRegistry.createModel(
+                configuration: processorConfigData,
+                processorType: processorType, tokenizer: tokenizer)
+        } else {
+            baseProcessor = PreparedInputRequiredProcessor(processorType: processorType)
+        }
+        #endif
         let defaultAdditionalContext = VLMDefaultContextUserInputProcessor.defaultContext(
-            capabilities: jangConfig?.capabilities)
+            capabilities: jangConfig?.capabilities, chatConfig: jangConfig?.chat)
         let needsReasoningTranslation =
             VLMDefaultContextUserInputProcessor.requiresReasoningTranslation(
                 modelType: baseConfig.modelType)
@@ -980,7 +1045,7 @@ public final class VLMModelFactory: ModelFactory {
 }
 
 /// Error wrapper that includes the filename for better error messages.
-private struct ProcessorConfigError: Error {
+struct ProcessorConfigError: Error {
     let filename: String
     let underlying: Error
 }
@@ -988,7 +1053,7 @@ private struct ProcessorConfigError: Error {
 /// Loads processor configuration, preferring preprocessor_config.json over processor_config.json.
 /// Marked async to enable parallel scheduling via async let, though the underlying I/O is synchronous.
 /// Throws ProcessorConfigError wrapping any underlying error with the filename.
-private func loadProcessorConfig(from modelDirectory: URL) async throws -> (
+func loadProcessorConfig(from modelDirectory: URL) async throws -> (
     Data, BaseProcessorConfiguration
 ) {
     // Converted MiMo carries the authoritative settings in config.json.
@@ -1094,11 +1159,19 @@ struct VLMDefaultContextUserInputProcessor: UserInputProcessor {
         MuseGlimmerReasoningTemplateContext.applies(to: modelType)
     }
 
-    static func defaultContext(capabilities: JangCapabilities?) -> [String: any Sendable]? {
+    static func defaultContext(
+        capabilities: JangCapabilities?, chatConfig: JangChatConfig? = nil
+    ) -> [String: any Sendable]? {
         var context: [String: any Sendable] = [:]
 
         if capabilities?.supportsThinking == false {
             context["enable_thinking"] = false
+        } else if let enabled = chatConfig?.templateKwargsDefaults?.enableThinking {
+            // Only explicit bundle defaults, never a family/capability guess.
+            context["enable_thinking"] = enabled
+            if enabled, let effort = chatConfig?.reasoning?.defaultEffort {
+                context["reasoning_effort"] = effort
+            }
         }
 
         return context.isEmpty ? nil : context

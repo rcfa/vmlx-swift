@@ -181,7 +181,7 @@ private final class NemotronHLayerProfiler: @unchecked Sendable {
         for key in snapshot.keys.sorted() {
             guard let value = snapshot[key], value.count > 0 else { continue }
             let avg = value.totalMs / Double(value.count)
-            FileHandle.standardError.write(Data(
+            RuntimeDiagnostics.write(Data(
                 String(
                     format: "NEMOTRON_LAYER_PROFILE label=%@ count=%d total_ms=%.3f avg_ms=%.3f\n",
                     key, value.count, value.totalMs, avg
@@ -2223,7 +2223,7 @@ public class NemotronHModel: Module, LLMModel, KVCacheDimensionProvider, LoRAMod
         }
 
         if tqStackedCount > 0 {
-            FileHandle.standardError.write(
+            RuntimeDiagnostics.write(
                 Data("[NemotronH.sanitize] stacked \(tqStackedCount) JANGTQ tensor groups (per-expert tq_packed/tq_norms → switch_mlp.{fc1,fc2}.{tq_*})\n".utf8))
         }
         _ = tqStackedCount  // silence unused warning when log is gated
@@ -2589,13 +2589,13 @@ extension NemotronHModel: NativeMTPAutoregressiveBackboneModel {
     }
 }
 
-/// Nemotron-H's exact verify costs 1.26x / 1.46x / 1.77x / 3.08x one AR step at 2 / 3 / 4 / 8 rows
-/// (Super-VL, 2026-10-17), and adaptive exploration past depth 3 measured slower than a fixed depth
-/// on both Super-VL (recursive head) and Bolt (LiLiCorr block drafts, adaptive-to-7 0.87-1.37x vs
-/// fixed d3 0.96-1.45x of AR, paired within rounds). Adaptive requests stay within depth 3.
-extension NemotronHModel: NativeMTPAdaptiveCeilingModel {
-    public var nativeMTPAdaptiveDepthCeiling: Int { 3 }
-}
+// No adaptive depth ceiling here (no hard draft depth, 2026-10-29). Nemotron-H declared 3 (a4e1eebfb,
+// 2026-10-17) from a cost measurement: its exact verify costs 1.26x / 1.46x / 1.77x / 3.08x one AR step at
+// 2 / 3 / 4 / 8 rows (Super-VL), and adaptive-to-7 ran 0.87-1.37x of AR on Bolt against 0.96-1.45x for a
+// fixed depth 3. That is a tuning cap: it also hid the LiLiCorr drafter's block - 1 = 7 rung (the vMLX
+// Python bug of 2026-10-20). The runtime's top rung now governs (recursive head: the recursive rung;
+// LiLiCorr: block - 1 within the exact verify window); a deeper depth that loses must be demoted by the
+// adaptive controller / AR-safety valve, not capped below. Re-measure Bolt and Super-VL adaptive vs fixed d3.
 
 extension NemotronHModel: NativeMTPBlockDraftModel {
     public var nativeMTPUsesBlockDrafts: Bool { mtp == nil && lilicorrLane != nil }

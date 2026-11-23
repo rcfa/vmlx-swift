@@ -124,6 +124,13 @@ public struct ReasoningParser: Sendable {
     /// Qwen's content-side <tool_call> envelope owns literal reasoning markers
     /// in its values. Separate from MiniCPM's CDATA-aware function envelope.
     public let preservesQwenToolCallPayloads: Bool
+    /// The chat template owns the newlines around the tags and around a tool call: it re-renders
+    /// `<think>\n{reasoning}\n</think>\n{content}` and `{content}\n<tool_call>`. Returning those separators in the text
+    /// would double them in history, so a prompt could never match the tokens the model generated (no restore past an
+    /// answer, on any turn that reasons). One separator is dropped at each of those places, streamed or not.
+    public let stripsTemplateSeparators: Bool
+    /// `stripsTemplateSeparators`: the next character is dropped if it is a newline (right after a tag).
+    private var dropsNextNewline = false
 
     // MARK: State
 
@@ -146,6 +153,12 @@ public struct ReasoningParser: Sendable {
     private var harmonyChannelEndTags: [String] = []
     private var harmonyChannelShouldStripName: Bool = false
     private var harmonyChannelNameBuffer: String = ""
+
+    /// Inkling (`inkling2*`) channel state. Every message opens with
+    /// `<|message_model|>`, an optional header (the tool name), then ONE
+    /// channel token; there is no closer per channel, only `<|end_message|>`.
+    private enum InklingChannel: Sendable { case neutral, header, thinking, text, tool }
+    private var inklingChannel: InklingChannel = .neutral
 
     /// Read-only access to the current parser state — true when the
     /// stream is currently inside a `<think>…</think>` block (or the
@@ -182,7 +195,8 @@ public struct ReasoningParser: Sendable {
         endTagAliases: [String] = [],
         consumesRecipientHeaders: Bool = false,
         preservesXMLFunctionPayloads: Bool = false,
-        preservesQwenToolCallPayloads: Bool = false
+        preservesQwenToolCallPayloads: Bool = false,
+        stripsTemplateSeparators: Bool = false
     ) {
         self.startTag = startTag
         self.endTag = endTag
@@ -191,6 +205,7 @@ public struct ReasoningParser: Sendable {
         self.consumesRecipientHeaders = consumesRecipientHeaders
         self.preservesXMLFunctionPayloads = preservesXMLFunctionPayloads
         self.preservesQwenToolCallPayloads = preservesQwenToolCallPayloads
+        self.stripsTemplateSeparators = stripsTemplateSeparators
         self.startTagAliases = startTagAliases.filter { !$0.isEmpty && $0 != startTag }
         self.endTagAliases = endTagAliases.filter { !$0.isEmpty && $0 != endTag }
     }
@@ -204,12 +219,25 @@ public struct ReasoningParser: Sendable {
         if isHarmonyChannelParser {
             return drainHarmonyChannel()
         }
+        if isInklingChannelParser {
+            return drainInklingChannel()
+        }
         return drain()
     }
 
     /// Call once when the stream ends. Flushes any buffered partial text
     /// as `.content` (so we never silently drop tokens).
     public mutating func flush() -> [ReasoningSegment] {
+        if isInklingChannelParser {
+            var out = drainInklingChannel(allowPartialTagAtEnd: false)
+            if !buffer.isEmpty {
+                appendInkling(buffer, into: &out)
+                buffer.removeAll(keepingCapacity: false)
+            }
+            inklingChannel = .neutral
+            insideReasoning = false
+            return out
+        }
         if isHarmonyChannelParser {
             var out = drainHarmonyChannel(allowPartialTagAtEnd: false)
             if !buffer.isEmpty {
@@ -399,6 +427,105 @@ public struct ReasoningParser: Sendable {
         }
 
         return out
+    }
+
+    // MARK: Inkling channels
+
+    static let inklingMessageModel = "<|message_model|>"
+    static let inklingThinking = "<|content_thinking|>"
+    static let inklingText = "<|content_text|>"
+    static let inklingToolJSON = "<|content_invoke_tool_json|>"
+    static let inklingToolText = "<|content_invoke_tool_text|>"
+    static let inklingToolError = "<|content_tool_error|>"
+    static let inklingEndMessage = "<|end_message|>"
+    static let inklingEndSampling = "<|content_model_end_sampling|>"
+    static let inklingMarkers = [
+        inklingMessageModel, inklingThinking, inklingText, inklingToolJSON, inklingToolText,
+        inklingToolError, inklingEndMessage, inklingEndSampling,
+    ]
+
+    private var isInklingChannelParser: Bool {
+        startTag == Self.inklingThinking && endTag == Self.inklingEndMessage
+    }
+
+    /// Route Inkling's channel-switched turn:
+    ///
+    ///   <|message_model|><|content_thinking|>REASONING<|end_message|>
+    ///   <|message_model|><|content_text|>ANSWER<|end_message|>
+    ///   <|message_model|>NAME<|content_invoke_tool_json|>{"name":…,"args":{…}}<|end_message|>
+    ///   <|content_model_end_sampling|>
+    ///
+    /// Thinking goes to `.reasoning`, text to `.content`. The `NAME` header is
+    /// protocol (the JSON repeats the name) and is consumed. A tool message is
+    /// re-emitted to `.content` as `<|content_invoke_tool_json|>JSON<|end_message|>`
+    /// so the Inkling tool parser receives a complete, unambiguous envelope;
+    /// every other marker is consumed. Text before any marker is visible
+    /// content (never reasoning).
+    private mutating func drainInklingChannel(allowPartialTagAtEnd: Bool = true)
+        -> [ReasoningSegment]
+    {
+        var out: [ReasoningSegment] = []
+        while !buffer.isEmpty {
+            guard let (range, tag) = firstRange(of: Self.inklingMarkers, in: buffer) else {
+                // No complete marker: emit what cannot be the start of one.
+                var hold = 0
+                if allowPartialTagAtEnd {
+                    for marker in Self.inklingMarkers {
+                        for length in stride(from: min(marker.count - 1, buffer.count), to: 0, by: -1)
+                        where buffer.hasSuffix(String(marker.prefix(length))) {
+                            hold = max(hold, length)
+                            break
+                        }
+                    }
+                }
+                let cut = buffer.index(buffer.endIndex, offsetBy: -hold)
+                appendInkling(String(buffer[..<cut]), into: &out)
+                buffer = String(buffer[cut...])
+                break
+            }
+            appendInkling(String(buffer[..<range.lowerBound]), into: &out)
+            buffer.removeSubrange(buffer.startIndex..<range.upperBound)
+            switch tag {
+            case Self.inklingMessageModel:
+                inklingChannel = .header
+            case Self.inklingThinking:
+                inklingChannel = .thinking
+            case Self.inklingText, Self.inklingToolText, Self.inklingToolError:
+                inklingChannel = .text
+            case Self.inklingToolJSON:
+                inklingChannel = .tool
+                out.append(.content(Self.inklingToolJSON))
+            case Self.inklingEndMessage:
+                if inklingChannel == .tool {
+                    out.append(.content(Self.inklingEndMessage))
+                }
+                inklingChannel = .neutral
+            default:  // end of sampling
+                inklingChannel = .neutral
+            }
+            insideReasoning = inklingChannel == .thinking
+        }
+        return out
+    }
+
+    private func appendInkling(_ text: String, into out: inout [ReasoningSegment]) {
+        guard !text.isEmpty else { return }
+        switch inklingChannel {
+        case .header:
+            return  // tool-name header: protocol, consumed
+        case .thinking:
+            if case .reasoning(let prev)? = out.last {
+                out[out.count - 1] = .reasoning(prev + text)
+            } else {
+                out.append(.reasoning(text))
+            }
+        case .neutral, .text, .tool:
+            if case .content(let prev)? = out.last {
+                out[out.count - 1] = .content(prev + text)
+            } else {
+                out.append(.content(text))
+            }
+        }
     }
 
     private mutating func appendHarmonyChannelText(
@@ -696,6 +823,13 @@ public struct ReasoningParser: Sendable {
         var out: [ReasoningSegment] = []
 
         while !buffer.isEmpty {
+            if dropsNextNewline {
+                dropsNextNewline = false
+                if buffer.first == "\n" {
+                    buffer.removeFirst()
+                    continue
+                }
+            }
             if insideQwenToolCall {
                 // Stream the opaque payload onward; hold only a possible closing
                 // tag suffix, not the entire (potentially large) tool argument.
@@ -782,7 +916,11 @@ public struct ReasoningParser: Sendable {
                 let tool = buffer.range(of: "<tool_call>"),
                 firstTagRange.map({ tool.lowerBound < $0.lowerBound }) ?? true
             {
-                out.append(.content(String(buffer[..<tool.upperBound])))
+                var payload = String(buffer[..<tool.upperBound])
+                if stripsTemplateSeparators, payload.hasSuffix("\n<tool_call>") {
+                    payload.remove(at: payload.index(payload.endIndex, offsetBy: -"\n<tool_call>".count))
+                }
+                out.append(.content(payload))
                 buffer.removeSubrange(buffer.startIndex..<tool.upperBound)
                 insideQwenToolCall = true
                 continue
@@ -854,7 +992,10 @@ public struct ReasoningParser: Sendable {
 
             if let range = firstTagRange, !pendingLongerSpelling {
                 // Emit everything before the tag in the current mode.
-                let before = String(buffer[..<range.lowerBound])
+                var before = String(buffer[..<range.lowerBound])
+                if stripsTemplateSeparators, insideReasoning, !firstTagIsOpener, before.hasSuffix("\n") {
+                    before.removeLast()
+                }
                 if !before.isEmpty {
                     out.append(insideReasoning ? .reasoning(before) : .content(before))
                 }
@@ -865,6 +1006,7 @@ public struct ReasoningParser: Sendable {
                 // the tag is still consumed.
                 buffer.removeSubrange(buffer.startIndex..<range.upperBound)
                 insideReasoning = firstTagIsOpener
+                dropsNextNewline = stripsTemplateSeparators
                 continue
             }
 
@@ -889,7 +1031,8 @@ public struct ReasoningParser: Sendable {
                 }
                 let longestTag = (openerSpellings + closerSpellings + literalOpeners)
                     .map(\.count).max() ?? 0
-                let safeTail = max(0, longestTag - 1)
+                // A newline directly before a tag may have to be dropped once the tag arrives.
+                let safeTail = max(0, longestTag - 1) + (stripsTemplateSeparators ? 1 : 0)
                 if buffer.count > safeTail {
                     let splitAt = buffer.index(buffer.endIndex, offsetBy: -safeTail)
                     let safe = String(buffer[..<splitAt])
@@ -988,6 +1131,22 @@ extension ReasoningParser {
                 endTag: "<channel|>",
                 startInReasoning: false,
                 stripStrayTags: false)
+        }
+
+        // MiniMax-M3 / M3.1: `<mm:think>…</mm:think>`. M3.1's template is adaptive: the generation prompt carries no
+        // reasoning prefix and the first generated token is the decision, `<mm:think>` (reasoning follows, closed by
+        // `</mm:think>`) or `</mm:think>` (answer directly). So the parser starts in content: `<mm:think>` opens the
+        // rail, and a leading `</mm:think>` is consumed as the close of an empty rail. A prompt that does end inside
+        // the rail (M3's enabled thinking mode prefills `<mm:think>`) is resolved by `forPrompt`. Plain `<think>` /
+        // `</think>` are accepted as aliases (vMLX's `minimax_m3` parser; observed in live M3 output).
+        if normalized == "minimax_m3" || normalized.hasPrefix("minimax_m3_") {
+            return ReasoningParser(
+                startTag: "<mm:think>",
+                endTag: "</mm:think>",
+                startInReasoning: false,
+                stripStrayTags: true,
+                startTagAliases: ["<think>"],
+                endTagAliases: ["</think>"])
         }
 
         // `glm_think_block` is the stamp GLM-5.3 bundles actually ship
@@ -1107,6 +1266,10 @@ extension ReasoningParser {
         }
 
         switch n {
+        case "ricursive":
+            // Ripple-65B: the template never opens `<think>`; the model does when it reasons.
+            return ReasoningParser(
+                startInReasoning: false, preservesQwenToolCallPayloads: true, stripsTemplateSeparators: true)
         case "qwen3", "qwen3_5", "qwen35", "qwen3_6", "qwen36":
             return ReasoningParser(
                 startInReasoning: true, preservesQwenToolCallPayloads: true)
@@ -1150,6 +1313,14 @@ extension ReasoningParser {
                 endTagAliases: ["</ifm|think_fast>", "</ifm|think_faster>"])
         case "none", "off", "disabled", "mistral", "gemma":
             return nil
+        case "inkling", "inkling2", "inkling2_loop", "inkling_channels":
+            // Channel-switched (see `drainInklingChannel`). The model opens every
+            // turn itself; the template has no generation prompt.
+            return ReasoningParser(
+                startTag: Self.inklingThinking,
+                endTag: Self.inklingEndMessage,
+                startInReasoning: false,
+                stripStrayTags: false)
         case "muse_glimmer", "muse-glimmer", "muse", "atem":
             // Muse Glimmer's turn is a recipient-channel envelope, observed
             // live off the real bundle:
@@ -1312,7 +1483,8 @@ extension ReasoningParser {
             // so three correct parser fixes changed nothing on the app.
             consumesRecipientHeaders: base.consumesRecipientHeaders,
             preservesXMLFunctionPayloads: base.preservesXMLFunctionPayloads,
-            preservesQwenToolCallPayloads: base.preservesQwenToolCallPayloads)
+            preservesQwenToolCallPayloads: base.preservesQwenToolCallPayloads,
+            stripsTemplateSeparators: base.stripsTemplateSeparators)
         if startInReasoning && parser.isHarmonyChannelParser {
             parser.insideHarmonyChannel = true
             parser.harmonyChannelIsReasoning = true
@@ -1403,6 +1575,18 @@ public func reasoningStampFromModelType(_ modelType: String?) -> String {
     let compact = normalized.replacingOccurrences(of: "_", with: "")
 
     if compact == "k2horizon" { return "k2_horizon" }
+
+    // Inkling-2 (`inkling2`, `inkling2_loop`): channel tokens, no think tags.
+    if compact.hasPrefix("inkling") { return "inkling" }
+
+    // Ripple-65B (`ricursive`): plain `<think>`/`</think>` text tokens that the model opens itself (the template ends at
+    // the assistant header). The parser starts in
+    // content and latches on an emitted `<think>`.
+    if compact == "ricursive" { return "ricursive" }
+
+    // MiniMax-M3 / M3.1 (`minimax_m3`, `minimax_m3_vl`): `<mm:think>` rail, not the M2 `<think>` one. Checked before
+    // the `minimax` think_xml prefix below.
+    if compact.hasPrefix("minimaxm3") { return "minimax_m3" }
 
     // Official Hunyuan v3 uses `:opensource`-suffixed think markers; the
     // dedicated stamp resolves to that parser (see `fromCapabilityName`).

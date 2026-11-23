@@ -1,6 +1,10 @@
 // Copyright © 2026 Apple Inc.
 
-import CryptoKit
+#if canImport(CryptoKit)
+    import CryptoKit
+#else
+    import Crypto
+#endif
 import Foundation
 import MLX
 import MLXLMCommon
@@ -292,11 +296,11 @@ private enum Qwen4ExpDTypeTrace {
             + " layer_output_dtypes=\(layerSummary)"
             + " mismatched_layers=\(mismatchSummary)"
             + " final_mixer=\(finalMixer) declared=\(declaredSummary)\n"
-        FileHandle.standardError.write(Data(message.utf8))
+        RuntimeDiagnostics.write(Data(message.utf8))
     }
 
     static func logHeadAudit(input: DType, rawLogits: DType, returnedLogits: DType) {
-        FileHandle.standardError.write(Data(
+        RuntimeDiagnostics.write(Data(
             ("[Qwen4Exp] live_dtype_head head_input=\(input) raw_logits=\(rawLogits)"
                 + " returned_logits=\(returnedLogits)\n").utf8))
     }
@@ -591,7 +595,7 @@ private enum Qwen4ExpCompiledMHC {
     private static func reportLocked() {
         guard !didReport else { return }
         didReport = true
-        FileHandle.standardError.write(Data(
+        RuntimeDiagnostics.write(Data(
             "[Qwen4Exp] compiled_mhc_decode=active shared_weight_inputs=true dtype=bfloat16\n".utf8))
     }
 
@@ -840,12 +844,18 @@ private final class Qwen4ExpGatedResidual: Module {
                 down.bits == injection.bits, down.mode == injection.mode,
                 down.scales.dtype == injection.scales.dtype,
                 downBiases.dtype == injectionBiases.dtype,
-                down.scales.dtype == downBiases.dtype
+                down.scales.dtype == downBiases.dtype,
+                WeightBacking.copyWouldReplace([down.weight, injection.weight])
             {
                 let weight = concatenated([down.weight, injection.weight], axis: 0)
                 let scales = concatenated([down.scales, injection.scales], axis: 0)
                 let biases = concatenated([downBiases, injectionBiases], axis: 0)
                 MLX.eval(weight, scales, biases)
+                // The fused projection must replace its source allocations.
+                // Prefill and exact-row consumers keep the original bytes as
+                // row views, rather than retaining a second permanent bank.
+                WeightBacking.rebindAsRows(
+                    [down, injection], weight: weight, scales: scales, biases: biases)
                 fusedInputProjection = .affine(
                     weight: weight, scales: scales, biases: biases,
                     groupSize: down.groupSize, bits: down.bits, mode: down.mode)
@@ -855,10 +865,22 @@ private final class Qwen4ExpGatedResidual: Module {
                 mixDown.bias == nil, injection.bias == nil,
                 mixDown.weight.dtype == injection.weight.dtype,
                 Array(mixDown.weight.shape.dropFirst())
-                    == Array(injection.weight.shape.dropFirst())
+                    == Array(injection.weight.shape.dropFirst()),
+                WeightBacking.copyWouldReplace([mixDown.weight, injection.weight])
             {
                 let weight = concatenated([mixDown.weight, injection.weight], axis: 0)
                 MLX.eval(weight)
+                let downRows = mixDown.weight.dim(0)
+                let injectionRows = injection.weight.dim(0)
+                _ = mixDown.update(
+                    parameters: ModuleParameters.unflattened([
+                        "weight": weight[0 ..< downRows]
+                    ]))
+                _ = injection.update(
+                    parameters: ModuleParameters.unflattened([
+                        "weight": weight[downRows ..< downRows + injectionRows]
+                    ]))
+                MLX.eval(mixDown.weight, injection.weight)
                 fusedInputProjection = .dense(weight: weight)
                 fusionKind = "dense"
             } else {
@@ -867,7 +889,7 @@ private final class Qwen4ExpGatedResidual: Module {
             Self.fusionDiagnosticLock.lock()
             if !Self.didReportInputFusion {
                 Self.didReportInputFusion = true
-                FileHandle.standardError.write(Data(
+                RuntimeDiagnostics.write(Data(
                     "[Qwen4Exp] fused_hyper_decode_input_projections=active kind=\(fusionKind) dtype=\(input.dtype)\n".utf8))
             }
             Self.fusionDiagnosticLock.unlock()
@@ -1028,7 +1050,7 @@ private final class Qwen4ExpPLE: Module {
             historyTraceCount < 8, let first = history.first
         {
             historyTraceCount += 1
-            FileHandle.standardError.write(Data(
+            RuntimeDiagnostics.write(Data(
                 ("[Qwen4ExpPLEHistory] sample=\(historyTraceCount)"
                     + " prior=\(Array(first.dropLast())) token=\(first.last ?? -1)\n").utf8))
             if Self.traceState, let cache {
@@ -1038,7 +1060,7 @@ private final class Qwen4ExpPLE: Module {
                     MLX.eval(result)
                     return result.item(Float.self)
                 }
-                FileHandle.standardError.write(Data(String(format:
+                RuntimeDiagnostics.write(Data(String(format:
                     "[Qwen4ExpPLEState] sample=%d offset=%d conv=%.9g recurrent=%.9g ple_conv=%.9g\n",
                     historyTraceCount, cache.offset,
                     magnitude(cache[0]), magnitude(cache[1]), magnitude(cache[3])).utf8))
@@ -1054,7 +1076,7 @@ private final class Qwen4ExpPLE: Module {
         let prefetch = Prefetch(
             table: table, batch: batch, length: length, history: history, rows: rows)
         if Self.profileHost, length == 1, hostProfileCount < 8 {
-            FileHandle.standardError.write(Data(String(format:
+            RuntimeDiagnostics.write(Data(String(format:
                 "[Qwen4ExpPLEProfile] prefetch_start token_read=%.3fms history=%.3fms hash=%.3fms rows=%d\n",
                 (tokenReadFinished - hostStarted) * 1000,
                 (historyFinished - tokenReadFinished) * 1000,
@@ -1090,7 +1112,7 @@ private final class Qwen4ExpPLE: Module {
             let arrayFinished = CFAbsoluteTimeGetCurrent()
             if Self.profileHost, length == 1, hostProfileCount < 8 {
                 hostProfileCount += 1
-                FileHandle.standardError.write(Data(String(format:
+                RuntimeDiagnostics.write(Data(String(format:
                     "[Qwen4ExpPLEProfile] sample=%d join_wait=%.3fms mlx_array=%.3fms rows=%d\n",
                     hostProfileCount,
                     (gatherFinished - gatherStarted) * 1000,
@@ -1608,7 +1630,7 @@ private final class Qwen4ExpDecoderLayer: Module {
             profileCount += 1
             let fields = timings.map { String(format: "%@=%.3fms", $0.0, $0.1) }
                 .joined(separator: " ")
-            FileHandle.standardError.write(Data(
+            RuntimeDiagnostics.write(Data(
                 ("[Qwen4ExpProfile] layer=\(layerIndex)"
                     + " sequence_length=\(inputIds.size) sample=\(profileCount)"
                     + " \(fields)\n").utf8))
@@ -2099,11 +2121,18 @@ public final class Qwen4Exp: Module, VLMModel, Qwen4ExpModelDirectoryConfigurabl
 
     /// JANGT trellis experts: the sub-2-bit port (K = 1 / 1.5 units, masked tail block for the 640-wide down input)
     /// changed the decoded expert outputs versus the earlier trellis kernels, so a prompt cache written by those
-    /// kernels must not restore into this runtime. Nil for affine and JANGH-only bundles (their keys are unchanged).
+    /// kernels must not restore into this runtime. Absent for affine and JANGH-only bundles.
     /// Bump only when the trellis decode semantics change, not for equivalent speedups.
     private let jangtCacheComputationIdentity: String?
 
-    public var cacheComputationIdentity: String? { jangtCacheComputationIdentity }
+    public var cacheComputationIdentity: String? {
+        // Earlier batched router scores could differ from AR. Typed post-answer
+        // snapshots retain that difference in KV/GDN/PLE state even after the
+        // router is repaired. Keep their arithmetic outside this namespace;
+        // the ordinary cache miss rebuilds state without deleting old records.
+        let router = "qwen4_exp:router-singleton-window-v1"
+        return jangtCacheComputationIdentity.map { "\(router);\($0)" } ?? router
+    }
 
     // QSA's raw indexer keys, GDN/PLE recurrent state and media RoPE delta are
     // persisted with the prefix. A forced tool-selection suffix does not alter
@@ -2178,10 +2207,13 @@ public final class Qwen4Exp: Module, VLMModel, Qwen4ExpModelDirectoryConfigurabl
         }
     }
 
-    public func prepare(_ input: LMInput, cache: [KVCache], windowSize: Int?) throws -> PrepareResult {
+    private func prepareText(
+        _ input: LMInput, cache: [KVCache], windowSize: Int?
+    ) throws -> PrepareResult {
         let inputIds = input.text.tokens
-
-        guard input.image != nil || input.video != nil else {
+        // MLX captures C++ evaluation errors. Check each chunk before advancing
+        // cache/progress; an outer scope only throws after prepare has finished.
+        return try withError { error -> PrepareResult in
             if cache.allSatisfy({ $0.offset == 0 }) { setRopeDelta(0, for: cache) }
             // Native MTP calls prepare directly, unlike the batch AR lane's
             // outer segmentation. Honor the same prefill budget here so a
@@ -2200,31 +2232,47 @@ public final class Qwen4Exp: Module, VLMModel, Qwen4ExpModelDirectoryConfigurabl
             if step > 0 {
                 while count - offset > step {
                     try Task.checkCancellation()
+                    try error.check()
                     let chunk = tokens[0..., offset..<(offset + step)]
                     if let primer {
                         let forward = textModel.forward(
                             chunk, cache: cache, positionOffset: ropeDelta(for: cache))
+                        try error.check()
                         primer.fold(hidden: forward.preMixer, tokens: chunk)
                     } else {
                         _ = forwardTokens(chunk, cache: cache)
                     }
+                    try error.check()
                     MLX.eval(cache)
+                    try error.check()
                     offset += step
                     CanonicalTextPrefillCheckpointReporter.reportQwen4ExpColdTextChunk(
                         input: input, cache: cache, chunkSize: step, completed: offset,
                         beganWithEmptyCache: beganWithEmptyCache)
+                    try error.check()
                     PrefillProgressReporter.reportCompletedUnits(offset)
                     MLX.Memory.clearCache()
                 }
             }
             try Task.checkCancellation()
+            try error.check()
             if let primer {
                 let tail = tokens[0..., offset...]
                 let forward = textModel.forward(tail, cache: cache, positionOffset: ropeDelta(for: cache))
+                try error.check()
                 primer.fold(hidden: forward.preMixer, tokens: tail)
+                try error.check()
                 return .logits(LMOutput(logits: projectToLogits(forward.mixed)))
             }
             return .logits(LMOutput(logits: forwardTokens(tokens[0..., offset...], cache: cache)))
+        }
+    }
+
+    public func prepare(_ input: LMInput, cache: [KVCache], windowSize: Int?) throws -> PrepareResult {
+        let inputIds = input.text.tokens
+
+        guard input.image != nil || input.video != nil else {
+            return try prepareText(input, cache: cache, windowSize: windowSize)
         }
 
         // Media arrived at a model that carries no vision tower. Refuse rather than embed the
@@ -2531,24 +2579,34 @@ public final class Qwen4Exp: Module, VLMModel, Qwen4ExpModelDirectoryConfigurabl
         var output: [String: MLXArray] = [:]
         output.reserveCapacity(weights.count)
         for (originalKey, originalValue) in weights {
-            if (originalKey.hasPrefix("mtp.") && mtp == nil)
-                || originalKey.contains("ngram_embedding.shards")
-                || originalKey.contains("ngram_heads_") || originalKey.contains("layer_multipliers")
+            var key = originalKey
+            var value = originalValue
+            // An mlx-vlm-style converter saves the module tree's own names,
+            // `language_model.model.*`, `language_model.lm_head`, `language_model.mtp.*`, with every
+            // value already through the reference sanitize: norms shifted, MTP fusion norms folded
+            // to `1 + weight`, conv weights in MLX layout. Its values are not transformed twice.
+            let converted = key.hasPrefix("language_model.model.")
+                || key.hasPrefix("language_model.mtp.") || key.hasPrefix("language_model.lm_head.")
+            if key.hasPrefix("model.language_model.") || key.hasPrefix("model.mtp.")
+                || key.hasPrefix("model.visual.")
+            {
+                key.removeFirst("model.".count)
+            } else if key.hasPrefix("language_model.model.") {
+                key.removeFirst("language_model.model.".count)
+                key = "language_model." + key
+            } else if converted {
+                key.removeFirst("language_model.".count)
+            }
+            if (key.hasPrefix("mtp.") && mtp == nil)
+                || key.contains("ngram_embedding.shards")
+                || key.contains("ngram_heads_") || key.contains("layer_multipliers")
             { continue }
             // No tower to receive them. A multimodal bundle loaded text-only still SHIPS its
             // vision weights; handing them to a module that was never built leaves keys with no
             // destination. Dropping them is what every other converted family does here, and it
             // mirrors the `mtp.` guard directly above — same idea, different lane.
             // The MODULE: a video-only instance HAS the tower and must keep its weights.
-            if !plan.builds(.visionTower), originalKey.hasPrefix("visual.") { continue }
-            var key = originalKey
-            var value = originalValue
-            if key.hasPrefix("model.language_model.") {
-                key.removeFirst("model.".count)
-            }
-            if key.hasPrefix("model.mtp.") {
-                key.removeFirst("model.".count)
-            }
+            if !plan.builds(.visionTower), key.hasPrefix("visual.") { continue }
             if key.hasPrefix("mtp."),
                 key.contains(".mlp.experts.gate_up_proj.")
             {
@@ -2579,15 +2637,22 @@ public final class Qwen4Exp: Module, VLMModel, Qwen4ExpModelDirectoryConfigurabl
             {
                 value = value.transposed(0, 2, 3, 4, 1)
             }
-            if key.hasSuffix(".conv1d.weight"), value.ndim == 3, value.dim(1) == 1 {
-                value = value.squeezed(axis: 1).transposed(1, 0)
-            }
+            // The PLE conv first, as in the reference: the generic rule below also matches its key.
+            // [C, 1, K] (official) and [C, K, 1] (MLX layout) both become [C, K].
             if key.hasSuffix(".ple.conv1d.weight"), value.ndim == 3 {
                 key = key.replacingOccurrences(of: ".ple.conv1d.weight", with: ".ple.conv1d_weight")
-                value = value.squeezed(axis: 1)
+                value = value.squeezed(axis: value.dim(1) == 1 ? 1 : 2)
             }
-            let normAlreadyShifted =
-                config.jangMetadata?.normConvention?.lowercased() == "runtime_plus1_applied"
+            // PyTorch's depthwise Conv1d stores [C, 1, K]; the GDN binds MLX's Conv1d, [C, K, 1].
+            // Same rule as Qwen35's sanitize, which owns that module, and as the reference.
+            if key.hasSuffix(".conv1d.weight"), value.ndim == 3, value.dim(-1) != 1 {
+                value = value.movedAxis(source: 2, destination: 1)
+            }
+            if converted, key.hasPrefix("mtp.pre_fc_norm_") {
+                value = (value.asType(.float32) - 1).asType(value.dtype)
+            }
+            let normAlreadyShifted = converted
+                || config.jangMetadata?.normConvention?.lowercased() == "runtime_plus1_applied"
             if !normAlreadyShifted,
                 key.contains("hc_norm.weight") || key.contains(".ple.norm_")
                     || key.contains(".q_norm.weight") || key.contains(".k_norm.weight")
@@ -2612,7 +2677,7 @@ public final class Qwen4Exp: Module, VLMModel, Qwen4ExpModelDirectoryConfigurabl
         let computeDType = config.declaredComputeDType.map(String.init(describing:))
             ?? "unresolved"
         let storageDTypes = affineMetadataDTypes.sorted().joined(separator: ",")
-        FileHandle.standardError.write(Data(
+        RuntimeDiagnostics.write(Data(
             "[Qwen4Exp] declared_compute_dtype=\(computeDType) affine_metadata_checkpoint_dtype=\(storageDTypes) affine_metadata_count=\(affineMetadataCount)\n".utf8))
 
         return output
@@ -2655,7 +2720,7 @@ extension Qwen4Exp: NativeMTPProposalHeadInstalling {
         // low-bit head copy (plus a ~1 GB transient dequantized peak) would
         // be pure waste. Stamping is unaffected; only the install is skipped.
         guard mtp != nil else {
-            FileHandle.standardError.write(Data(
+            RuntimeDiagnostics.write(Data(
                 "[ProposalHead] eligible bundle but no MTP module loaded — skipping proposal-head build\n".utf8))
             return
         }
@@ -2707,7 +2772,7 @@ extension Qwen4Exp: NativeMTPProposalHeadInstalling {
             hasher.update(data: data)
             return hasher.finalize().map { String(format: "%02x", $0) }.joined()
         }
-        FileHandle.standardError.write(Data(
+        RuntimeDiagnostics.write(Data(
             ("[ProposalHead] digest origin=\(origin) "
                 + "weight=\(digest(copy.weight)) "
                 + "scales=\(digest(copy.scales)) "
@@ -2724,7 +2789,7 @@ extension Qwen4Exp: NativeMTPProposalHeadInstalling {
         let inFeatures = head.scales.dim(1) * head.groupSize
         let outFeatures = head.scales.dim(0)
         func rejected(_ why: String) -> QuantizedLinear? {
-            FileHandle.standardError.write(Data(
+            RuntimeDiagnostics.write(Data(
                 "[ProposalHead] calibrated sidecar shape rejected (\(why)) — RTN rebuild\n".utf8))
             return nil
         }

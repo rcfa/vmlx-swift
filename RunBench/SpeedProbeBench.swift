@@ -9,8 +9,9 @@
 // Arms (BENCH_SPEED_ARM):
 //   default   bundle-aware production selection (the default when no arm is supplied)
 //   ar        explicit plain decode
-//   adaptive  .nativeMTP(depth: BENCH_SPEED_MTP_DEPTH=3) + .adaptive(maximumDepth: BENCH_SPEED_MTP_MAX=5),
-//             the Osaurus app's Adaptive mapping (MLXBatchAdapter.nativeMTPDepthPolicy)
+//   adaptive  .nativeMTP(depth: BENCH_SPEED_MTP_DEPTH=3) + .adaptiveToRuntimeCeiling (the runtime's top rung),
+//             the Osaurus app's Adaptive mapping (MLXBatchAdapter.nativeMTPDepthPolicy); BENCH_SPEED_MTP_MAX=<n>
+//             limits the ladder to n (diagnostic)
 //   dflash2   .dflash2(drafterPath: <bundle>/dflash2, blockSize: BENCH_SPEED_DFLASH2_BLOCK or nil)
 // Output: one JSON line per prompt plus a summary (medians) to stdout and BENCH_SPEED_OUT.
 
@@ -97,6 +98,17 @@ func runSpeedProbe(modelPath: String) async throws {
             format: "[BENCH_SPEED] arm=%@ model=%@ load=%.1fs type=%@", arm,
             modelDir.lastPathComponent,
             CFAbsoluteTimeGetCurrent() - loadStart, String(describing: type(of: context.model))))
+    // BENCH_SPEED_MEMORY_LIMIT_GB / BENCH_SPEED_CACHE_LIMIT_GB: MLX allocator limits set after the load, to reproduce a
+    // host's policy (Osaurus caps the cache at 8 GiB; an explicit memory limit below the resident weights makes every
+    // allocation wait on in-flight work). Printed with the limits the load left in place.
+    print("[BENCH_SPEED_LIMITS] after load: memoryLimit=\(MLX.Memory.memoryLimit) cacheLimit=\(MLX.Memory.cacheLimit)")
+    if let gb = env["BENCH_SPEED_MEMORY_LIMIT_GB"].flatMap(Double.init) {
+        MLX.Memory.memoryLimit = Int(gb * 1_073_741_824)
+    }
+    if let gb = env["BENCH_SPEED_CACHE_LIMIT_GB"].flatMap(Double.init) {
+        MLX.Memory.cacheLimit = Int(gb * 1_073_741_824)
+    }
+    print("[BENCH_SPEED_LIMITS] in use: memoryLimit=\(MLX.Memory.memoryLimit) cacheLimit=\(MLX.Memory.cacheLimit)")
     nonisolated(unsafe) let ctx = context
     // BENCH_SPEED_CACHE_DIR=<dir>: a disk-backed prefix cache (what the app runs), so multi-turn
     // smokes exercise restore.
@@ -117,25 +129,37 @@ func runSpeedProbe(modelPath: String) async throws {
             maxTokens: budget, temperature: 0, topP: 1, topK: 0, minP: 0,
             repetitionPenalty: nil)
         // BENCH_SPEED_PREFILL_STEP=<n>: prefill chunk size (the app's per-request prefillStepSize).
-        if let step = env["BENCH_SPEED_PREFILL_STEP"].flatMap(Int.init), step > 0 { p.prefillStepSize = step }
-        // BENCH_SPEED_SAMPLED=1: the bundle sampler the app sends by default (Qwen3.8: T 1.0, top_p 0.95, top_k 20).
+        if let step = env["BENCH_SPEED_PREFILL_STEP"].flatMap(Int.init), step > 0 {
+            p.prefillStepSize = step
+        }
+        // Explicit diagnostic sampler, not a claim about every bundle's defaults.
+        // BENCH_SPEED_SAMPLED=1 selects T1, top_p .95, top_k20, with a fixed seed.
         if env["BENCH_SPEED_SAMPLED"] == "1" {
             p.temperature = 1.0
             p.topP = 0.95
             p.topK = 20
             p.randomSeed = UInt64(env["BENCH_SPEED_SEED"] ?? "1234") ?? 1234
         }
+        // BENCH_SPEED_TEMP=<t>: plain temperature sampling at t (top_p 1, top_k 0, fixed seed), the shape Osaurus
+        // sends (e.g. 0.4); combine with BENCH_SPEED_THINKING=1 to reproduce an app thinking request.
+        if let t = env["BENCH_SPEED_TEMP"].flatMap(Float.init) {
+            p.temperature = t
+            p.topP = 1
+            p.topK = 0
+            p.randomSeed = UInt64(env["BENCH_SPEED_SEED"] ?? "1234") ?? 1234
+        }
         switch arm {
         case "default":
             p.draftStrategy = defaultStrategy
             if defaultStrategy?.nativeMTPDepth != nil {
-                p.nativeMTPDepthPolicy = .adaptive(maximumDepth: 5)
+                p.nativeMTPDepthPolicy = .adaptiveToRuntimeCeiling
             }
         case "adaptive":
             let depth = Int(env["BENCH_SPEED_MTP_DEPTH"] ?? "3") ?? 3
-            let maxDepth = Int(env["BENCH_SPEED_MTP_MAX"] ?? "5") ?? 5
             p.draftStrategy = .nativeMTP(depth: depth)
-            p.nativeMTPDepthPolicy = .adaptive(maximumDepth: maxDepth)
+            p.nativeMTPDepthPolicy =
+                env["BENCH_SPEED_MTP_MAX"].flatMap(Int.init).map { .adaptive(maximumDepth: $0) }
+                ?? .adaptiveToRuntimeCeiling
         case "dflash2":
             let block = env["BENCH_SPEED_DFLASH2_BLOCK"].flatMap(Int.init)
             p.draftStrategy = .dflash2(
@@ -158,20 +182,32 @@ func runSpeedProbe(modelPath: String) async throws {
         var ttft: Double
         var text: String
         var chunkRate: Double
+        var reasoning: String
+        var stop: String
+        var unclosedReasoning: Bool
+        var promptSeconds: Double
+        var generationSeconds: Double
+        var startUnix: Double
+        var endUnix: Double
     }
     // BENCH_SPEED_FILLER=<n>: prepend ~n tokens of unrelated context (in-app prompts carry a
     // ~2.5k-token agent system prompt + history; decode cost depends on context length).
     let filler: String = {
         guard let n = Int(env["BENCH_SPEED_FILLER"] ?? ""), n > 0 else { return "" }
-        let sentence = "The archive records list shipping manifests, tide tables and lighthouse logs. "
-        return "Background notes (ignore):\n" + String(repeating: sentence, count: max(1, n / 14)) + "\n\n"
+        let sentence =
+            "The archive records list shipping manifests, tide tables and lighthouse logs. "
+        return "Background notes (ignore):\n" + String(repeating: sentence, count: max(1, n / 14))
+            + "\n\n"
     }()
     func run(_ prompt: String, _ budget: Int, cat: String) async throws -> Row {
         var input = UserInput(prompt: filler + prompt)
-        input.additionalContext = ["enable_thinking": false]
+        input.additionalContext = ["enable_thinking": env["BENCH_SPEED_THINKING"] == "1"]
+        let startUnix = Date().timeIntervalSince1970
         let t0 = CFAbsoluteTimeGetCurrent()
         let prepared = try await ctx.processor.prepare(input: input)
         nonisolated(unsafe) let send = prepared
+        let activeBefore = MLX.Memory.activeMemory
+        MLX.Memory.peakMemory = 0
         let stream = await engine.generate(input: send, parameters: params(budget))
         var first: Double?
         var last = 0.0
@@ -179,6 +215,10 @@ func runSpeedProbe(modelPath: String) async throws {
         var genTime = 0.0
         var mtp = ""
         var text = ""
+        var reasoning = ""
+        var stop = "missing_completion_info"
+        var unclosedReasoning = false
+        var promptSeconds = 0.0
         for await ev in stream {
             switch ev {
             case .chunk(let c):
@@ -190,13 +230,17 @@ func runSpeedProbe(modelPath: String) async throws {
                 let now = CFAbsoluteTimeGetCurrent()
                 if first == nil { first = now }
                 last = now
-                text += r
+                reasoning += r
             case .info(let info):
                 tokens = info.generationTokenCount
                 genTime = info.generateTime
+                stop = String(describing: info.stopReason)
+                unclosedReasoning = info.unclosedReasoning
+                promptSeconds = info.promptTime
                 if let d = info.dflash2Stats {
                     mtp = String(
-                        format: "dflash2 verify=%d acceptLen=%.2f drafted=%d accepted=%d arFallback=%d widths=%@",
+                        format:
+                            "dflash2 verify=%d acceptLen=%.2f drafted=%d accepted=%d arFallback=%d widths=%@",
                         d.verifyCalls, d.acceptanceLength, d.draftedTokens, d.acceptedTokens,
                         d.autoregressiveFallbackTokens,
                         d.widthCycles.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }
@@ -220,9 +264,15 @@ func runSpeedProbe(modelPath: String) async throws {
         let span = (first.map { last - $0 }) ?? 0
         let chunkRate = span > 0.2 && tokens > 1 ? Double(tokens - 1) / span : 0
         if !mtp.isEmpty { print("[BENCH_SPEED_MTP] \(cat) \(mtp)") }
+        // Request transient: MLX peak above the active memory before the request (weights + earlier caches).
+        print(String(format: "[BENCH_SPEED_TRANSIENT] %@ peak_above_active_gib=%.2f cache_gib=%.2f", cat,
+                     Double(MLX.Memory.peakMemory - activeBefore) / 1_073_741_824,
+                     Double(MLX.Memory.cacheMemory) / 1_073_741_824))
         var row = Row(
             cat: cat, tokens: tokens, decode: decode, ttft: (first ?? t0) - t0, text: text,
-            chunkRate: chunkRate)
+            chunkRate: chunkRate, reasoning: reasoning, stop: stop,
+            unclosedReasoning: unclosedReasoning, promptSeconds: promptSeconds,
+            generationSeconds: genTime, startUnix: startUnix, endUnix: Date().timeIntervalSince1970)
         row.promptTokens = send.text.tokens.size
         return row
     }
@@ -234,19 +284,29 @@ func runSpeedProbe(modelPath: String) async throws {
         for path in images.split(separator: ",").map(String.init) {
             guard let image = CIImage(contentsOf: URL(fileURLWithPath: path)) else { continue }
             var input = UserInput(
-                prompt: "What is the background color of this image and which digit is shown? Then write two sentences about that color.",
+                prompt:
+                    "What is the background color of this image and which digit is shown? Then write two sentences about that color.",
                 images: [.ciImage(image)])
             input.additionalContext = ["enable_thinking": false]
+            // BENCH_SPEED_IMAGE_EFFORT: a declared reasoning-effort level (e.g. `none` for Inkling-2,
+            // whose reasoning is an effort ladder rather than an on/off kwarg).
+            if let effort = env["BENCH_SPEED_IMAGE_EFFORT"] {
+                input.additionalContext?["reasoning_effort"] = effort
+            }
             let t0 = CFAbsoluteTimeGetCurrent()
             let prepared = try await ctx.processor.prepare(input: input)
             nonisolated(unsafe) let send = prepared
-            let stream = await engine.generate(input: send, parameters: params(120))
+            let stream = await engine.generate(
+                input: send, parameters: params(Int(env["BENCH_SPEED_IMAGE_TOKENS"] ?? "") ?? 120))
             var text = ""
+            var reasoning = ""
             var tokens = 0
             var genTime = 0.0
             var first: Double?
             for await ev in stream {
                 switch ev {
+                case .reasoning(let r):
+                    reasoning += r
                 case .chunk(let c):
                     if first == nil { first = CFAbsoluteTimeGetCurrent() }
                     text += c
@@ -256,11 +316,12 @@ func runSpeedProbe(modelPath: String) async throws {
                 default: break
                 }
             }
-            print(String(
-                format: "[BENCH_SPEED_IMAGE] %@ tokens=%d decode_tok_s=%.2f ttft=%.2f text=%@",
-                URL(fileURLWithPath: path).lastPathComponent, tokens,
-                genTime > 0 ? Double(tokens) / genTime : 0, (first ?? t0) - t0,
-                String(reflecting: String(text.prefix(160)))))
+            print(
+                String(
+                    format: "[BENCH_SPEED_IMAGE] %@ tokens=%d decode_tok_s=%.2f ttft=%.2f reasoning_chars=%d text=%@",
+                    URL(fileURLWithPath: path).lastPathComponent, tokens,
+                    genTime > 0 ? Double(tokens) / genTime : 0, (first ?? t0) - t0, reasoning.count,
+                    String(reflecting: String(text.prefix(160)))))
         }
         // Two-turn conversation: image turn, then a text follow-up with the image in history.
         if let first = images.split(separator: ",").first,
@@ -271,7 +332,10 @@ func runSpeedProbe(modelPath: String) async throws {
             for turn in 0 ..< 2 {
                 var chat: [Chat.Message] = [.user(q1, images: [.ciImage(image)])]
                 if turn == 1 {
-                    chat += [.assistant(answer), .user("Translate your sentence into French and German.")]
+                    chat += [
+                        .assistant(answer),
+                        .user("Translate your sentence into French and German."),
+                    ]
                 }
                 var input = UserInput(chat: chat)
                 input.additionalContext = ["enable_thinking": false]
@@ -295,10 +359,12 @@ func runSpeedProbe(modelPath: String) async throws {
                     }
                 }
                 if turn == 0 { answer = text }
-                print(String(
-                    format: "[BENCH_SPEED_CONV] turn=%d tokens=%d decode_tok_s=%.2f ttft=%.2f text=%@",
-                    turn + 1, tokens, genTime > 0 ? Double(tokens) / genTime : 0,
-                    (first ?? t0) - t0, String(reflecting: String(text.prefix(200)))))
+                print(
+                    String(
+                        format:
+                            "[BENCH_SPEED_CONV] turn=%d tokens=%d decode_tok_s=%.2f ttft=%.2f text=%@",
+                        turn + 1, tokens, genTime > 0 ? Double(tokens) / genTime : 0,
+                        (first ?? t0) - t0, String(reflecting: String(text.prefix(200)))))
             }
         }
         return
@@ -307,8 +373,10 @@ func runSpeedProbe(modelPath: String) async throws {
     // history. Run with and without BENCH_SPEED_CACHE_DIR to separate "restored prefix" from "history content".
     if env["BENCH_SPEED_PROSECONV"] == "1" {
         _ = try await run("Say hi.", 16, cat: "warmup")
-        let q1 = "Write a 400-word essay on how the printing press changed European society. Plain prose, no headings."
-        let q2 = "Now write a 400-word essay on how the steam engine changed daily life. Plain prose, no headings."
+        let q1 =
+            "Write a 400-word essay on how the printing press changed European society. Plain prose, no headings."
+        let q2 =
+            "Now write a 400-word essay on how the steam engine changed daily life. Plain prose, no headings."
         var answer = ""
         for turn in 0 ..< 2 {
             var chat: [Chat.Message] = [.user(q1)]
@@ -335,10 +403,12 @@ func runSpeedProbe(modelPath: String) async throws {
                 }
             }
             if turn == 0 { answer = text }
-            print(String(
-                format: "[BENCH_SPEED_PROSECONV] turn=%d tokens=%d decode_tok_s=%.2f ttft=%.2f text=%@",
-                turn + 1, tokens, genTime > 0 ? Double(tokens) / genTime : 0,
-                (first ?? t0) - t0, String(reflecting: String(text.prefix(160)))))
+            print(
+                String(
+                    format:
+                        "[BENCH_SPEED_PROSECONV] turn=%d tokens=%d decode_tok_s=%.2f ttft=%.2f text=%@",
+                    turn + 1, tokens, genTime > 0 ? Double(tokens) / genTime : 0,
+                    (first ?? t0) - t0, String(reflecting: String(text.prefix(160)))))
         }
         return
     }
@@ -346,6 +416,7 @@ func runSpeedProbe(modelPath: String) async throws {
     var summary: [String: [Double]] = [:]
     var lines: [String] = []
     var texts: [String] = []
+    var reasoningTexts: [String] = []
     // BENCH_SPEED_CATS=prose,code — run a subset (short runs from a cool start; see the handoff's clock notes).
     let selected = env["BENCH_SPEED_CATS"].map { Set($0.split(separator: ",").map(String.init)) }
     for (cat, prompts) in speedPrompts where selected?.contains(cat) ?? true {
@@ -353,14 +424,27 @@ func runSpeedProbe(modelPath: String) async throws {
             let r = try await run(prompt, maxTokens, cat: cat)
             summary[cat, default: []].append(r.decode)
             let preview = String(r.text.prefix(80)).replacingOccurrences(of: "\n", with: "\\n")
+            let record: [String: Any] = [
+                "cat": cat, "tokens": r.tokens, "decode_tok_s": r.decode,
+                "chunk_tok_s": r.chunkRate, "ttft": r.ttft, "prompt_tokens": r.promptTokens,
+                "prefill_tok_s": r.ttft > 0 ? Double(r.promptTokens) / r.ttft : 0,
+                "prefill_rate_source": "prompt_tokens_over_ttft_including_prepare",
+                "engine_prompt_tok_s": r.promptSeconds > 0
+                    ? Double(r.promptTokens) / r.promptSeconds : 0,
+                "engine_prompt_seconds": r.promptSeconds,
+                "generation_seconds": r.generationSeconds,
+                "start_unix": r.startUnix, "end_unix": r.endUnix,
+                "stop": r.stop, "unclosed_reasoning": r.unclosedReasoning,
+                "visible_chars": r.text.count, "reasoning_chars": r.reasoning.count,
+                "thinking_control": "explicit_off_diagnostic", "preview": preview,
+            ]
             let line = String(
-                format:
-                    "{\"cat\":\"%@\",\"tokens\":%d,\"decode_tok_s\":%.2f,\"chunk_tok_s\":%.2f,\"ttft\":%.3f,\"prompt_tokens\":%d,\"prefill_tok_s\":%.1f,\"preview\":%@}",
-                cat, r.tokens, r.decode, r.chunkRate, r.ttft, r.promptTokens,
-                r.ttft > 0 ? Double(r.promptTokens) / r.ttft : 0, String(reflecting: preview))
+                decoding: try JSONSerialization.data(
+                    withJSONObject: record, options: [.sortedKeys]), as: UTF8.self)
             print("[BENCH_SPEED_ROW] " + line)
             lines.append(line)
             texts.append(r.text)
+            reasoningTexts.append(r.reasoning)
         }
     }
     func median(_ v: [Double]) -> Double {
@@ -377,6 +461,11 @@ func runSpeedProbe(modelPath: String) async throws {
         // Full generated texts in prompt order (greedy identity check across arms).
         let data = try JSONSerialization.data(withJSONObject: texts, options: [.prettyPrinted])
         try data.write(to: URL(fileURLWithPath: textOut))
+    }
+    if let reasoningOut = env["BENCH_SPEED_REASONING_OUT"] {
+        let data = try JSONSerialization.data(
+            withJSONObject: reasoningTexts, options: [.prettyPrinted])
+        try data.write(to: URL(fileURLWithPath: reasoningOut))
     }
     if let out = env["BENCH_SPEED_OUT"] {
         try (lines + ["{\"summary\": {\(med)}}"]).joined(separator: "\n").write(

@@ -108,7 +108,7 @@ private func debugLogReasoningPromptTail(
         .replacingOccurrences(of: "\r", with: "\\r")
     let line = "[vmlx] reasoning promptTail path=\(path) model=\(modelName) tail=\(escaped)\n"
     if let data = line.data(using: .utf8) {
-        FileHandle.standardError.write(data)
+        RuntimeDiagnostics.write(data)
     }
 }
 
@@ -147,12 +147,12 @@ private func debugDumpReasoningPrompt(
         try body.write(to: url, atomically: true, encoding: .utf8)
         let line = "[vmlx] reasoning promptDump path=\(path) model=\(modelName) file=\(url.path)\n"
         if let data = line.data(using: .utf8) {
-            FileHandle.standardError.write(data)
+            RuntimeDiagnostics.write(data)
         }
     } catch {
         let line = "[vmlx] reasoning promptDump failed path=\(path) model=\(modelName) error=\(error.localizedDescription)\n"
         if let data = line.data(using: .utf8) {
-            FileHandle.standardError.write(data)
+            RuntimeDiagnostics.write(data)
         }
     }
 }
@@ -537,6 +537,11 @@ public actor BatchEngine {
             )
             return cancelledBatchStream(promptTokenCount: input.text.tokens.size)
         }
+        if parameters.draftStrategy?.usesDSpark == true {
+            // dSpark is a speed-only strategy (exact for greedy and sampled requests) whose cycle owns
+            // the target cache; a shared batched slot decodes the request autoregressively instead.
+            parameters.draftStrategy = nil
+        }
 
         let (stream, continuation) = AsyncStream<BatchGeneration>.makeStream()
         let promptTail = _decodePromptTail(
@@ -550,12 +555,6 @@ public actor BatchEngine {
             tokenizer: context.tokenizer,
             modelName: context.configuration.name,
             path: "BatchEngine.submit")
-        if let floor = MinimumReasoningFloor.armIfNeeded(
-            input: input, tokenizer: context.tokenizer, promptTail: promptTail)
-        {
-            parameters.initialSuppressTokens = [floor.closeTokenID]
-            parameters.initialSuppressCount = floor.tokenCount
-        }
         // Upper bound. Armed by the process-global VMLX_REASONING_BUDGET env
         // (which wins) or a caller's per-request
         // `requestedReasoningBudgetTokens`; inert when neither asks, so this
@@ -691,12 +690,6 @@ public actor BatchEngine {
             tokenizer: tokenizer,
             modelName: context.configuration.name,
             path: "BatchEngine.generate")
-        if let floor = MinimumReasoningFloor.armIfNeeded(
-            input: input, tokenizer: tokenizer, promptTail: promptTail)
-        {
-            parameters.initialSuppressTokens = [floor.closeTokenID]
-            parameters.initialSuppressCount = floor.tokenCount
-        }
         // `generate` is the path the app's single-request chat actually takes
         // (via `startSoloFastPath`), so arming only in `submit` left the
         // ceiling inert for every GUI turn — verified live: env set on the
@@ -747,23 +740,45 @@ public actor BatchEngine {
                 parameters: parameters,
                 promptTail: promptTail)
         }
-        if parameters.draftStrategy?.usesDFlash2 == true,
-            DFlash2TokenIterator.unservableReason(parameters, input: input, model: context.model) == nil
-        {
+        // dSpark runs inside TokenIterator on the solo path (its verify/restore cycle owns the target
+        // cache). With another request in flight it decodes as an ordinary batched AR slot: same
+        // tokens, no speculation.
+        if parameters.draftStrategy?.usesDSpark == true {
             if canStartExclusiveSoloPath {
                 return startSoloFastPath(
                     input: input,
                     parameters: parameters,
                     promptTail: promptTail)
             }
-            // Another request owns the engine (continuous batching > 1: a spawned subagent, a parallel
-            // delegation). The drafter is a separate model and the target is untouched, so this request
-            // decodes as an ordinary batched AR slot instead of being cancelled (it was: the second of two
-            // concurrent requests on a DFlash 2 / DSpark model failed outright).
             Self.logger.notice(
-                "BatchEngine.generate DFlash 2 request decodes autoregressively: the engine is serving another request and drafting is an exclusive solo path."
+                "BatchEngine.generate dSpark request decodes autoregressively: the engine is serving another request and drafting is an exclusive solo path."
             )
             parameters.draftStrategy = nil
+        }
+        if parameters.draftStrategy?.usesDFlash2 == true {
+            if let reason = DFlash2TokenIterator.unservableReason(
+                parameters, input: input, model: context.model)
+            {
+                // The raw batch path intentionally rejects draft strategies.
+                // Clear an ineligible optimization before handing it the AR
+                // request, preserving media preparation and every sampler field.
+                Self.logger.notice(
+                    "BatchEngine.generate ineligible DFlash 2 request decodes autoregressively: \(reason, privacy: .public)."
+                )
+                parameters.draftStrategy = nil
+            } else if canStartExclusiveSoloPath {
+                return startSoloFastPath(
+                    input: input,
+                    parameters: parameters,
+                    promptTail: promptTail)
+            } else {
+                // Another request owns the engine. Drafting is exclusive;
+                // ordinary batched decode still serves this request.
+                Self.logger.notice(
+                    "BatchEngine.generate DFlash 2 request decodes autoregressively: the engine is serving another request and drafting is an exclusive solo path."
+                )
+                parameters.draftStrategy = nil
+            }
         }
         // Block-diffusion models (e.g. diffusion_gemma) generate whole
         // canvases via denoising and cannot share batched decode slots.
@@ -1113,7 +1128,7 @@ public actor BatchEngine {
                         let now = Date()
                         let sinceToken = lastTokenAt.map { now.timeIntervalSince($0) } ?? -1
                         let sincePump = lastPumpAt.map { now.timeIntervalSince($0) } ?? -1
-                        FileHandle.standardError.write(Data(
+                        RuntimeDiagnostics.write(Data(
                             ("[vmlx][gen/info-gap] sinceLastToken=\(sinceToken)s "
                                 + "sinceLastEmittedText=\(sincePump)s "
                                 + "tokens=\(generatedTokenCount)\n").utf8))
@@ -1523,7 +1538,7 @@ public actor BatchEngine {
                 case .info:
                     if gapTrace {
                         let gap = lastTextAt.map { Date().timeIntervalSince($0) } ?? -1
-                        FileHandle.standardError.write(Data(
+                        RuntimeDiagnostics.write(Data(
                             ("[vmlx][solo/info-gap] sinceLastText=\(gap)s "
                                 + "textEvents=\(textEvents)\n").utf8))
                     }
@@ -1820,7 +1835,7 @@ public actor BatchEngine {
         MemoryStageTrace.log("batch-idle-payloads-released", tokens: 0,
                              detail: "slots=0 writerPayloadsReleased=true")
         if ProcessInfo.processInfo.environment["VMLX_CACHE_FETCH_TRACE"] == "1" {
-            FileHandle.standardError.write(Data(
+            RuntimeDiagnostics.write(Data(
                 "[vmlx][cache/idle-purge] slots=0 writerPayloadsReleased=true\n".utf8))
         }
     }
@@ -2060,6 +2075,8 @@ public actor BatchEngine {
 
     /// Run one scheduling step: prefill pending slots, then batch-decode active slots.
     private func step() {
+        // Keep MLX's scheduling limit above the slots' resident working set (`SchedulingMemoryFloor`).
+        SchedulingMemoryFloor.observe()
         // Phase 1: Process one prefill chunk per slot that's still prefilling.
         // Prefill is done sequentially per slot (each chunk is large, batching
         // prefill chunks of different lengths wastes compute on padding).
@@ -2121,6 +2138,12 @@ public actor BatchEngine {
         // misses. RotatingKVCache is still skipped because its sliding-window
         // semantics are incompatible with partial restore.
         var inputForPrepare = slot.originalInput
+        // Aligned prefill: the same plan with or without a coordinator (see TokenIterator).
+        slot.alignedPrefillPlan = AlignedPrefill.plan(
+            model: context.model, cache: slot.cache, promptTokenIds: slot.cachePromptTokenIds,
+            cachePrefixTokenCounts: slot.originalInput.cachePrefixTokenCounts,
+            generationPromptSuffix: cacheCoordinator?.genPromptSuffixTokens ?? [],
+            prefillStepSize: slot.prefillStepSize)
         // SLIDING-1: legacy `!hasRotatingCache` guard removed — v2 schema
         // round-trips ring buffer + 5-tuple metaState via `.rotating`
         // LayerKind. Sliding-window models (Gemma3/Gemma4 SWA, Mistral4
@@ -2179,9 +2202,12 @@ public actor BatchEngine {
                     chainId: slot.parameters.cacheChainId,
                     mediaIndependentPrefix: saltPlan.mediaIndependentPrefix)
                 if case .hit(
-                    let matchedTokens, let remaining, let detail, let blocks,
+                    let fetchedMatchedTokens, let fetchedRemaining, let detail, let blocks,
                     let ssmStates, let diskArrays) = result
                 {
+                    // An aligned-prefill restore may keep fewer rows than the entry held (below).
+                    var matchedTokens = fetchedMatchedTokens
+                    var remaining = fetchedRemaining
                     var restored = false
                     var retainedDiskRestore = false
                     var restoredTokenCount = 0
@@ -2288,7 +2314,7 @@ public actor BatchEngine {
                             Self.logger.info(
                                 "Cache \(detail.rawValue) hit for slot \(slot.id): restored \(diskRestored) tokens from disk, prefilling \(remaining.count) remaining"
                             )
-                        } else if detail == .disk {
+                        } else if detail.isDiskTierEntry {
                             coordinator.reportDiskRestoreRejected(
                                 tokens: tokenIds, boundary: matchedTokens,
                                 mediaSalt: slot.mediaSalt,
@@ -2305,7 +2331,7 @@ public actor BatchEngine {
                             slot.cache, matchedTokens: matchedTokens,
                             restoredTokens: restoredTokenCount, detail: detail.rawValue)
                     {
-                        if detail == .disk {
+                        if detail.isDiskTierEntry {
                             coordinator.reportDiskRestoreRejected(
                                 tokens: tokenIds, boundary: matchedTokens,
                                 mediaSalt: slot.mediaSalt,
@@ -2316,6 +2342,20 @@ public actor BatchEngine {
                         retainedDiskRestore = false
                         slot.cache = context.model.newCache(parameters: slot.parameters)
                         inputForPrepare = slot.originalInput
+                    }
+                    // Aligned prefill: keep only what a cold prefill of this request also ends a chunk at; none means
+                    // a whole-prompt prefill, exactly as a miss (see TokenIterator).
+                    if restored, let plan = slot.alignedPrefillPlan {
+                        let reuse = AlignedPrefill.alignRestoredPrefix(
+                            slot.cache, matchedTokens: matchedTokens, plan: plan, detail: detail.rawValue)
+                        if reuse > 0 {
+                            matchedTokens = reuse
+                            remaining = Array(tokenIds.dropFirst(reuse))
+                        } else {
+                            restored = false
+                            slot.cache = context.model.newCache(parameters: slot.parameters)
+                            inputForPrepare = slot.originalInput
+                        }
                     }
                     if restored {
                         if usesPostPrepareAlias {
@@ -2619,7 +2659,7 @@ public actor BatchEngine {
             chainId: slot.parameters.cacheChainId,
             isResumeBoundary: true)
         if ProcessInfo.processInfo.environment["VMLX_CACHE_FETCH_TRACE"] == "1" {
-            FileHandle.standardError.write(Data(
+            RuntimeDiagnostics.write(Data(
                 "[vmlx][cache/store] label=disk-backed-safe-prompt-boundary-prefill count=\(tokens.count)\n".utf8))
         }
         // This includes admitted in-flight stores; durability is reported by
@@ -2635,6 +2675,8 @@ public actor BatchEngine {
         error: ErrorBox
     ) throws {
         var slot = initialSlot ?? activeSlots[slotIndex]
+        // Aligned prefill: the model's prepare reads the plan from the caches it prefills (cold, restored or rebuilt).
+        AlignedPrefill.install(slot.alignedPrefillPlan, into: slot.cache)
 
         // Alignment after preparation does not prove that a warm restore used
         // the same partition as cold prefill. Only a genuinely cold start can
@@ -2739,21 +2781,32 @@ public actor BatchEngine {
                     // was decomposed. Splitting the prefill at the boundary and
                     // capturing the live state makes the turn's own forward pass
                     // the only forward pass.
+                    // A validated media restore leaves the historical payload in
+                    // originalInput while the prepared suffix can be text-only.
+                    // Only split that suffix; post-prepare cache keys still need
+                    // their existing model-specific preparation path.
                     let hybridBoundarySplit: Int? = {
                         guard cacheCoordinator?.isHybrid == true,
                             cacheCoordinator?.canPersistBoundaries == true,
                             slot.originalInput.cachePromptIntent != .auxiliary,
-                            !slot.originalInput.hasMediaContent,
+                            !inputForPrepare.hasMediaContent,
+                            !slot.originalInput.requiresPostPrepareCacheKey,
                             slot.diskSeedSnapshot == nil
                         else { return nil }
                         let fullLen = slot.cachePromptTokenIds.count
                         let remainingLen = inputForPrepare.text.tokens.size
                         let processed = fullLen - remainingLen
                         guard processed >= 0 else { return nil }
+                        // Capture the same boundary finalization will publish.
+                        // Media processors can omit canonical history counts;
+                        // the existing template suffix still proves that target.
                         guard
-                            let boundary = slot.originalInput.cachePrefixTokenCounts
-                                .filter({ $0 > processed && $0 < fullLen })
-                                .max()
+                            let boundary = TokenIterator.hybridStripBoundaryIndex(
+                                coordinator: cacheCoordinator,
+                                promptTokenIds: slot.cachePromptTokenIds,
+                                input: slot.originalInput,
+                                cache: slot.cache),
+                            boundary > processed
                         else { return nil }
                         let split = boundary - processed
                         return (split > 0 && split < remainingLen) ? split : nil
@@ -2873,7 +2926,7 @@ public actor BatchEngine {
                         canonicalChunkSize: canonicalPrefillStart && consumed % chunkSize == 0
                             ? chunkSize : nil)
                     if ProcessInfo.processInfo.environment["VMLX_CACHE_FETCH_TRACE"] == "1" {
-                        FileHandle.standardError.write(
+                        RuntimeDiagnostics.write(
                             Data(
                                 "[vmlx][cache/prefill-replay-seed] captured=\(consumed) prompt=\(slot.cachePromptTokenIds.count)\n"
                                     .utf8))
@@ -3800,7 +3853,7 @@ public actor BatchEngine {
                     isPostAnswer: label == "post-answer"
                 )
                 if ProcessInfo.processInfo.environment["VMLX_CACHE_FETCH_TRACE"] == "1" {
-                    FileHandle.standardError.write(Data(
+                    RuntimeDiagnostics.write(Data(
                         "[vmlx][cache/store] label=\(label) count=\(tokens.count)\n".utf8))
                 }
                 Self.logger.debug(
@@ -3951,7 +4004,7 @@ public actor BatchEngine {
                         {
                             boundaryReplaySeed = (persisted.tokens, restored, chunkSize)
                             if ProcessInfo.processInfo.environment["VMLX_CACHE_FETCH_TRACE"] == "1" {
-                                FileHandle.standardError.write(Data(
+                                RuntimeDiagnostics.write(Data(
                                     "[vmlx][cache/canonical-checkpoint] restored=\(persisted.tokens.count) target=\(tokens.count) chunk=\(chunkSize)\n".utf8))
                             }
                         } else {
@@ -4018,13 +4071,13 @@ public actor BatchEngine {
                     MLX.eval(cache)
                     if traceRebuild {
                         let milliseconds = Double(DispatchTime.now().uptimeNanoseconds - rebuildStart) / 1_000_000
-                        FileHandle.standardError.write(Data(
+                        RuntimeDiagnostics.write(Data(
                             "[vmlx][cache/boundary-rederive] tokens=\(tokens.count) reused=\(reusedCount) ms=\(String(format: "%.3f", milliseconds))\n".utf8))
                     }
                     return cache
                 } catch {
                     if ProcessInfo.processInfo.environment["VMLX_SSM_STORE_TRACE"] != nil {
-                        FileHandle.standardError.write(Data(
+                        RuntimeDiagnostics.write(Data(
                             "[vmlx][ssm-strip-store] boundarySnapshot rederive THREW: \(String(describing: error))\n".utf8))
                     }
                     Self.logger.debug(

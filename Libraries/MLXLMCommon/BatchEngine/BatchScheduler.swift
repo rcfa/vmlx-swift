@@ -78,6 +78,10 @@ struct BatchSlot {
     /// any generated token is fed back into the model. Cache stores use this,
     /// not the live decode cache, because coordinator keys are prompt-only.
     var promptCacheSnapshot: [KVCache]?
+
+    /// Aligned prefill (`AlignedPrefillPrefix.swift`): this request's absolute chunk cuts and store boundary (MiniMax-M3);
+    /// nil for every other model.
+    var alignedPrefillPlan: AlignedPrefillPlan?
     var appendOnlyPromptCheckpoint: AppendOnlyPromptCheckpoint?
     var appendOnlyDiskSeed: AppendOnlyPromptCheckpoint?
 
@@ -247,8 +251,9 @@ extension BatchSlot {
         self.sampler = request.parameters.sampler()
         self.processor = request.parameters.processor()
         self.stopTokenIDs = stopTokenIDs
-        self.maxTokens = MetalLiveBufferGuard.clampedMaxTokens(
+        MetalLiveBufferGuard.reportProjectedBufferPressure(
             requested: request.parameters.maxTokens, cache: cache)
+        self.maxTokens = request.parameters.maxTokens
         self.cache = cache
         self.promptCacheSnapshot = nil
         self.diskSeedSnapshot = nil

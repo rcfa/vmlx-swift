@@ -33,8 +33,19 @@ public enum CacheDetail: String, Sendable {
     case paged
     /// The on-disk L2 cache.
     case disk
+    /// An entry of the disk tier kept resident in RAM after its store or an earlier read (the
+    /// opt-in RAM tier, see ``DiskCache/residentByteBudget``). Restored exactly like ``disk`` (the
+    /// hit carries `diskArrays`); only the source of the bytes differs.
+    case memory
+    /// An entry of the disk tier whose file is still being written (write-behind): served from the
+    /// writer's payload, the same content-addressed bytes the file will hold. Not resident: it
+    /// occurs with the SSD-only default, and the payload is released once the file lands.
+    case diskPending
     /// No cache tier had a match.
     case miss
+
+    /// The hit carries a disk-tier payload (`diskArrays`): ``disk``, ``memory`` or ``diskPending``.
+    public var isDiskTierEntry: Bool { self == .disk || self == .memory || self == .diskPending }
 }
 
 // MARK: - CacheFetchResult
@@ -248,6 +259,7 @@ public final class CacheCoordinator: @unchecked Sendable {
             self.diskCache = nil
         }
         self.diskCache?.writeBehind = config.diskWriteBehind
+        self.diskCache?.residentByteBudget = config.usePagedCache ? 0 : max(0, config.residentEntryBytes)
         self.diskRootKey = self.diskCache?.cacheDir.standardizedFileURL.path
 
         self.ssmStateCache = SSMStateCache(
@@ -360,7 +372,7 @@ public final class CacheCoordinator: @unchecked Sendable {
         // "no companions" would commit, mark the root done, and leave every
         // companion in it uncounted for good. Not committed; retried later.
         guard let companions = companionStore.listedQuotaEntries() else {
-            FileHandle.standardError.write(Data(
+            RuntimeDiagnostics.write(Data(
                 ("[vmlx][cache/disk-index] companion import reason=\(reason) committed=false "
                     + "companion directory could not be listed or examined\n").utf8))
             return false
@@ -392,7 +404,7 @@ public final class CacheCoordinator: @unchecked Sendable {
                 "unindexedPayloadsRemoved=\(counts.unindexedPayloadsRemoved)",
             ]
             let line = "[vmlx][cache/disk-index] companion import " + fields.joined(separator: " ") + "\n"
-            FileHandle.standardError.write(Data(line.utf8))
+            RuntimeDiagnostics.write(Data(line.utf8))
         }
         return summary != nil
     }
@@ -595,7 +607,7 @@ public final class CacheCoordinator: @unchecked Sendable {
             return nil
         }
         if ProcessInfo.processInfo.environment["VMLX_CACHE_FETCH_TRACE"] == "1" {
-            FileHandle.standardError.write(Data(
+            RuntimeDiagnostics.write(Data(
                 "[vmlx][cache/canonical-required] accepted=\(boundary) layers=\(staged.count) chunk=\(chunk)\n".utf8))
         }
         return (staged, boundary)
@@ -620,6 +632,11 @@ public final class CacheCoordinator: @unchecked Sendable {
             if incompatible {
                 _requiresPagedBoundaryCompanion = false
             }
+        }
+        // A model the paged tier cannot hold gets its RAM tier from the disk tier's resident
+        // entries instead (with the paged tier off they are on for every model already).
+        if config.usePagedCache, let diskCache {
+            diskCache.residentByteBudget = incompatible ? max(0, config.residentEntryBytes) : 0
         }
     }
 
@@ -846,7 +863,7 @@ public final class CacheCoordinator: @unchecked Sendable {
         }
         func ftrace(_ msg: String) {
             if ProcessInfo.processInfo.environment["VMLX_CACHE_FETCH_TRACE"] == "1" {
-                FileHandle.standardError.write(Data(
+                RuntimeDiagnostics.write(Data(
                     ("[vmlx][cache/fetch] \(msg) tokens=\(tokens.count) skipExactDisk=\(skipExactDiskBoundary) "
                         + "salt=\(mediaSalt.map { String($0.prefix(12)) } ?? "none")\n").utf8))
             }
@@ -980,9 +997,11 @@ public final class CacheCoordinator: @unchecked Sendable {
                 // Do not make rejected hybrid candidates hot: no recency
                 // touch and no hit until one is accepted.
                 let arrays: [String: MLXArray]
+                let source: DiskCache.FetchSource
                 switch diskCache.fetchCandidate(tokens: prefix, mediaSalt: probeSalt) {
-                case .arrays(let found):
+                case .arrays(let found, let from):
                     arrays = found
+                    source = from
                 case .miss:
                     // A miss here means the content-addressed key over this
                     // prefix found no row; a rejection below means the row
@@ -1011,11 +1030,11 @@ public final class CacheCoordinator: @unchecked Sendable {
                         matchedBoundary: boundary,
                         mediaSalt: probeSalt,
                         chainId: chainId)
-                    ftrace("HIT disk boundary=\(boundary) remaining=\(tokens.count - boundary) ssm=\(ssmStates?.count ?? -1) fmtV=\(TQDiskSerializer.formatVersion(of: arrays))\(saltTag)")
+                    ftrace("HIT \(source.detail.rawValue) boundary=\(boundary) remaining=\(tokens.count - boundary) ssm=\(ssmStates?.count ?? -1) fmtV=\(TQDiskSerializer.formatVersion(of: arrays))\(saltTag)")
                     return .hit(
                         matchedTokens: boundary,
                         remainingTokens: Array(tokens.dropFirst(boundary)),
-                        detail: .disk,
+                        detail: source.detail,
                         blocks: [],
                         ssmStates: ssmStates,
                         diskArrays: arrays
@@ -1177,7 +1196,7 @@ public final class CacheCoordinator: @unchecked Sendable {
         }
         if marked || ProcessInfo.processInfo.environment["VMLX_CACHE_FETCH_TRACE"] == "1" {
             // Said once per payload: it explains a full prefill after a hit.
-            FileHandle.standardError.write(Data(
+            RuntimeDiagnostics.write(Data(
                 ("[vmlx][cache/restore] disk restore rejected boundary=\(boundary) "
                     + "tokens=\(tokens.count) marked=\(marked) reason=\(reason)\n").utf8))
         }
@@ -1420,6 +1439,26 @@ public final class CacheCoordinator: @unchecked Sendable {
         isResumeBoundary: Bool = false,
         isPostAnswer: Bool = false
     ) {
+        storeAfterGeneration(
+            promptTokens: promptTokens, perLayerData: perLayerData, ssmStates: ssmStates,
+            cache: cache, mediaSalt: mediaSalt, chainId: chainId,
+            isStableRoot: isStableRoot, isResumeBoundary: isResumeBoundary,
+            isPostAnswer: isPostAnswer, dflash2Context: nil)
+    }
+
+    /// Optional conditioning shares the target payload's lifetime and quota.
+    func storeAfterGeneration(
+        promptTokens: [Int],
+        perLayerData: [(keys: MLXArray, values: MLXArray)?],
+        ssmStates: [MLXArray]?,
+        cache: [any KVCache]? = nil,
+        mediaSalt: String? = nil,
+        chainId: String? = nil,
+        isStableRoot: Bool = false,
+        isResumeBoundary: Bool = false,
+        isPostAnswer: Bool = false,
+        dflash2Context: DFlash2PrefixContext?
+    ) {
         var trace = CacheFinalizationTrace("coordinator-store", tokens: promptTokens.count)
         defer { trace.mark("return") }
         let totalTokens = promptTokens.count
@@ -1449,7 +1488,7 @@ public final class CacheCoordinator: @unchecked Sendable {
             let offsets = Set(cacheBoundaryLeafOffsets(cache))
             if totalTokens <= 0 || offsets.isEmpty || offsets.contains(where: { $0 != totalTokens }) {
                 if traceCacheStore {
-                    FileHandle.standardError.write(Data(
+                    RuntimeDiagnostics.write(Data(
                         ("[vmlx][cache/store] REFUSED offset/key mismatch"
                             + " tokens=\(totalTokens) offsets=\(offsets.sorted())\n").utf8))
                 }
@@ -1505,7 +1544,7 @@ public final class CacheCoordinator: @unchecked Sendable {
                 + "blocks=\(blockLayerData.count) payload=\(hasPagedKVPayload) "
                 + "companion=\(pagedBoundaryCompanion != nil) "
                 + "rotatingOffsets=\(uniqueRotatingOffsets)\n"
-            FileHandle.standardError.write(Data(message.utf8))
+            RuntimeDiagnostics.write(Data(message.utf8))
         }
 
         trace.mark("geometry-and-paged-companion")
@@ -1583,6 +1622,23 @@ public final class CacheCoordinator: @unchecked Sendable {
             }
         }
 
+        if let context = dflash2Context, var arrays = diskArrays, let diskCache {
+            let baseBytes = IndexedBytes.total(arrays.values.map { Int64($0.nbytes) })
+            let companionBytes =
+                persistSeparateRecurrentPayload
+                ? IndexedBytes.total((ssmStates ?? []).map { Int64($0.nbytes) }) : 0
+            let cap = Int64(max(1, diskCache.maxSizeBytes))
+            let reserved = IndexedBytes.sum(IndexedBytes.sum(baseBytes, companionBytes), 131_072)
+            let available = cap - min(cap, reserved)
+            // Optional acceleration must never turn an otherwise valid KV store into a miss.
+            if let extra = context.diskArrays(at: promptTokens.count, byteBudget: available),
+                extra.keys.allSatisfy({ arrays[$0] == nil })
+            {
+                arrays.merge(extra) { existing, _ in existing }
+                diskArrays = arrays
+            }
+        }
+
         trace.mark("disk-serialization")
         storePersistentBoundary(
             tokens: promptTokens,
@@ -1646,7 +1702,7 @@ public final class CacheCoordinator: @unchecked Sendable {
             let payload = IndexedBytes.sum(kvBytes, companionBytes)
             if payload > cap {
                 if ProcessInfo.processInfo.environment["VMLX_CACHE_FETCH_TRACE"] == "1" {
-                    FileHandle.standardError.write(Data(
+                    RuntimeDiagnostics.write(Data(
                         ("[vmlx][cache/disk-store] SKIP oversized count=\(tokens.count) "
                             + "bytes=\(payload) cap=\(cap) chain=\(chainId ?? "nil")\n").utf8))
                 }
@@ -2043,7 +2099,7 @@ public final class CacheCoordinator: @unchecked Sendable {
             // Same leading keys as the directory-walk line; `ms` and `event`
             // are appended. An index pass never removes an orphan on sight, so
             // that count is always 0 here.
-            FileHandle.standardError.write(Data(
+            RuntimeDiagnostics.write(Data(
                 "[vmlx][cache/disk-quota] before=\(plan.totalBefore) after=\(max(0, plan.totalAfter)) max=\(maxBytes) logicalEvictions=\(evictedGroups) kvEvicted=\(removedKV.count) companionEvicted=\(removedCompanions.count) legacyCompanionEvicted=\(removedLegacy.count) orphanCompanionEvicted=0 deleteFailures=\(evictKV.count - removedKV.count + companionsStillOnDisk.count) source=index ms=\(String(format: "%.3f", totalMs)) rowsMs=\(String(format: "%.3f", rowsMs)) selectMs=\(String(format: "%.3f", selectMs)) deleteMs=\(String(format: "%.3f", deleteMs)) event=\(confirmedEvent?.kind.rawValue ?? "none") chain=\(activeChain ?? "none")\n".utf8))
         }
     }
@@ -2143,7 +2199,7 @@ public final class CacheCoordinator: @unchecked Sendable {
         }
 
         if ProcessInfo.processInfo.environment["VMLX_CACHE_FETCH_TRACE"] == "1" {
-            FileHandle.standardError.write(Data(
+            RuntimeDiagnostics.write(Data(
                 "[vmlx][cache/disk-quota] before=\(plan.totalBefore) after=\(max(0, plan.remaining)) max=\(maxBytes) logicalEvictions=\(evictedGroups) kvEvicted=\(removedKV.count) companionEvicted=\(removedCompanions.count) legacyCompanionEvicted=\(legacyCompanionEvicted) orphanCompanionEvicted=\(orphaned.count) deleteFailures=\(evictKV.count - removedKV.count + evictCompanion.count - removedCompanions.count) source=walk\n".utf8))
         }
     }
@@ -2201,6 +2257,8 @@ public final class CacheCoordinator: @unchecked Sendable {
     public func releaseVolatile() {
         pagedCache?.clear()
         ssmStateCache.clear()
+        // The disk tier's resident payloads are RAM copies of files that stay on the SSD.
+        diskCache?.releaseResidentEntries()
     }
 
     /// Wait for disk stores still being written in the background (``DiskCache`` write-behind) to

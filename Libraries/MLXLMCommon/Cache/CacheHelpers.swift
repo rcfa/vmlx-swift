@@ -68,7 +68,8 @@ func storeCapturedHybridBoundary(
     kvBits: Int? = nil,
     kvMode: KVQuantizationMode,
     kvGroupSize: Int,
-    quantizedKVStart: Int
+    quantizedKVStart: Int,
+    dflash2Context: DFlash2PrefixContext? = nil
 ) -> Bool {
     guard ProcessInfo.processInfo.environment["VMLX_STRIP_BOUNDARY_EARLY_SPILL"] != "0",
           !Task.isCancelled,
@@ -93,7 +94,8 @@ func storeCapturedHybridBoundary(
         kvMode: kvMode)
     coordinator.storeAfterGeneration(
         promptTokens: tokens, perLayerData: [], ssmStates: states, cache: diskCache,
-        mediaSalt: mediaSalt, chainId: chainId, isResumeBoundary: true)
+        mediaSalt: mediaSalt, chainId: chainId, isResumeBoundary: true,
+        dflash2Context: dflash2Context)
     return coordinator.hasValidatedDiskEntry(tokens: tokens, mediaSalt: mediaSalt)
 }
 
@@ -263,9 +265,9 @@ public func validateRestoredCacheBoundary(
             + "matched=\(matchedTokens) restored=\(restoredTokens) offsets=\(unique)"
         // Always visible: a refused restore is the difference between one
         // extra prefill and a whole corrupted continuation.
-        FileHandle.standardError.write(Data((message + "\n").utf8))
+        RuntimeDiagnostics.write(Data((message + "\n").utf8))
     } else if ProcessInfo.processInfo.environment["VMLX_CACHE_FETCH_TRACE"] != nil {
-        FileHandle.standardError.write(Data(
+        RuntimeDiagnostics.write(Data(
             "[vmlx][cache/restore] ACCEPTED detail=\(detail) boundary=\(matchedTokens) layers=\(cache.count)\n".utf8))
     }
     return consistent
@@ -305,6 +307,20 @@ public func cacheContainsPathDependentState(_ cache: [any KVCache]) -> Bool {
 /// (`CacheRestorePolicy.freshRequiredToolSelection`) skips disk restore only for disk-backed topologies WITHOUT this
 /// property; plain KV keeps its normal reuse under the same policy.
 public protocol ExactPrefixRestoreCache {}
+
+/// A model whose chat template renders an assistant tool-call turn back to the tokens the model generated (reasoning,
+/// content and the call), so that turn may store a post-answer boundary and the next request restores past everything
+/// the model just generated instead of re-prefilling it. Fetch still requires an exact token prefix, so a call rendered
+/// differently falls back to the prompt boundary at the cost of one unused entry.
+public protocol ToolCallTurnBoundaryModel {}
+
+/// A ``ToolCallTurnBoundaryModel`` whose template closes a tool-call turn with a stop token (Inkling:
+/// `…<|end_message|><|content_model_end_sampling|>`). That token is history, so when the decode pipeline
+/// forwarded exactly it past the call, the post-answer boundary keeps it instead of trimming the row —
+/// which a recurrent / conv-state layer cannot do, and which would otherwise skip the store.
+public protocol ToolCallTurnStopTokenModel: ToolCallTurnBoundaryModel {
+    var toolCallTurnStopTokenIds: Set<Int> { get }
+}
 
 /// True when every layer is either an ordinary (not disk-backed) cache or an ``ExactPrefixRestoreCache``.
 public func cacheRestoreIsExactPrefix(_ cache: [any KVCache]) -> Bool {
@@ -1061,7 +1077,7 @@ private func restoreFromV2Arrays(
             // the caller re-prefills instead of fatal-trapping. Belt &
             // suspenders on top of v2 layer-kind tagging.
             guard keys.shape.count >= 3, values.shape.count >= 3 else {
-                FileHandle.standardError.write(Data(
+                RuntimeDiagnostics.write(Data(
                     "[disk cache] restore SKIPPED: layer \(i) has incompatible shape (k=\(keys.shape) v=\(values.shape)). Need >= 3D. Falling back to fresh prefill.\n".utf8))
                 return 0
             }
@@ -1072,14 +1088,14 @@ private func restoreFromV2Arrays(
             // record predates the `.qsaKV` kind — refuse the whole entry
             // (one re-prefill) instead of diverging.
             guard !(cache[i] is QSAKVCache) else {
-                FileHandle.standardError.write(Data(
+                RuntimeDiagnostics.write(Data(
                     "[disk cache] restore SKIPPED: layer \(i) is a QSA layer but the stored record has no indexer lane (pre-qsaKV entry). Falling back to fresh prefill.\n".utf8))
                 return 0
             }
             if totalTokens == 0 {
                 totalTokens = keys.dim(2)
             }
-            restoreKVLayer(keys: keys, values: values, into: cache[i])
+            guard restoreKVLayer(keys: keys, values: values, into: cache[i]) else { return 0 }
 
         case .qsaKV(let comp):
             var keys = comp.keys
@@ -1095,12 +1111,12 @@ private func restoreFromV2Arrays(
             guard keys.shape.count >= 3, values.shape.count >= 3,
                 indexer.shape.count >= 3
             else {
-                FileHandle.standardError.write(Data(
+                RuntimeDiagnostics.write(Data(
                     "[disk cache] restore SKIPPED: QSA layer \(i) has incompatible shape (k=\(keys.shape) v=\(values.shape) idx=\(indexer.shape)). Falling back to fresh prefill.\n".utf8))
                 return 0
             }
             guard let qsa = cache[i] as? QSAKVCache else {
-                FileHandle.standardError.write(Data(
+                RuntimeDiagnostics.write(Data(
                     "[disk cache] restore SKIPPED: stored QSA record for layer \(i) but the live cache is \(type(of: cache[i])). Falling back to fresh prefill.\n".utf8))
                 return 0
             }
@@ -1108,7 +1124,7 @@ private func restoreFromV2Arrays(
             // `state`'s setter derives offset from keys, and a shorter lane
             // would recreate the divergence this record exists to prevent.
             guard indexer.dim(1) == keys.dim(2) else {
-                FileHandle.standardError.write(Data(
+                RuntimeDiagnostics.write(Data(
                     "[disk cache] restore SKIPPED: QSA layer \(i) indexer lane length \(indexer.dim(1)) != KV offset \(keys.dim(2)). Falling back to fresh prefill.\n".utf8))
                 return 0
             }
@@ -1244,7 +1260,7 @@ private func restoreFromV2Arrays(
                     if totalTokens == 0 {
                         totalTokens = keys.dim(2)
                     }
-                    restoreKVLayer(keys: keys, values: values, into: list[subIndex])
+                    guard restoreKVLayer(keys: keys, values: values, into: list[subIndex]) else { return 0 }
 
                 case .mamba(let comp):
                     guard restoreMambaLayer(comp, into: list[subIndex])
@@ -1377,7 +1393,7 @@ private func restoreFromLegacyArrays(
             totalTokens = restoredKeys.dim(2)
         }
 
-        restoreKVLayer(keys: restoredKeys, values: restoredValues, into: cache[cacheLayerIdx])
+        guard restoreKVLayer(keys: restoredKeys, values: restoredValues, into: cache[cacheLayerIdx]) else { return 0 }
     }
 
     return totalTokens
@@ -1386,11 +1402,15 @@ private func restoreFromLegacyArrays(
 /// Helper: restore a pair of KV tensors into whatever KV-bearing cache
 /// class `layer` happens to be. Mirrors the behavior of the original
 /// legacy path but factored out so both v1 and v2 restores share it.
+/// Seats a plain K/V record. Returns false (and leaves the layer untouched) when the target cannot hold it as the
+/// full history from position 0: the caller refuses the whole entry and re-prefills instead of restoring a layer
+/// that silently kept nothing.
+@discardableResult
 private func restoreKVLayer(
     keys restoredKeys: MLXArray,
     values restoredValues: MLXArray,
     into layer: any KVCache
-) {
+) -> Bool {
     if layer is QSAKVCache {
         // A 2-array seat into a QSA cache erases the indexer lane and
         // diverges the sparse selector (osaurus#2525). The v2 `.standard`
@@ -1398,12 +1418,13 @@ private func restoreKVLayer(
         // entries predate qwen4_exp and CacheList never wraps QSA, so this
         // is a defense-in-depth backstop for future call sites. Loud no-op:
         // the layer stays empty rather than becoming inconsistent.
-        FileHandle.standardError.write(Data(
+        RuntimeDiagnostics.write(Data(
             "[disk cache] restoreKVLayer REFUSED: 2-array record for a QSAKVCache (would drop the indexer lane).\n".utf8))
-        return
+        return false
     }
     if let simple = layer as? KVCacheSimple {
         simple.state = [restoredKeys, restoredValues]
+        return true
     } else if let quantizedCache = layer as? QuantizedKVCache {
         let qKeys = quantized(
             restoredKeys, groupSize: quantizedCache.groupSize, bits: quantizedCache.bits)
@@ -1415,17 +1436,19 @@ private func restoreKVLayer(
         if let biases = qValues.biases { stateArrays.append(biases) }
         quantizedCache.state = stateArrays
         quantizedCache.offset = restoredKeys.dim(2)
+        return true
     } else if let tq = layer as? TurboQuantKVCache {
         // Same restoreFromDecodedKV path as paged-cache restore — avoid
         // compounding quantization on cross-turn round trips.
         tq.restoreFromDecodedKV(
             keys: restoredKeys, values: restoredValues,
             sourceOffset: restoredKeys.dim(2))
+        return true
     } else if let cacheList = layer as? CacheList {
         for i in 0..<cacheList.count {
             if let simple = cacheList[i] as? KVCacheSimple {
                 simple.state = [restoredKeys, restoredValues]
-                return
+                return true
             }
             if let quantizedCache = cacheList[i] as? QuantizedKVCache {
                 let qKeys = quantized(
@@ -1439,16 +1462,19 @@ private func restoreKVLayer(
                 if let biases = qValues.biases { stateArrays.append(biases) }
                 quantizedCache.state = stateArrays
                 quantizedCache.offset = restoredKeys.dim(2)
-                return
+                return true
             }
             if let tq = cacheList[i] as? TurboQuantKVCache {
                 tq.restoreFromDecodedKV(
                     keys: restoredKeys, values: restoredValues,
                     sourceOffset: restoredKeys.dim(2))
-                return
+                return true
             }
         }
     }
+    RuntimeDiagnostics.write(Data(
+        "[disk cache] restoreKVLayer REFUSED: 2-array record for a \(type(of: layer)) layer.\n".utf8))
+    return false
 }
 
 /// Helper: restore quantized-KV state into a `QuantizedKVCache` layer.
@@ -1605,7 +1631,8 @@ private func restoreRotatingLayer(
     into layer: any KVCache
 ) {
     func apply(_ rot: RotatingKVCache) {
-        rot.state = [comp.keys, comp.values]
+        // Isolate mutable wrappers; slices retain copy-on-write storage.
+        rot.state = [comp.keys[0...], comp.values[0...]]
         rot.metaState = [
             String(comp.keep),
             String(comp.maxSize),
@@ -1665,7 +1692,20 @@ private func canRestoreDeepseekV4Layer(
     guard validPool(comp.poolComp), validPool(comp.poolIdx) else { return false }
 
     if comp.quantizedPoolComp != nil || comp.quantizedPoolIdx != nil {
-        guard layer is QuantizedHybridPoolCache else { return false }
+        guard let quantized = layer as? QuantizedHybridPoolCache else { return false }
+        // A record encoded at another width (e.g. 8-bit DSV4-0731 pools into a
+        // 4-bit DeepSeek-V4.1 cache) is refused rather than mixed.
+        let bits = quantized.hybridPoolQuantizationBits
+        let segments = (comp.quantizedPoolComp ?? []) + (comp.quantizedPoolIdx ?? [])
+        guard segments.allSatisfy({ $0.bits == bits }) else { return false }
+    }
+    // DeepSeek-V4.1: a prefix is only reusable with the Engram n-gram tail
+    // that ends exactly at its offset. Refuse (re-prefill) rather than let
+    // the suffix hash against a guessed/padded history.
+    if hybrid.requiresAuxiliaryTokenHistory, comp.offset > 0 {
+        guard let history = comp.auxiliaryTokenHistory,
+              history.endPosition == comp.offset
+        else { return false }
     }
     return true
 }
@@ -1705,6 +1745,14 @@ private func restoreDeepseekV4Layer(
         hybrid.setHybridBuffers(
             branch: .indexer,
             kv: comp.bufIdxKV, gate: comp.bufIdxGate)
+        if hybrid.requiresAuxiliaryTokenHistory || comp.auxiliaryTokenHistory != nil {
+            var mutable = hybrid
+            mutable.auxiliaryTokenHistory = comp.auxiliaryTokenHistory
+        }
+        // dSpark draft-window tail: kept only when it ends exactly at the restored offset.
+        var mutable = hybrid
+        mutable.auxiliaryHiddenTail =
+            comp.auxiliaryHiddenTail?.endPosition == comp.offset ? comp.auxiliaryHiddenTail : nil
         return true
     }
     return apply(hybrid)

@@ -707,9 +707,11 @@ public struct NativeMTPForwardResult {
     }
 }
 
-/// Capability exposed only by loaded models that have a real native MTP head.
-/// A model whose verify cost curve makes deep drafts lose: adaptive requests are bounded by this
-/// ceiling (``VMLX_MTP_DEPTH_CAP`` still overrides). Fixed requests are unaffected.
+/// A model whose verifier cannot check drafts deeper than this exactly declares it here: it becomes the
+/// runtime's top rung for adaptive requests (``NativeMTPDepthPolicy/runtimeTopRung(model:environment:)``;
+/// ``VMLX_MTP_DEPTH_CAP`` still overrides). A CORRECTNESS bound only: a measured cost curve or "best depth"
+/// is never declared here (no hard draft depth: the adaptive controller demotes a losing depth, it is not
+/// capped below it). Fixed requests are unaffected.
 public protocol NativeMTPAdaptiveCeilingModel {
     var nativeMTPAdaptiveDepthCeiling: Int { get }
 }
@@ -1786,7 +1788,7 @@ public struct MTPRecursiveDraftContract: Codable, Sendable, Equatable {
         return Int(ceil(Double(outputTokens) / Double(maxCommittedTokensPerVerify)))
     }
 
-    public static let mtplxDepth3 = MTPRecursiveDraftContract(depth: 3)
+    public static let recursiveDepth3 = MTPRecursiveDraftContract(depth: 3)
 }
 
 /// No-load MTP/VL inspector. It reads JSON metadata and safetensors headers only;

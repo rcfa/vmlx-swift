@@ -498,7 +498,7 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
         key: String, bytes: Int64, rc: Int32, countedBy ledger: DiskCache
     ) -> Bool {
         if let counted = ledger.countedCompanionBytes(key: key), counted >= bytes {
-            FileHandle.standardError.write(Data(
+            RuntimeDiagnostics.write(Data(
                 ("[vmlx][cache/ssm-store] index record failed rc=\(rc) key=\(key.prefix(12)) "
                     + "— already counted (\(counted) bytes), companion kept\n").utf8))
             return false
@@ -512,7 +512,7 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
         validatedEntries.removeValue(forKey: key)
         lock.unlock()
         MLXDiskCacheIOLock.shared.unlock()
-        FileHandle.standardError.write(Data(
+        RuntimeDiagnostics.write(Data(
             "[vmlx][cache/ssm-store] index record failed rc=\(rc) key=\(key.prefix(12)) — companion removed\n"
                 .utf8))
         return true
@@ -653,7 +653,7 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
                     kvHash: kvHash)
                 storeSkips += 1
                 if ProcessInfo.processInfo.environment["VMLX_CACHE_FETCH_TRACE"] == "1" {
-                    FileHandle.standardError.write(Data(
+                    RuntimeDiagnostics.write(Data(
                         "[vmlx][cache/ssm-store] SKIP validated key=\(key) boundary=\(boundary) states=\(ssmStates.count)\n".utf8))
                 }
                 outcome.record = SSMCompanionStoreRecord(
@@ -835,6 +835,12 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
             }
             states.append(arr)
         }
+        // Materialize on the CPU stream before returning, as `DiskCache`
+        // does for the KV payload: the companion's lazy `Load`s otherwise
+        // join the engine's restore graph (`restoreSSMStates` seats them
+        // with GPU copies) and put the SSD read inside a Metal command
+        // buffer as a cross-stream wait.
+        MLX.eval(states)
 
         // Accepted/direct reads, not only repeated stores, make an entry hot.
         // Refresh both files to the same timestamp so quota observes the pair
@@ -961,7 +967,7 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
         let named = Set(ledger?.companionsOldestFirst().map(\.key) ?? [])
         let stillOnDisk = removeQuotaEntries(hashes: named)
         ledger?.forgetCompanions(keys: named.subtracting(stillOnDisk))
-        FileHandle.standardError.write(Data(
+        RuntimeDiagnostics.write(Data(
             ("[vmlx][cache/ssm-store] clear skipped: the root's index is from a newer build — "
                 + "nothing is removed from a listing of \(cacheDir.lastPathComponent), only the "
                 + "\(named.count) companion(s) the index names\n").utf8))

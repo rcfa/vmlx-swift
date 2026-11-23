@@ -9,7 +9,9 @@
 //
 // Python reference: mlx_vlm/models/gemma4/
 
-import CoreImage
+#if canImport(CoreImage)
+    import CoreImage
+#endif
 import Foundation
 import MLX
 // For Gemma4TextModel's shared checkpoint-key helpers: this wrapper reads the same
@@ -635,10 +637,12 @@ private class UnifiedVisionEmbedder: Module {
         self.cfg = cfg
         let patchDims = 3 * cfg.modelPatchSize * cfg.modelPatchSize
         _patchDense.wrappedValue = Linear(patchDims, cfg.outputProjectionDimensions, bias: true)
-        _patchNorm1.wrappedValue = LayerNorm(dimensions: patchDims, eps: cfg.rmsNormEps)
-        _patchNorm2.wrappedValue = LayerNorm(dimensions: cfg.outputProjectionDimensions, eps: cfg.rmsNormEps)
+        // Unified vision uses LayerNorm's 1e-5 epsilon, independently of
+        // Gemma's 1e-6 RMSNorm epsilon (HF Gemma4UnifiedVisionEmbedder).
+        _patchNorm1.wrappedValue = LayerNorm(dimensions: patchDims, eps: 1e-5)
+        _patchNorm2.wrappedValue = LayerNorm(dimensions: cfg.outputProjectionDimensions, eps: 1e-5)
         _posEmbedding.wrappedValue = MLXArray.ones([cfg.positionEmbeddingSize, 2, cfg.outputProjectionDimensions])
-        _posNorm.wrappedValue = LayerNorm(dimensions: cfg.outputProjectionDimensions, eps: cfg.rmsNormEps)
+        _posNorm.wrappedValue = LayerNorm(dimensions: cfg.outputProjectionDimensions, eps: 1e-5)
         super.init()
     }
 
@@ -1163,7 +1167,13 @@ func gemma4MaskedScatter(
 public class Gemma4: Module, VLMModel, KVCacheDimensionProvider, ModalityBearing,
     ModelComponentMapping
 {
-    public var cacheStorageDTypeIdentity: String? { "gemma4-native-kv-dtype-v1" }
+    public var cacheStorageDTypeIdentity: String? {
+        let native = "gemma4-native-kv-dtype-v1"
+        // Image-conditioned KV made with the old LayerNorm epsilon cannot
+        // be restored after correcting the unified vision embedding math.
+        guard config.visionConfig?.usesUnifiedVisionEmbedder == true else { return native }
+        return native + "|unified-vision-ln-1e-5-v1"
+    }
 
     @ModuleInfo(key: "vision_tower") private var visionTower: VisionTower?
     @ModuleInfo(key: "vision_embedder") private var unifiedVisionEmbedder: UnifiedVisionEmbedder?
@@ -1633,6 +1643,7 @@ public struct Gemma4ProcessorConfiguration: Codable, Sendable {
     }
 }
 
+#if canImport(CoreImage) && canImport(AVFoundation) && canImport(Accelerate)
 public struct Gemma4Processor: UserInputProcessor {
     private let config: Gemma4ProcessorConfiguration
     private let tokenizer: any Tokenizer
@@ -1694,12 +1705,20 @@ public struct Gemma4Processor: UserInputProcessor {
                 } else {
                     softTokenCounts.append(config.imageSeqLength)
                 }
-                let resized = MediaProcessing.resampleBicubic(ci, to: CGSize(width: tW, height: tH))
-                // Convert to sRGB tone curve — CIImage may be in linear space, but the
-                // vision tower was trained on sRGB images (PIL/Python default).
-                let srgb = MediaProcessing.inSRGBToneCurveSpace(resized)
-                // asMLXArray returns [1, C, H, W] (NCHW) with float values in [0, 1]
-                return MediaProcessing.asMLXArray(srgb)
+                // Both Gemma 4 reference processors convert stored samples to
+                // RGB and composite transparency onto white before resizing.
+                let white = CIImage(color: CIColor(red: 1, green: 1, blue: 1))
+                    .cropped(to: ci.extent)
+                let colorInput = ci.composited(over: white)
+                let resized = MediaProcessing.resampleBicubic(
+                    colorInput, to: CGSize(width: tW, height: tH))
+                // Preserve the stored RGB domain through resize and rescale.
+                // ICC gamut conversion and an extra tone curve change the
+                // pixels relative to the reference's plain RGB conversion.
+                // The reference resizes RGB bytes before converting to float
+                // and rescaling. Materialize the same byte-domain input
+                // before the model and the cache see the pixel tensor.
+                return MediaProcessing.asMLXArrayUnmanagedRGB8(resized)
             }
             // Store per-image dimensions in frames so prepare() can extract each
             // image at its original size (before padding for batch storage).
@@ -1963,6 +1982,7 @@ private struct Gemma4MessageGenerator: MessageGenerator {
         return dict
     }
 }
+#endif
 extension VisionTower: ModelCapabilityProviding {
     /// Gemma4's encoder is image-only; this family has no video lane at all.
     var providedModalities: Set<ModelRuntimeRequestModality> { [.vision] }

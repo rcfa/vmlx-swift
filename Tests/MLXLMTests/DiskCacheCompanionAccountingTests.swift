@@ -1779,7 +1779,7 @@ struct DiskCacheCompanionAccountingTests {
                 [.posixPermissions: 0o000], ofItemAtPath: dir.path)
             try Self.requireUnlistable(dir)
             clock.advance(59)
-            let (_, early) = try Self.capturingStandardError {
+            let (_, early) = try Self.capturingRuntimeDiagnostics {
                 coordinator.storePersistentBoundary(
                     tokens: Self.tokens(1_291, seed: 127), diskArrays: Self.kv(), ssmStates: nil)
             }
@@ -2392,11 +2392,11 @@ struct DiskCacheCompanionAccountingTests {
 
     // MARK: The payload sweep only ever removes our own regular files
 
-    /// Everything written to standard error while `body` runs. The suite is
-    /// serialized and these tests hold `MLXMetalTestLock`, so nothing else in
-    /// the process is expected to write meanwhile.
-    private static func capturingStandardError<T>(_ body: () throws -> T) throws -> (T, String) {
-        try Support.capturingStandardError(body)
+    /// Actual runtime diagnostic payloads emitted in this scope. Other tasks
+    /// have independent captures; the platform logger and privacy stay intact.
+    private static func capturingRuntimeDiagnostics<T>(_ body: () throws -> T) throws -> (T, String)
+    {
+        try Support.capturingRuntimeDiagnostics(body)
     }
 
     private static let elevenMinutes: TimeInterval = 11 * 60
@@ -2556,7 +2556,7 @@ struct DiskCacheCompanionAccountingTests {
                 let markerURL = root.appendingPathComponent(marker)
                 try Data("{}".utf8).write(to: markerURL)
 
-                let (committed, log) = try Self.capturingStandardError {
+                let (committed, log) = try Self.capturingRuntimeDiagnostics {
                     coordinator.reconcileDiskAccounting()
                 }
                 #expect(committed, "a skipped sweep is not a failed import")
@@ -2600,7 +2600,7 @@ struct DiskCacheCompanionAccountingTests {
             let newer = DiskCache(cacheDir: root, maxSizeBytes: 1 << 30, modelKey: modelKey)
             try #require(newer.indexSchemaVersion == 7, "INVALID: the newer version was not read")
             try #require(newer.indexHasV2Columns, "INVALID: the import would not run at all")
-            let (summary, log) = try Self.capturingStandardError {
+            let (summary, log) = try Self.capturingRuntimeDiagnostics {
                 newer.reconcileCompanionAccounting(companions: [])
             }
             #expect(summary != nil, "the rest of the import still commits")
@@ -2781,7 +2781,7 @@ struct DiskCacheCompanionAccountingTests {
                 denied.append(url)
                 try Self.denyStat(of: url)
             }
-            let (direct, directLog) = try Self.capturingStandardError {
+            let (direct, directLog) = try Self.capturingRuntimeDiagnostics {
                 disk.reconcileCompanionAccounting(companions: [])
             }
             let viaCoordinator = coordinator.reconcileDiskAccounting()
@@ -2854,7 +2854,7 @@ struct DiskCacheCompanionAccountingTests {
                 try Self.indexedRows(root) == populated,
                 "fetch deleted the row of a payload that is on disk")
 
-            let (committed, log) = try Self.capturingStandardError {
+            let (committed, log) = try Self.capturingRuntimeDiagnostics {
                 coordinator.reconcileDiskAccounting()
             }
             restorePermissions()
@@ -2969,7 +2969,7 @@ struct DiskCacheCompanionAccountingTests {
             try Self.setImmutable(url, true)
         }
 
-        let (results, log) = try Self.capturingStandardError {
+        let (results, log) = try Self.capturingRuntimeDiagnostics {
             [stuck[0], stuck[0], stuck[1], stuck[0]].map { DiskCache.removeCacheFile(at: $0) }
         }
         #expect(results == [false, false, false, false])
@@ -3248,7 +3248,7 @@ struct DiskCacheCompanionAccountingTests {
                     Data(repeating: 0x23, count: 8_209), in: root)
 
                 let before = try Self.listing(root)
-                let (_, log) = try Self.capturingStandardError { coordinator.clear() }
+                let (_, log) = try Self.capturingRuntimeDiagnostics { coordinator.clear() }
 
                 let skipped = log.split(separator: "\n").filter {
                     $0.hasPrefix("[vmlx][cache/disk-index] clear skipped: ")
@@ -3320,6 +3320,63 @@ struct DiskCacheCompanionAccountingTests {
                 !FileManager.default.fileExists(atPath: oursPartial.path),
                 "INVALID: the open sweep did not remove this cache's dead partial")
             foreign.expectIntact(in: root, after: "the open sweep")
+        }
+    }
+
+    /// MLX's save writes `<target>.tmp<digits>` and renames it over the
+    /// target (ml-explore/mlx#4773), so a process killed mid-save leaves
+    /// `<hash>.partial-<tag>.safetensors.tmp<digits>`. The open sweep treats
+    /// it as the dead partial it belongs to: removed once old enough, kept
+    /// while young, and never matched for anybody else's name.
+    @Test func openSweepRemovesADeadMLXSaveTempOfOurPartial() throws {
+        try MLXMetalTestLock.withLock {
+            let root = Self.makeRoot("open-sweep-mlx-save-temp")
+            defer { try? FileManager.default.removeItem(at: root) }
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+            let deadName = "8899aabbccddeeff0011223344556677.partial-1A2B3C4D.safetensors.tmp3735928559"
+            let youngName = "00112233445566778899aabbccddeeff.partial-0a1b2c3d.safetensors.tmp7"
+            let keepNames = [
+                // Somebody else's partial, with MLX's temp suffix.
+                "random.partial-abcdefgh.safetensors.tmp12",
+                // Not digits after `.tmp`.
+                "8899aabbccddeeff0011223344556677.partial-1A2B3C4D.safetensors.tmpx",
+                // More than a u32's ten digits.
+                "8899aabbccddeeff0011223344556677.partial-1A2B3C4D.safetensors.tmp12345678901",
+                // A temp of a final name: this cache never saves to one directly.
+                "8899aabbccddeeff0011223344556677.safetensors.tmp12",
+            ]
+            #expect(DiskCache.isUnpublishedPayloadName(deadName))
+            #expect(DiskCache.isUnpublishedName(deadName))
+            #expect(!DiskCache.isPublishedPayloadName(deadName))
+            for name in keepNames { #expect(!DiskCache.isUnpublishedPayloadName(name), "\(name)") }
+            #expect(SSMCompanionDiskStore.isUnpublishedTensorName(
+                "ssm-" + String(repeating: "ab", count: 32) + ".partial-1A2B3C4D.safetensors.tmp42"))
+
+            let dead = root.appendingPathComponent(deadName)
+            try Data(repeating: 0xEE, count: 40_003).write(to: dead)
+            try Self.age(dead, by: Self.elevenMinutes)
+            let young = root.appendingPathComponent(youngName)
+            try Data(repeating: 0xEE, count: 40_003).write(to: young)
+            for name in keepNames {
+                let url = root.appendingPathComponent(name)
+                try Data(repeating: 0x31, count: 4_099).write(to: url)
+                try Self.age(url, by: Self.elevenMinutes)
+            }
+
+            _ = DiskCache(cacheDir: root, maxSizeBytes: 1 << 30, modelKey: "open-sweep-mlx-save-temp")
+
+            #expect(
+                !FileManager.default.fileExists(atPath: dead.path),
+                "the open sweep left a dead MLX save temp of this cache's partial")
+            #expect(
+                FileManager.default.fileExists(atPath: young.path),
+                "the open sweep removed a save temp that may still be in flight")
+            for name in keepNames {
+                #expect(
+                    FileManager.default.fileExists(atPath: root.appendingPathComponent(name).path),
+                    "the open sweep removed \(name), which is not this cache's")
+            }
         }
     }
 
@@ -3415,7 +3472,7 @@ struct DiskCacheCompanionAccountingTests {
             var foreign = ForeignEntries()
             try foreign.addDirectory("\(hash).safetensors", in: root)
 
-            let (_, log) = try Self.capturingStandardError {
+            let (_, log) = try Self.capturingRuntimeDiagnostics {
                 disk.store(tokens: tokens, arrays: Self.kv(), enforceQuota: false)
             }
             foreign.expectIntact(in: root, after: "a store of the same hash")

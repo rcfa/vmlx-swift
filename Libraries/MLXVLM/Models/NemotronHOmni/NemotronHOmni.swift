@@ -14,7 +14,9 @@ import MLX
 import MLXLLM
 import MLXLMCommon
 import MLXNN
-import CoreImage
+#if canImport(CoreImage)
+    import CoreImage
+#endif
 
 // MARK: - Configuration
 
@@ -144,7 +146,7 @@ public struct NemotronHOmniConfiguration: Codable, Sendable {
             // HF builds the LN iff the LLM ships an MTP head. A bundle that
             // disagrees is unusual, but the tensors are what the model computes
             // with; say so instead of guessing.
-            FileHandle.standardError.write(Data(
+            RuntimeDiagnostics.write(Data(
                 "[NemotronHOmni] vision_final_layernorm present=\(self.hasVisionFinalLayerNorm) but num_nextn_predict_layers=\(self.llmConfig.numNextnPredictLayers); following the tensors\n".utf8))
         }
 
@@ -459,9 +461,16 @@ public class NemotronHOmni: Module, VLMModel, KVCacheDimensionProvider, LoRAMode
             // Use the pre-encoded embedding when the processor already
             // ran Parakeet (avoids re-encoding the same audio across
             // turns); otherwise encode the raw waveform now.
+            #if canImport(Accelerate)
             let audioEmbeds: MLXArray = audio.preEncodedEmbedding
                 ?? extractAudioEmbeds(waveformArray: audio.waveform,
                                       sampleRate: audio.sampleRate)
+            #else
+            guard let audioEmbeds = audio.preEncodedEmbedding else {
+                throw VLMError.processing(
+                    "Nemotron-H Omni audio input needs Accelerate, which this platform lacks.")
+            }
+            #endif
             spliced = spliceAtToken(
                 tokens: input.text.tokens,
                 inputsEmbeds: spliced,
@@ -655,6 +664,7 @@ public class NemotronHOmni: Module, VLMModel, KVCacheDimensionProvider, LoRAMode
             totalTokens: totalTokens)
     }
 
+    #if canImport(Accelerate)
     /// Run STFT + Parakeet + sound_projection on a mono waveform stored
     /// as an `MLXArray` (any rate; resampled to 16 kHz internally if
     /// necessary). Convenience wrapper around the [Float] form for
@@ -693,6 +703,7 @@ public class NemotronHOmni: Module, VLMModel, KVCacheDimensionProvider, LoRAMode
         let h = feats.dim(2)
         return feats.reshaped([f, h])
     }
+    #endif
 
     /// Splice `replacement` embeddings at every position where `tokens == tokenId`.
     /// Lengths must match. Returns embedding tensor of same shape as inputsEmbeds.
@@ -921,6 +932,7 @@ public struct NemotronHOmniProcessorConfiguration: Codable, Sendable {
     }
 }
 
+#if canImport(CoreImage) && canImport(AVFoundation)
 public struct NemotronHOmniProcessor: UserInputProcessor {
     private let config: NemotronHOmniProcessorConfiguration
     private let tokenizer: any Tokenizer
@@ -1484,6 +1496,7 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
         return value.map { String(describing: $0) } ?? ""
     }
 }
+#endif
 
 public enum NemotronHOmniMediaError: Error, LocalizedError, CustomStringConvertible {
     case unsupported(String)
@@ -1505,10 +1518,6 @@ extension NemotronHOmni: SafetensorsLoadKeyExcluding {
     }
 
     public var requiresExactTensorMmapBuffers: Bool { languageModel.requiresExactTensorMmapBuffers }
-}
-
-extension NemotronHOmni: NativeMTPAdaptiveCeilingModel {
-    public var nativeMTPAdaptiveDepthCeiling: Int { nemotronLanguageModel.nativeMTPAdaptiveDepthCeiling }
 }
 
 extension NemotronHOmni: NativeMTPBlockDraftModel {

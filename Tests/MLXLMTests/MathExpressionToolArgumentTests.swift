@@ -68,16 +68,27 @@ struct MathExpressionToolArgumentTests {
             return "<zyphra_tool_call>\n<function=calculate>\n<parameter=expression>\n\(e)\n</parameter>\n</function>\n</zyphra_tool_call>"
         case .glm4:
             return "<tool_call>calculate<arg_key>expression</arg_key><arg_value>\(e)</arg_value></tool_call>"
+        case .inkling:
+            // The tool processor's view: the Inkling reasoning parser has already consumed the
+            // `<|message_model|>NAME` header.
+            return "<|content_invoke_tool_json|>{\"name\":\"calculate\",\"args\":\(jsonArgs)}<|end_message|>"
         case .hunyuan:
             return "<tool_calls>\n<tool_call>calculate<tool_sep>\n<arg_key>expression</arg_key><arg_value>\(jsonString(e))</arg_value>\n</tool_call>\n</tool_calls>"
         case .minimaxM2:
             return "<minimax:tool_call>\n<invoke name=\"calculate\">\n<parameter name=\"expression\">\(e)</parameter>\n</invoke>\n</minimax:tool_call>"
         case .minicpm5:
             return "<function name=\"calculate\"><param name=\"expression\">\(e)</param></function>"
+        case .minimaxM3:
+            // Every element behind the namespace separator token; the argument is named by its tag.
+            let ns = MiniMaxM3ToolCallParser.namespaceToken
+            return "\(ns)<tool_call>\n\(ns)<invoke name=\"calculate\">\n\(ns)<expression>\(e)\(ns)</expression>\n\(ns)</invoke>\n</tool_call>"
         case .atem:
             return "<atem:function_calls>\n<atem:invoke name=\"calculate\">\n<atem:parameter name=\"expression\">\(e)</atem:parameter>\n</atem:invoke>\n</atem:function_calls>"
         case .dsml:
             return "<\(dsml)tool_calls>\n<\(dsml)invoke name=\"calculate\">\n<\(dsml)parameter name=\"expression\" string=\"true\">\(e)</\(dsml)parameter>\n</\(dsml)invoke>\n</\(dsml)tool_calls>"
+        case .dsmlV41:
+            // DeepSeek-V4.1 names its DSML tags with a leading space.
+            return "<\(dsml) calls>\n<\(dsml) invoke name=\"calculate\">\n<\(dsml) parameter name=\"expression\" string=\"true\">\(e)</\(dsml) parameter>\n</\(dsml) invoke>\n</\(dsml) calls>"
         case .kimiK2:
             return "<|tool_calls_section_begin|><|tool_call_begin|>functions.calculate:0<|tool_call_argument_begin|>\(jsonArgs)<|tool_call_end|><|tool_calls_section_end|>"
         case .k2Horizon:

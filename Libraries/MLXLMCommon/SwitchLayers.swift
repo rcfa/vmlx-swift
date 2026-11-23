@@ -1,3 +1,4 @@
+import CmlxGraphShim
 import Foundation
 import MLX
 import MLXNN
@@ -25,12 +26,73 @@ public let safeGeluApproximate: @Sendable (MLXArray) -> MLXArray = {
     return { x in CompiledDecodeTrace.isActive ? body(x) : compiled(x) }
 }()
 
+/// This function calculates the `safeGeluApproximate` formula in float32 for bf16 and fp16 inputs
+/// and rounds the result one time to the input dtype. Other dtypes go to `safeGeluApproximate`.
+public let safeGeluApproximateFloat32: @Sendable (MLXArray) -> MLXArray = {
+    // The float32 chain: the casts are inside the body, so a compiled body reads and writes the
+    // input dtype. It runs where the fused Metal kernel cannot: CPU streams, Linux, traces.
+    let body: @Sendable (MLXArray) -> MLXArray = { (x: MLXArray) -> MLXArray in
+        let y = x.asType(.float32)
+        return (0.5 * y * (1 + tanh(sqrt(2 / Float.pi) * (y + 0.044715 * y * y * y))))
+            .asType(x.dtype)
+    }
+    let chain: @Sendable (MLXArray) -> MLXArray = {
+        guard HardwareInfo.isCompiledDecodeSupported else { return body }
+        let compiled = compile(shapeless: true, body)
+        // Inside the outer compiled-decode trace, run the plain body (see safeGeluApproximate).
+        return { x in CompiledDecodeTrace.isActive ? body(x) : compiled(x) }
+    }()
+    return { x in
+        guard x.dtype == .bfloat16 || x.dtype == .float16 else { return safeGeluApproximate(x) }
+        return SafeGELUFloat32Kernel.apply(x) ?? chain(x)
+    }
+}()
+
+/// The fused Metal form of `safeGeluApproximateFloat32` for bf16 and fp16 inputs. The kernel reads
+/// each value one time, calculates the same formula and constants in float, and writes one time.
+enum SafeGELUFloat32Kernel {
+    /// The kernel's output, or nil when the float32 chain must run: no Metal, a stream that is
+    /// not on a Metal device, an empty or too large array, or a traced transformation.
+    static func apply(_ x: MLXArray) -> MLXArray? {
+        #if canImport(Metal)
+            guard defaultStreamIsGPU(), x.size > 0, x.size <= Int(Int32.max),
+                vmlx_graph_array_is_tracer(x.ctx.ctx) == 0
+            else { return nil }
+            return kernel(
+                [x], template: [("T", x.dtype)],
+                grid: (x.size, 1, 1), threadGroup: (256, 1, 1),
+                outputShapes: [x.shape], outputDTypes: [x.dtype]
+            )[0]
+        #else
+            return nil
+        #endif
+    }
+
+    // safeGeluApproximate's constant, from the same Swift expression. Its description is the
+    // shortest decimal that reads back as this Float.
+    private static let sqrtTwoOverPi: Float = sqrt(2 / Float.pi)
+
+    // METAL-ONLY: case 2. Metal kernel, called only under `canImport(Metal)` and when the default
+    // stream is on the GPU (`defaultStreamIsGPU()`); otherwise `safeGeluApproximateFloat32` runs
+    // the float32 chain.
+    private static let kernel = MLXFast.metalKernel(
+        name: "safe_gelu_approximate_float32",
+        inputNames: ["x"], outputNames: ["out"],
+        source: """
+            uint i = thread_position_in_grid.x;
+            float y = static_cast<float>(x[i]);
+            float t = metal::precise::tanh(\(sqrtTwoOverPi)f * (y + 0.044715f * y * y * y));
+            out[i] = static_cast<T>(0.5f * y * (1.0f + t));
+            """
+    )
+}
+
 /// Drop-in replacement for MLXNN.GELU that avoids the Power primitive crash.
 /// Use this anywhere `GELU(approximation: .precise)` or `.tanh` would be used.
 public class SafeGELU: Module, UnaryLayer {
     public override init() { super.init() }
     public func callAsFunction(_ x: MLXArray) -> MLXArray {
-        safeGeluApproximate(x)
+        safeGeluApproximateFloat32(x)
     }
 }
 
@@ -127,7 +189,7 @@ private enum Qwen4ExpCompiledRoutedSwitchGLU {
         }
         if !didReport {
             didReport = true
-            FileHandle.standardError.write(
+            RuntimeDiagnostics.write(
                 Data(
                     "[Qwen4Exp] compiled_routed_switch_glu=active stock_gather_qmm=true shared_weight_inputs=true dtype=bfloat16\n"
                         .utf8))
@@ -144,16 +206,42 @@ private enum Qwen4ExpCompiledRoutedSwitchGLU {
 }
 
 public func gatherSort(x: MLXArray, indices: MLXArray) -> (MLXArray, MLXArray, MLXArray) {
+    let sorted = gatherSortWithOrder(x: x, indices: indices)
+    return (sorted.x, sorted.indices, sorted.inverseOrder)
+}
+
+/// `gatherSort` that also returns the sort `order` (so a caller can align per-route values, e.g. routing scores, with
+/// the same permutation instead of sorting again).
+public func gatherSortWithOrder(x: MLXArray, indices: MLXArray)
+    -> (x: MLXArray, indices: MLXArray, inverseOrder: MLXArray, order: MLXArray)
+{
     let m = indices.dim(-1)
     let indices = indices.flattened()
     let order = argSort(indices)
     let inverseOrder = argSort(order)
 
     return (
-        x.flattened(start: 0, end: -3)[order.floorDivide(m)],
+        x.flattened(start: 0, end: -3)[sortedRouteTokens(order, routes: m)],
         indices[order],
-        inverseOrder
+        inverseOrder,
+        order
     )
+}
+
+/// The token of each sorted (token, slot) route: `order / routes` for argSort's non-negative positions, without MLX's
+/// integer `floorDivide`, a composed op whose parts land on the C++ thread-local default stream rather than the
+/// caller's (each call split the command stream, once per MoE layer per prefill chunk). A right shift when `routes`
+/// is a power of two; otherwise a gather from the (token, slot) -> token table. Both are exact, so the result equals
+/// `order.floorDivide(routes)` element for element, in `order`'s dtype.
+public func sortedRouteTokens(_ order: MLXArray, routes: Int) -> MLXArray {
+    precondition(routes > 0, "sortedRouteTokens: routes must be positive")
+    if routes & (routes - 1) == 0 {
+        return rightShift(order, MLXArray(UInt32(routes.trailingZeroBitCount)).asType(order.dtype))
+    }
+    let tokens = order.size / routes
+    precondition(tokens * routes == order.size, "sortedRouteTokens: order is not tokens x routes")
+    let table = broadcast(MLXArray(0 ..< Int32(tokens)).reshaped(tokens, 1), to: [tokens, routes]).flattened()
+    return take(table, order).asType(order.dtype)
 }
 
 public func scatterUnsort(x: MLXArray, invOrder: MLXArray, shape: [Int]? = nil) -> MLXArray {
@@ -523,11 +611,12 @@ public class SwitchGLU: Module, SwitchGLULayer {
         var alignedScores = preDownScores
 
         if doSort {
+            let sorted = gatherSortWithOrder(x: x, indices: indices)
+            (x, idx, inverseOrder) = (sorted.x, sorted.indices, sorted.inverseOrder)
+            // The scores take the routes' own sort order (the same argSort of the same ids: one sort, not two).
             if let scores = alignedScores {
-                let scoreOrder = argSort(indices.flattened())
-                alignedScores = scores.flattened()[scoreOrder]
+                alignedScores = scores.flattened()[sorted.order]
             }
-            (x, idx, inverseOrder) = gatherSort(x: x, indices: indices)
         }
 
         func activate(_ gate: MLXArray, _ up: MLXArray) -> MLXArray {
@@ -754,4 +843,31 @@ enum SwitchLayerRuntime {
     nonisolated(unsafe) static var propagatePromotedOutput: Bool = {
         ProcessInfo.processInfo.environment["VMLX_QUANTIZED_OUTPUT_PROMOTE"] == "1"
     }()
+}
+
+extension SwitchGLU {
+    /// The three resident projections when all are affine/fp `QuantizedSwitchLinear` banks, for model
+    /// kernels that read the expert banks directly (DeepSeek-V4.1 fused decode MoE); nil otherwise.
+    public var quantizedProjections:
+        (gate: QuantizedSwitchLinear, up: QuantizedSwitchLinear, down: QuantizedSwitchLinear)?
+    {
+        guard let gate = gateProj as? QuantizedSwitchLinear,
+            let up = upProj as? QuantizedSwitchLinear,
+            let down = downProj as? QuantizedSwitchLinear
+        else { return nil }
+        return (gate, up, down)
+    }
+}
+
+extension QuantizedSwitchLinear {
+    /// Packed `[experts, out, in * bits / 32]` words.
+    public var packedWeight: MLXArray { weight }
+    /// `[experts, out, in / groupSize]` group scales.
+    public var groupScales: MLXArray { scales }
+    /// `[experts, out, in / groupSize]` affine group biases (nil for fp modes).
+    public var groupBiases: MLXArray? { biases }
+    /// The optional additive projection bias `[experts, out]`.
+    public var projectionBias: MLXArray? { bias }
+    public var inputDimension: Int { inputDims }
+    public var outputDimension: Int { outputDims }
 }

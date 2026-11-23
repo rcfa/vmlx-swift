@@ -14,13 +14,17 @@ public struct JANGHRoutedModelLayout: Sendable {
     public let modulePrefix: String
     /// Checkpoint-local feed-forward child; the default preserves existing families.
     public let feedForwardModule: String
+    /// Checkpoint path of a layer's routed stack, `{L}` replaced by the layer, for families whose checkpoint does not
+    /// use `model.layers.L.mlp.switch_mlp` (DeepSeek-V4.1: `layers.{L}.ffn.experts`). nil keeps the default spelling.
+    public let parentTemplate: String?
 
     public init(modelType: String, hiddenSize: Int, intermediateSize: Int,
                 expertCount: Int, sparseLayers: Set<Int>, routesPerToken: Int = 8,
-                modulePrefix: String = "", feedForwardModule: String = "mlp") {
+                modulePrefix: String = "", feedForwardModule: String = "mlp", parentTemplate: String? = nil) {
         self.routesPerToken = routesPerToken
         self.modulePrefix = modulePrefix
         self.feedForwardModule = feedForwardModule
+        self.parentTemplate = parentTemplate
         self.modelType = modelType
         self.hiddenSize = hiddenSize
         self.intermediateSize = intermediateSize
@@ -115,14 +119,16 @@ public final class JANGHModelPreparation {
               layout.hiddenSize > 0, layout.intermediateSize > 0,
               layout.expertCount > 0, !layout.sparseLayers.isEmpty,
               layout.sparseLayers.allSatisfy({ $0 >= 0 }),
-              layout.feedForwardModule == (layout.modelType == "lfm2_moe" ? "feed_forward" : "mlp") else {
+              layout.parentTemplate != nil
+                || layout.feedForwardModule == (layout.modelType == "lfm2_moe" ? "feed_forward" : "mlp") else {
             throw JANGHFormatContract.ValidationError.invalid(
                 "JANGH architecture layout does not match configuration")
         }
         var dimensions: [String: JANGHTensorIndexPlan.Dimensions] = [:]
         var modules: [Int: String] = [:]
         for layer in layout.sparseLayers.sorted() {
-            let parent = layout.modulePrefix + "model.layers.\(layer).\(layout.feedForwardModule).switch_mlp"
+            let parent = layout.parentTemplate.map { $0.replacingOccurrences(of: "{L}", with: String(layer)) }
+                ?? (layout.modulePrefix + "model.layers.\(layer).\(layout.feedForwardModule).switch_mlp")
             modules[layer] = parent
             for role in ["gate_proj", "up_proj", "down_proj"] {
                 dimensions[parent + "." + role] = .init(
@@ -239,19 +245,36 @@ public final class JANGHModelPreparation {
 
     /// Call only after strict ordinary quantization decoding succeeds. All banks
     /// own their packed storage; no dense expert placeholders are constructed.
-    public func makeRoutedExperts(activationLimit: Float?) throws
+    /// `activation` is the model's SwiGLU variant. A non-SiLU model's codebook-only layers also run through
+    /// `JANGTRoutedExpertLayer`, whose JANGH branches apply any variant; `JANGHRoutedExpertLayer` is SiLU only.
+    public func makeRoutedExperts(activationLimit: Float?, activation: JANGTActivation = .silu) throws
         -> [Int: any WeightedRoutedExpertLayer]
     {
         let banks = try mapBanks()
         let trellis = source.contract.trellis
         return try moduleByLayer.mapValues { parent -> any WeightedRoutedExpertLayer in
             let anyTrellis = ["gate_proj", "up_proj", "down_proj"].contains { trellis[parent + "." + $0] != nil }
-            if anyTrellis {
+            if anyTrellis || activation != .silu {
                 return try JANGTRoutedExpertLayer(banks: banks, parentModule: parent, hiddenSize: hiddenSize,
-                                                  intermediateSize: intermediateSize, activationLimit: activationLimit)
+                                                  intermediateSize: intermediateSize, activationLimit: activationLimit,
+                                                  activation: activation)
             }
             return try JANGHRoutedExpertLayer(banks: banks, parentModule: parent,
                                               inputDimensions: hiddenSize, activationLimit: activationLimit)
+        }
+    }
+
+    /// Codebook-only routed stacks with a model activation (Inkling-2: softcapped gate/up): every routed projection
+    /// must be a `jangtq2` codebook bank (no trellis), and each layer runs the JANGH decode kernels with the variant
+    /// fused into the gate/up epilogue (decode and prefill tiles alike).
+    public func makeCodebookRoutedExperts(activation: JANGTActivation) throws -> [Int: JANGHRoutedExpertLayer] {
+        guard relu2Layout == nil, source.contract.trellis.isEmpty else {
+            throw JANGHFormatContract.ValidationError.invalid("codebook routed experts require jangtq2 banks only")
+        }
+        let banks = try mapBanks()
+        return try moduleByLayer.mapValues {
+            try JANGHRoutedExpertLayer(banks: banks, parentModule: $0, inputDimensions: hiddenSize,
+                                       activationLimit: nil, activation: activation)
         }
     }
 

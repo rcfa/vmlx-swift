@@ -115,13 +115,16 @@ public struct DFlash2Configuration: Sendable {
     public let markovRank: Int
     /// DSpark checkpoints draft from EVERY block row, the anchor row emitting draft 0 (DFlash drops the anchor row).
     /// Their declared `block_size` counts drafts; `blockSize` here is normalized to the verify width (+1). Reading the
-    /// wrong mapping is a silent 0 %-acceptance drafter, not an error (mlx-serve `anchor_row_drafts`).
+    /// wrong mapping is a silent 0 %-acceptance drafter, not an error.
     public let anchorRowDrafts: Bool
     /// GPT-J interleaved rope (`rope_is_neox_style: false`). DFlash sidecars and MiniCPM-V 4.7's DSpark are neox.
     public let ropeTraditional: Bool
     /// The trained confidence head (per-position draft confidence). Loaded so the checkpoint binds; the verify width
     /// is chosen by the width chooser, so it is not consulted.
     public let hasConfidenceHead: Bool
+    /// Layers trained WITHOUT rotary position (`no_rope_layers`, e.g. the Ripple-65B drafter's full-attention layer 4).
+    /// The upstream drafter rotates every layer; rotating a NoPE layer silently degrades its proposals.
+    public let noRopeLayers: Set<Int>
 
     public var blockSize: Int { dflash.blockSize }
     public var maskTokenId: Int { dflash.maskTokenId }
@@ -198,7 +201,7 @@ public struct DFlash2Configuration: Sendable {
         {
             inner = inner.replacingBlockSize(top)
         }
-        // DSpark splits its contract between the root and `dflash_config` (mlx-serve reads both, nested first).
+        // DSpark splits its contract between the root and `dflash_config` (both are read, nested first).
         let dflashObject = dflashRaw as? [String: Any] ?? [:]
         func any(_ key: String) -> Any? { dflashObject[key] ?? root[key] }
         let markovRank = (any("markov_rank") as? Int) ?? 0
@@ -222,6 +225,12 @@ public struct DFlash2Configuration: Sendable {
         }
         self.ropeTraditional = (any("rope_is_neox_style") as? Bool).map { !$0 } ?? false
         self.hasConfidenceHead = (any("enable_confidence_head") as? Bool) ?? false
+        let noRope = (root["no_rope_layers"] as? [Any] ?? []).compactMap { ($0 as? NSNumber)?.intValue }
+        let layerCount = self.numHiddenLayers
+        guard noRope.allSatisfy({ $0 >= 0 && $0 < layerCount }) else {
+            throw DFlash2LoadError.targetMismatch("no_rope_layers names a layer outside the drafter")
+        }
+        self.noRopeLayers = Set(noRope)
         self.dflash = inner
     }
 }
@@ -321,7 +330,7 @@ final class GroupedDynamicCausalConv: Module {
         if convTraceEnabled {
             let line = "[DFlash2Conv] hidden=\(hidden.shape) dynamic=\(dynamic.shape)"
                 + " base=\(base.shape) groupSize=\(groupSize)\n"
-            FileHandle.standardError.write(Data(line.utf8))
+            RuntimeDiagnostics.write(Data(line.utf8))
         }
         // A degraded upstream result (an MLX error inside an earlier op
         // collapses to a 0-dim husk, #123) must flow OUT of the drafter
@@ -384,6 +393,8 @@ final class DFlash2Attention: Module {
     let isSliding: Bool
     let slidingWindow: Int?
     let isCausal: Bool
+    /// False for a `no_rope_layers` layer: positions come only from the mask.
+    let usesRope: Bool
 
     @ModuleInfo(key: "q_proj") var wq: Linear
     @ModuleInfo(key: "k_proj") var wk: Linear
@@ -401,6 +412,7 @@ final class DFlash2Attention: Module {
         self.isSliding = config.layerTypes[layerIndex] == "sliding_attention"
         self.slidingWindow = self.isSliding ? config.slidingWindow : nil
         self.isCausal = config.isCausal ?? self.isSliding
+        self.usesRope = !config.noRopeLayers.contains(layerIndex)
 
         self._wq.wrappedValue = Linear(dim, numHeads * headDim, bias: false)
         self._wk.wrappedValue = Linear(dim, numKVHeads * headDim, bias: false)
@@ -447,9 +459,11 @@ final class DFlash2Attention: Module {
         let propValues = wv(x).reshaped(b, l, numKVHeads, headDim).transposed(0, 2, 1, 3)
 
         let offset = cache.offset
-        queries = rope(queries, offset: offset + s)
-        ctxKeys = rope(ctxKeys, offset: offset)
-        propKeys = rope(propKeys, offset: offset + s)
+        if usesRope {
+            queries = rope(queries, offset: offset + s)
+            ctxKeys = rope(ctxKeys, offset: offset)
+            propKeys = rope(propKeys, offset: offset + s)
+        }
 
         var (keys, values) = cache.update(keys: ctxKeys, values: ctxValues)
         // A wrapped ring buffer comes back in rotation order, which would
@@ -833,10 +847,16 @@ public final class DFlash2DraftModel: Module, @unchecked Sendable {
 
     /// Fresh per-generation drafter cache — one entry per layer, sliding
     /// where the layer is.
-    public func makeCache() -> [KVCache] {
+    ///
+    /// - Parameter contextWindow: bounds a full-attention drafter layer to this many context positions
+    ///   (``DFlash2DraftContextWindowPolicy``). Nil keeps its whole history.
+    public func makeCache(contextWindow: Int? = nil) -> [KVCache] {
         config.layerTypes.map { type in
             if type == "sliding_attention", let window = config.slidingWindow {
                 return RotatingKVCache(maxSize: window - 1, keep: 0)
+            }
+            if let contextWindow {
+                return RotatingKVCache(maxSize: contextWindow - 1, keep: 0)
             }
             return KVCacheSimple()
         }
